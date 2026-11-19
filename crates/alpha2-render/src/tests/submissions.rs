@@ -51,7 +51,8 @@ fn draw(effect: EffectDef, size: RenderSize) -> (Vec<u8>, crate::FrameSubmission
 fn banded_submission_renders_the_same_bytes_as_one_submission() {
     let _lock = gpu_test_lock();
     let size = RenderSize::new(512, 288).expect("size");
-    let (whole, planned) = draw(heavy_effect(), size);
+    let (whole, planned) = with_watchdog(UNSPLIT_WATCHDOG_MS, || draw(heavy_effect(), size));
+    assert_eq!(planned.submissions, 1, "{planned:?}");
     // A one-millisecond watchdog leaves no budget: the pass is drawn in the most bands.
     alpha2_gpu::set_watchdog_ms(1);
     let banded = std::panic::catch_unwind(|| draw(heavy_effect(), size));
@@ -94,6 +95,7 @@ fn a_light_frame_stays_one_submission() {
 const SIDES: [u32; 5] = [256, 512, 1024, 2048, 4096];
 const SHORTEST_SETTABLE_WATCHDOG_MS: f64 = 16.0;
 const FRAMES_TO_LEARN_FROM: usize = 4;
+const UNSPLIT_WATCHDOG_MS: f64 = 1_000_000.0;
 
 fn own_device() -> GpuContext {
     pollster::block_on(GpuContext::request_product()).expect("a GPU adapter")
@@ -194,7 +196,7 @@ fn with_watchdog<T>(milliseconds: f64, body: impl FnOnce() -> T) -> T {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "a frame time of at least sixteen milliseconds"
+        reason = "a watchdog in milliseconds far below 2^32"
     )]
     alpha2_gpu::set_watchdog_ms(milliseconds as u32);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
@@ -239,6 +241,13 @@ fn a_heavy_pass_is_banded_by_what_its_pilot_measured_however_low_the_device_rate
 fn a_device_rate_seeded_too_low_is_raised_by_exported_frames_that_ran_over_it() {
     let _lock = gpu_test_lock();
     let gpu = own_device();
+    if gpu.capabilities().backend == "Gl" {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::ExactGpuCompletion,
+            "the GL backend reports a completion before a wait on it blocks"
+        );
+        return;
+    }
     let renderer = Renderer::new(gpu.clone());
     let (effect, pass) = registered(&renderer, heavy_effect());
     gpu.rate().seed(f64::MIN_POSITIVE);
@@ -272,9 +281,17 @@ fn a_device_rate_seeded_too_high_is_recalibrated_by_the_frames_it_mispredicts() 
     let size = RenderSize::new(256, 144).expect("size");
     let view = flat_source(&renderer, size);
     let calibrated = polled_frame(&renderer, &effect, &view, size);
-    let one_watchdog_for_this_frame =
-        f64::from(alpha2_gpu::watchdog_ms()) / calibrated.cost.unit_pixels();
-    gpu.rate().seed(one_watchdog_for_this_frame);
+    assert!(
+        calibrated.submissions < crate::submission_planner::MAX_BANDS,
+        "{calibrated:?}"
+    );
+    let far_past_its_plan = 8.0
+        * calibrated
+            .predicted_ms
+            .expect("a heavy frame is planned")
+            .max(f64::from(alpha2_gpu::watchdog_ms()));
+    gpu.rate()
+        .seed(far_past_its_plan / calibrated.cost.unit_pixels());
     let mispredicted = polled_frame(&renderer, &effect, &view, size);
     assert!(
         mispredicted.submissions > calibrated.submissions,
