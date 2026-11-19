@@ -327,10 +327,14 @@ fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
         time_ticks: 8_000,
         frame_index: Some(2),
     }));
-    let long = renderer.submission_clock.record(start, None);
+    let long = renderer
+        .submission_clock
+        .record(start, None, false)
+        .sequence;
     renderer.submission_clock.complete(
         long,
         start + std::time::Duration::from_millis(u64::from(watchdog) * 3 / 4),
+        false,
     );
     renderer.mark_frame(None);
     for lost in [

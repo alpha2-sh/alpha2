@@ -668,7 +668,11 @@ fn every_yuv_readback_consumer_refuses_a_buffer_the_gpu_did_not_write() {
             .encode_yuv420p_readback(&target, centred(ColorMetadata::default()), &mut encoder)
             .expect("encodes");
         drop(encoder);
-        let submission = renderer.gpu.submit([]);
+        let submission = crate::submission_clock::ClockedSubmission::new(
+            renderer.gpu.submit([]),
+            std::sync::Arc::clone(&renderer.submission_clock),
+            0,
+        );
         let dropped = renderer.complete_yuv420p_readback(unsubmitted, submission, true);
         dropped.wait_ready().expect("the stale buffer maps");
         assert_eq!(

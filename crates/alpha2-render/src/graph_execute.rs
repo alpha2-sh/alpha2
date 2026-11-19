@@ -164,6 +164,15 @@ impl Renderer {
                 total
             });
         self.plan_submissions(encoder, predicted);
+        if encoder.planner().is_planned() {
+            self.pilot_passes(
+                plan.order
+                    .iter()
+                    .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
+                    .map(|node| &graph.nodes[node.index]),
+                graph.size,
+            );
+        }
         let mut pending_timings = Vec::<PendingEffectTiming>::new();
         let mut encoded_nodes = 0_u64;
         let mut encoded_render_passes = 0_u64;
@@ -320,7 +329,7 @@ impl Renderer {
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
                 RenderNode::Vector { scene } => {
-                    encoder.place_pass(crate::submission_planner::VECTOR_COST, pixels, false);
+                    encoder.place_pass(crate::submission_planner::VECTOR_COST, pixels, false, None);
                     let target = self.textures.acquire(
                         self.gpu.device(),
                         graph.size,
@@ -344,6 +353,7 @@ impl Renderer {
                             .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
                         pixels,
                         false,
+                        None,
                     );
                     let views = layers
                         .iter()
@@ -482,18 +492,11 @@ fn graph_uniform_capacity(
             RenderNode::Effect { effect, .. }
             | RenderNode::Transition { effect, .. }
             | RenderNode::Generator { effect, .. } => {
-                let parameter_bytes = renderer
+                let params = renderer
                     .effects()
                     .get(effect)
                     .map_or(0, |registered| registered.definition.params.len());
-                let parameter_bytes =
-                    u64::try_from(param_uniform_bytes(parameter_bytes)).unwrap_or(u64::MAX);
-                capacity = aligned_uniform_end(capacity, parameter_bytes, alignment);
-                capacity = aligned_uniform_end(
-                    capacity,
-                    float_uniform_bytes(RUNTIME_UNIFORM_WORDS),
-                    alignment,
-                );
+                capacity = effect_uniform_end(capacity, params, alignment);
             }
             RenderNode::Composite { layers, .. } => {
                 let passes = renderer
@@ -525,6 +528,21 @@ fn graph_uniform_capacity(
         }
     }
     capacity
+}
+
+fn effect_uniform_end(cursor: u64, params: usize, alignment: u64) -> u64 {
+    let parameter_bytes = u64::try_from(param_uniform_bytes(params)).unwrap_or(u64::MAX);
+    let cursor = aligned_uniform_end(cursor, parameter_bytes, alignment);
+    aligned_uniform_end(
+        cursor,
+        float_uniform_bytes(RUNTIME_UNIFORM_WORDS),
+        alignment,
+    )
+}
+
+/// Uniform bytes one effect pass with `params` parameters writes.
+pub(crate) fn effect_uniform_capacity(params: usize, alignment: u64) -> u64 {
+    effect_uniform_end(0, params, alignment)
 }
 
 /// The texture a dependency is drawn from; `None` for a CPU source.

@@ -5,9 +5,13 @@
 //! apart. Each submission's GPU time runs from the later of its submit and the previous
 //! submission's end to its own completion callback, so queueing is excluded. Callback latency
 //! (poll or event loop) is small beside [`alpha2_gpu::hung_threshold_ms`].
+//!
+//! A completion seen inside [`ClockedSubmission::wait`] on that submission or an earlier one is
+//! seen as it happens; every other one may be seen late.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use web_time::Instant;
 
@@ -49,6 +53,12 @@ struct Entry {
 struct ClockState {
     /// Sequence number of `entries[0]`.
     first: u64,
+    /// Submissions recorded, which is the next sequence number.
+    recorded: u64,
+    /// Submissions known complete, counted from the first.
+    completed: u64,
+    /// Completions a later frame waits to learn, by sequence.
+    watched: Vec<(u64, PreviousCompletion)>,
     entries: VecDeque<Entry>,
     frame: Option<FrameMark>,
     effects: Vec<String>,
@@ -81,9 +91,24 @@ impl SubmissionClock {
         }
     }
 
-    /// Records a submission made at `at` and returns its sequence number for [`Self::complete`].
-    pub(crate) fn record(&self, at: Instant, predicted_ms: Option<f64>) -> u64 {
+    /// Records a submission made at `at` and returns its sequence number for [`Self::complete`],
+    /// also watching for the completion of the submission before it when `watch_previous` and
+    /// that is still running.
+    pub(crate) fn record(
+        &self,
+        at: Instant,
+        predicted_ms: Option<f64>,
+        watch_previous: bool,
+    ) -> Recorded {
         let mut state = self.state();
+        let queue_idle = state.completed == state.recorded;
+        let previous = (watch_previous && !queue_idle).then(|| {
+            let watch = PreviousCompletion::default();
+            let sequence = state.recorded - 1;
+            state.watched.push((sequence, watch.clone()));
+            watch
+        });
+        state.recorded += 1;
         let effects = std::mem::take(&mut state.effects);
         let frame = state.frame;
         state.entries.push_back(Entry {
@@ -97,13 +122,25 @@ impl SubmissionClock {
             state.entries.pop_front();
             state.first += 1;
         }
-        state.first + u64::try_from(state.entries.len()).unwrap_or(u64::MAX) - 1
+        Recorded {
+            sequence: state.recorded - 1,
+            queue_idle,
+            previous,
+        }
     }
 
-    /// Records that submission `sequence` finished at `at`; the queue completes in order, so all
-    /// earlier ones have too.
-    pub(crate) fn complete(&self, sequence: u64, at: Instant) {
+    /// Records that submission `sequence` finished at `at`, seen `as_it_happens` or not; the
+    /// queue completes in order, so all earlier ones have too.
+    pub(crate) fn complete(&self, sequence: u64, at: Instant, as_it_happens: bool) {
         let mut state = self.state();
+        state.completed = state.completed.max(sequence + 1);
+        state.watched.retain(|(watched, completion)| {
+            if *watched > sequence {
+                return true;
+            }
+            completion.set(at, as_it_happens && *watched == sequence);
+            false
+        });
         let Some(position) = sequence.checked_sub(state.first) else {
             return;
         };
@@ -179,6 +216,117 @@ impl SubmissionClock {
     }
 }
 
+/// A recorded submission.
+#[derive(Clone, Debug)]
+pub(crate) struct Recorded {
+    pub(crate) sequence: u64,
+    /// Every earlier submission of the clock had completed, so the GPU starts this one at once.
+    pub(crate) queue_idle: bool,
+    /// The completion of the submission before, when it was watched and still running.
+    pub(crate) previous: Option<PreviousCompletion>,
+}
+
+impl Recorded {
+    /// When the GPU started this submission, at the latest, given it was submitted at `at`: then
+    /// on an idle queue, else when a previous completion seen as it happened says so.
+    pub(crate) fn started(&self, at: Instant) -> Option<Instant> {
+        if self.queue_idle {
+            return Some(at);
+        }
+        let (done, as_it_happens) = self.previous.as_ref()?.get()?;
+        as_it_happens.then(|| done.max(at))
+    }
+}
+
+/// When a submission completed and whether that was seen as it happened, once it did.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PreviousCompletion(Arc<Mutex<Option<(Instant, bool)>>>);
+
+impl PreviousCompletion {
+    fn set(&self, at: Instant, as_it_happens: bool) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((at, as_it_happens));
+    }
+
+    fn get(&self) -> Option<(Instant, bool)> {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+thread_local! {
+    /// The clock and sequence the calling thread is waiting for inside [`ClockedSubmission::wait`].
+    static WAITING: Cell<Option<(usize, u64)>> = const { Cell::new(None) };
+}
+
+impl SubmissionClock {
+    fn address(self: &Arc<Self>) -> usize {
+        Arc::as_ptr(self) as usize
+    }
+
+    /// Whether a completion of `sequence` seen now on this thread is seen as it happens.
+    pub(crate) fn sees_as_it_happens(self: &Arc<Self>, sequence: u64) -> bool {
+        WAITING
+            .get()
+            .is_some_and(|(clock, waited)| clock == self.address() && sequence >= waited)
+    }
+}
+
+/// A renderer submission that a caller may wait for.
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(dead_code, reason = "a browser cannot wait for a submission")
+)]
+pub(crate) struct ClockedSubmission {
+    pub(crate) index: wgpu::SubmissionIndex,
+    clock: Arc<SubmissionClock>,
+    sequence: u64,
+}
+
+impl ClockedSubmission {
+    pub(crate) const fn new(
+        index: wgpu::SubmissionIndex,
+        clock: Arc<SubmissionClock>,
+        sequence: u64,
+    ) -> Self {
+        Self {
+            index,
+            clock,
+            sequence,
+        }
+    }
+
+    /// Blocks until the submission completes. Completions already due are collected first, so
+    /// those seen during the wait are seen as they happen.
+    ///
+    /// # Errors
+    /// [`crate::RenderError::GpuTimeout`] past `timeout`, or
+    /// [`crate::RenderError::TextureReadback`] when polling fails.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wait(
+        &self,
+        gpu: &alpha2_gpu::GpuContext,
+        timeout: std::time::Duration,
+    ) -> Result<(), crate::RenderError> {
+        gpu.device()
+            .poll(wgpu::PollType::Poll)
+            .map_err(crate::error::poll_error)?;
+        let previous = WAITING.replace(Some((self.clock.address(), self.sequence)));
+        let waited = gpu.device().poll(wgpu::PollType::Wait {
+            submission_index: Some(self.index.clone()),
+            timeout: Some(timeout),
+        });
+        WAITING.set(previous);
+        waited.map_err(crate::error::poll_error)?;
+        Ok(())
+    }
+}
+
 fn milliseconds(duration: std::time::Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
@@ -195,19 +343,19 @@ mod tests {
         let clock = SubmissionClock::default();
         let start = Instant::now();
         let at = |ms: u64| start + Duration::from_millis(ms);
-        let first = clock.record(at(0), None);
-        let second = clock.record(at(0), None);
-        let third = clock.record(at(0), None);
-        clock.complete(first, at(10));
-        clock.complete(second, at(400));
-        clock.complete(third, at(405));
+        let first = clock.record(at(0), None, false).sequence;
+        let second = clock.record(at(0), None, false).sequence;
+        let third = clock.record(at(0), None, false).sequence;
+        clock.complete(first, at(10), false);
+        clock.complete(second, at(400), false);
+        clock.complete(third, at(405), false);
         let longest = clock.longest_at(at(1_000)).expect("submissions");
         assert!((longest.gpu_ms - 390.0).abs() < 0.5, "{longest:?}");
         // Submitted after the queue went idle, so it starts at its own submit.
-        let fourth = clock.record(at(2_000), None);
-        clock.complete(fourth, at(2_005));
+        let fourth = clock.record(at(2_000), None, false).sequence;
+        clock.complete(fourth, at(2_005), false);
         assert!((clock.longest_at(at(3_000)).expect("kept").gpu_ms - 390.0).abs() < 0.5);
-        let _ = clock.record(at(3_000), None);
+        let _ = clock.record(at(3_000), None, false).sequence;
         assert!((clock.longest_at(at(3_700)).expect("running").gpu_ms - 700.0).abs() < 0.5);
     }
 
@@ -215,9 +363,9 @@ mod tests {
     fn a_completion_finishes_every_earlier_submission() {
         let clock = SubmissionClock::default();
         let start = Instant::now();
-        let first = clock.record(start, None);
-        let second = clock.record(start, None);
-        clock.complete(second, start + Duration::from_millis(8));
+        let first = clock.record(start, None, false).sequence;
+        let second = clock.record(start, None, false).sequence;
+        clock.complete(second, start + Duration::from_millis(8), false);
         let _ = first;
         assert_eq!(
             clock
@@ -232,13 +380,13 @@ mod tests {
         let clock = SubmissionClock::default();
         let start = Instant::now();
         let at = |ms: u64| start + Duration::from_millis(ms);
-        let earlier = clock.record(at(0), None);
-        clock.complete(earlier, at(5));
-        let first = clock.record(at(10), Some(100.0));
-        let second = clock.record(at(10), Some(100.0));
+        let earlier = clock.record(at(0), None, false).sequence;
+        clock.complete(earlier, at(5), false);
+        let first = clock.record(at(10), Some(100.0), false).sequence;
+        let second = clock.record(at(10), Some(100.0), false).sequence;
         assert_eq!(clock.gpu_ms(first..second + 1), None, "not finished");
         // Both seen at 210 ms: the first takes the whole span, and the sum is unchanged.
-        clock.complete(second, at(210));
+        clock.complete(second, at(210), false);
         let total = clock.gpu_ms(first..second + 1).expect("finished");
         assert!((total - 200.0).abs() < 0.5, "{total}");
         assert_eq!(
@@ -258,14 +406,61 @@ mod tests {
             frame_index: Some(1),
         }));
         clock.note_effect(&crate::EffectId::from_static("blur", 2));
-        let heavy = clock.record(start, None);
-        clock.complete(heavy, start + Duration::from_millis(30));
-        let light = clock.record(start + Duration::from_millis(40), None);
-        clock.complete(light, start + Duration::from_millis(41));
+        let heavy = clock.record(start, None, false).sequence;
+        clock.complete(heavy, start + Duration::from_millis(30), false);
+        let light = clock
+            .record(start + Duration::from_millis(40), None, false)
+            .sequence;
+        clock.complete(light, start + Duration::from_millis(41), false);
         let report = clock
             .longest_at(start + Duration::from_millis(50))
             .expect("kept");
         assert_eq!(report.effects, ["blur@2"]);
         assert_eq!(report.frame.and_then(|frame| frame.frame_index), Some(1));
+    }
+
+    #[test]
+    fn a_submission_starts_on_an_idle_queue_only_once_every_earlier_one_completed() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let first = clock.record(start, None, false);
+        assert!(first.queue_idle);
+        let second = clock.record(start, None, false);
+        assert!(!second.queue_idle);
+        clock.complete(first.sequence, start, false);
+        assert!(!clock.record(start, None, false).queue_idle);
+        clock.complete(second.sequence + 1, start, false);
+        assert!(clock.record(start, None, false).queue_idle);
+    }
+
+    #[test]
+    fn only_completions_inside_a_wait_on_them_or_earlier_ones_are_seen_as_they_happen() {
+        let clock = Arc::new(SubmissionClock::default());
+        let other = Arc::new(SubmissionClock::default());
+        assert!(!clock.sees_as_it_happens(0));
+        WAITING.set(Some((clock.address(), 5)));
+        assert!(!clock.sees_as_it_happens(4));
+        assert!(clock.sees_as_it_happens(5));
+        assert!(clock.sees_as_it_happens(6));
+        assert!(!other.sees_as_it_happens(6));
+        WAITING.set(None);
+    }
+
+    #[test]
+    fn a_frame_behind_a_completion_seen_as_it_happened_starts_at_that_completion() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let first = clock.record(at(0), None, false);
+        assert_eq!(first.started(at(0)), Some(at(0)));
+        let behind = clock.record(at(1), None, true);
+        let late = clock.record(at(2), None, true);
+        assert_eq!(behind.started(at(1)), None, "not complete yet");
+        clock.complete(first.sequence, at(10), true);
+        clock.complete(behind.sequence, at(30), false);
+        assert_eq!(behind.started(at(1)), Some(at(10)));
+        assert_eq!(late.started(at(2)), None, "seen late");
+        clock.complete(late.sequence, at(35), true);
+        assert!(clock.record(at(40), None, true).previous.is_none());
     }
 }
