@@ -4,12 +4,11 @@ use super::*;
 
 /// The heavy watchdog fixture's body: 1024 taps, each weighted by a chain of transcendentals.
 fn heavy_effect() -> EffectDef {
-    let fixture = std::fs::read_to_string(concat!(
+    let fixture = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/cases/gpu-watchdog/heavy-effects.json"
-    ))
-    .expect("the heavy fixture");
-    let effects: serde_json::Value = serde_json::from_str(&fixture).expect("JSON");
+    ));
+    let effects: serde_json::Value = serde_json::from_str(fixture).expect("JSON");
     EffectDef {
         id: "test.heavy".into(),
         params: Vec::new(),
