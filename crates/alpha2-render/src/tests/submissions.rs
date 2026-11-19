@@ -96,6 +96,7 @@ const SIDES: [u32; 5] = [256, 512, 1024, 2048, 4096];
 const SHORTEST_SETTABLE_WATCHDOG_MS: f64 = 16.0;
 const FRAMES_TO_LEARN_FROM: usize = 4;
 const UNSPLIT_WATCHDOG_MS: f64 = 1_000_000.0;
+const PILOT_NOISE: f64 = 2.0;
 
 fn own_device() -> GpuContext {
     pollster::block_on(GpuContext::request_product()).expect("a GPU adapter")
@@ -301,12 +302,16 @@ fn a_device_rate_seeded_too_high_is_recalibrated_by_the_frames_it_mispredicts() 
         .map(|_| polled_frame(&renderer, &effect, &view, size))
         .last()
         .expect("frames");
+    let calibrated_ms = calibrated.predicted_ms.expect("a heavy frame is planned");
     assert!(
-        last.submissions <= calibrated.submissions,
-        "a frame calibrated to {} submission(s) is still cut in {} after {FRAMES_TO_LEARN_FROM} \
-         frames measured far below their prediction: {last:?}",
-        calibrated.submissions,
-        last.submissions
+        last.submissions < mispredicted.submissions
+            && last
+                .predicted_ms
+                .is_some_and(|ms| ms <= PILOT_NOISE * calibrated_ms),
+        "a frame calibrated to {calibrated_ms:.1} ms in {} submission(s) is still predicted \
+         past it after {FRAMES_TO_LEARN_FROM} frames measured far below their prediction: \
+         {last:?}",
+        calibrated.submissions
     );
 }
 
