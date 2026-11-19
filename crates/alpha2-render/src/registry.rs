@@ -191,7 +191,6 @@ pub(crate) struct RegisteredEffect {
     reads_time: bool,
     /// Worst-case per-pixel cost of one invocation.
     pub(crate) cost: crate::effect_cost::EffectCost,
-    /// Identifies the effect's code among the passes whose rate a device keeps.
     pub(crate) pass_id: u64,
     /// Created at registration for host effects, and on first draw or warmup for built-ins.
     pipeline: std::sync::OnceLock<EffectPipeline>,

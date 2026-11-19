@@ -1,14 +1,4 @@
-//! Device throughput in milliseconds per unit of effect cost per pixel.
-//!
-//! Renderers split frames into submissions under [`crate::submission_budget_ms`], predicting
-//! each pass as cost times pixels times a rate. A calibration draw seeds the device rate at
-//! [`MARGIN`] times its measurement, and that measurement is the rate's floor. A pass whose own
-//! draws measured slower than the floor is predicted at its own rate, scaled the same way.
-//!
-//! A frame measured from an idle queue is at most its GPU time, so it may lower the rate toward
-//! the floor. Only a frame whose completion was also seen as it happened may raise the rate. A
-//! frame far under a floor that splits frames asks for the calibration to be drawn again. The
-//! rate affects only submission splitting, never pixels.
+//! Device throughput in milliseconds per unit of effect cost per pixel, and per measured pass.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -21,23 +11,11 @@ pub const UNCALIBRATED_MS_PER_UNIT_PIXEL: f64 = 2.0e-8;
 /// What a measurement is multiplied by to become a rate.
 pub const MARGIN: f64 = 2.0;
 
-/// The most a rate falls per frame, as a fraction of itself.
-const LOWEST_STEP: f64 = 0.9;
-
-/// A frame this far under the floor disagrees with the calibration.
-const DISAGREEMENT: f64 = 4.0;
-
-/// A frame raises the rate only when it measured at least this share of its budget.
+const SLOWEST_FALL_PER_FRAME: f64 = 0.9;
+const DISAGREEING_FACTOR_UNDER_FLOOR: f64 = 4.0;
 const RAISING_SHARE_OF_BUDGET: f64 = 0.25;
-
-/// A frame disagrees with the calibration only when it was predicted at least this share of its
-/// budget, so the floor could split it.
-const SPLITTING_SHARE_OF_BUDGET: f64 = 0.5;
-
-/// A calibration within this factor of the previous one confirms it.
-const CONFIRMING: f64 = 2.0;
-
-/// Pass rates kept per device before they are all dropped and measured again.
+const DISAGREEING_SHARE_OF_BUDGET: f64 = 0.5;
+const CONFIRMING_FACTOR: f64 = 2.0;
 const PASS_RATES_KEPT: usize = 1024;
 
 /// How a frame's measured span relates to the GPU time it measures.
@@ -72,8 +50,8 @@ pub struct PassKey {
 }
 
 impl PassKey {
-    /// The pass identified by `pass` over `pixels` pixels. Sizes within a factor of the square
-    /// root of two share a class.
+    /// The pass identified by `pass` over `pixels` pixels. Pixel counts fall in classes a factor
+    /// of the square root of two wide.
     #[must_use]
     pub fn new(pass: u64, pixels: u64) -> Self {
         #[expect(
@@ -90,13 +68,11 @@ impl PassKey {
 #[derive(Debug)]
 struct RateState {
     ms_per_unit_pixel: Option<f64>,
-    /// The calibration measurement, which is the floor of the rate.
     calibrated: Option<f64>,
     calibrating: bool,
     recalibration_requested: bool,
     disagreements: u32,
-    /// Disagreeing frames needed before the calibration is drawn again.
-    patience: u32,
+    disagreements_before_calibration: u32,
     passes: HashMap<PassKey, f64>,
 }
 
@@ -108,7 +84,7 @@ impl Default for RateState {
             calibrating: false,
             recalibration_requested: false,
             disagreements: 0,
-            patience: 1,
+            disagreements_before_calibration: 1,
             passes: HashMap::new(),
         }
     }
@@ -157,7 +133,7 @@ impl GpuRate {
 
     /// Seeds the rate at [`MARGIN`] times `measured_ms_per_unit_pixel`, which becomes the floor. A
     /// calibration drawn again that confirms the previous one keeps the rate learned since, within
-    /// the new floor and seed.
+    /// the new floor and seed; one that does not forgets every pass rate.
     pub fn seed(&self, measured_ms_per_unit_pixel: f64) {
         let mut state = self.state();
         state.calibrating = false;
@@ -170,15 +146,16 @@ impl GpuRate {
             state.recalibration_requested = false;
             let confirmed = state.calibrated.is_some_and(|previous| {
                 let ratio = measured_ms_per_unit_pixel / previous;
-                (1.0 / CONFIRMING..=CONFIRMING).contains(&ratio)
+                (1.0 / CONFIRMING_FACTOR..=CONFIRMING_FACTOR).contains(&ratio)
             });
-            state.patience = if confirmed {
-                state.patience.saturating_mul(2)
+            state.disagreements_before_calibration = if confirmed {
+                state.disagreements_before_calibration.saturating_mul(2)
             } else {
                 1
             };
-            if let (true, Some(learned)) = (confirmed, state.ms_per_unit_pixel) {
-                rate = learned.clamp(measured_ms_per_unit_pixel, seeded);
+            match (confirmed, state.ms_per_unit_pixel) {
+                (true, Some(learned)) => rate = learned.clamp(measured_ms_per_unit_pixel, seeded),
+                _ => state.passes.clear(),
             }
         }
         state.disagreements = 0;
@@ -204,18 +181,19 @@ impl GpuRate {
             return;
         };
         if measured < rate {
-            state.ms_per_unit_pixel = Some((rate * LOWEST_STEP).max(measured).max(floor));
+            state.ms_per_unit_pixel =
+                Some((rate * SLOWEST_FALL_PER_FRAME).max(measured).max(floor));
         } else if frame.trust == SpanTrust::Exact
             && frame.measured_ms > frame.predicted_ms
             && frame.measured_ms >= frame.budget_ms * RAISING_SHARE_OF_BUDGET
         {
             state.ms_per_unit_pixel = Some(MARGIN * measured);
         }
-        if measured * DISAGREEMENT < floor
-            && frame.predicted_ms >= frame.budget_ms * SPLITTING_SHARE_OF_BUDGET
+        if measured * DISAGREEING_FACTOR_UNDER_FLOOR < floor
+            && frame.predicted_ms >= frame.budget_ms * DISAGREEING_SHARE_OF_BUDGET
         {
             state.disagreements = state.disagreements.saturating_add(1);
-            if state.disagreements >= state.patience {
+            if state.disagreements >= state.disagreements_before_calibration {
                 state.disagreements = 0;
                 state.recalibration_requested = true;
             }
@@ -241,13 +219,13 @@ impl GpuRate {
     }
 
     /// The rate to predict `pass` at: the device rate, or the pass's own measurement scaled by
-    /// [`Self::margin`] when that is slower.
+    /// [`Self::margin`], and at least [`MARGIN`], when that is slower.
     #[must_use]
     pub fn planning_rate(&self, device_rate: f64, pass: Option<PassKey>) -> f64 {
         let Some(measured) = pass.and_then(|pass| self.pass_rate(pass)) else {
             return device_rate;
         };
-        device_rate.max(measured * self.margin())
+        device_rate.max(measured * self.margin().max(MARGIN))
     }
 }
 
@@ -306,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn frames_far_under_a_splitting_floor_ask_for_calibration_with_growing_patience() {
+    fn frames_far_under_a_splitting_floor_ask_for_calibration_less_often_each_confirmation() {
         let rate = GpuRate::default();
         rate.seed(1_000.0);
         rate.observe(frame(1.0, 100.0, SpanTrust::UpperBound));
@@ -319,8 +297,8 @@ mod tests {
             Some(20.0),
             "a lower calibration replaces"
         );
-        for patience in [1, 2, 4] {
-            for _ in 1..patience {
+        for needed in [1, 2, 4] {
+            for _ in 1..needed {
                 rate.observe(frame(0.1, 2_000.0, SpanTrust::UpperBound));
                 assert!(!rate.begin_calibration());
             }
@@ -348,5 +326,30 @@ mod tests {
         assert_eq!(rate.planning_rate(2.0, Some(coherent)), 2.0);
         assert_eq!(rate.pass_rate(PassKey::new(7, 3840 * 2160)), None);
         assert_eq!(rate.pass_rate(PassKey::new(7, 1920 * 1088)), Some(10.0));
+    }
+
+    #[test]
+    fn a_calibration_that_moves_forgets_what_passes_measured() {
+        let rate = GpuRate::default();
+        rate.seed(1_000.0);
+        let pass = PassKey::new(1, 100);
+        rate.record_pass_rate(pass, 5_000.0);
+        rate.observe(frame(1.0, 2_000.0, SpanTrust::UpperBound));
+        assert!(rate.begin_calibration());
+        rate.seed(10.0);
+        assert_eq!(rate.pass_rate(pass), None);
+    }
+
+    #[test]
+    fn a_pass_keeps_the_margin_when_the_device_rate_reaches_its_floor() {
+        let rate = GpuRate::default();
+        rate.seed(1.0);
+        for _ in 0..100 {
+            rate.observe(frame(0.0, 2.0, SpanTrust::UpperBound));
+        }
+        assert_eq!(rate.ms_per_unit_pixel(), Some(1.0));
+        let pass = PassKey::new(1, 100);
+        rate.record_pass_rate(pass, 3.0);
+        assert_eq!(rate.planning_rate(1.0, Some(pass)), 6.0);
     }
 }

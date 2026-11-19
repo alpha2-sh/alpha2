@@ -250,14 +250,12 @@ struct SubmittedBuffers {
     index: wgpu::SubmissionIndex,
     timings: SubmitTimings,
     sequences: std::ops::Range<u64>,
-    /// When the first buffer was submitted, and how.
     first: (web_time::Instant, crate::submission_clock::Recorded),
 }
 
 pub(crate) struct MeasuredSubmit {
     pub(crate) submission: crate::submission_clock::ClockedSubmission,
     pub(crate) sequences: std::ops::Range<u64>,
-    /// Every earlier submission of the renderer had completed at the first submit.
     pub(crate) queue_idle: bool,
     pub(crate) timings: SubmitTimings,
     pub(crate) lease_retire: Duration,

@@ -540,7 +540,6 @@ fn effect_uniform_end(cursor: u64, params: usize, alignment: u64) -> u64 {
     )
 }
 
-/// Uniform bytes one effect pass with `params` parameters writes.
 pub(crate) fn effect_uniform_capacity(params: usize, alignment: u64) -> u64 {
     effect_uniform_end(0, params, alignment)
 }

@@ -1,18 +1,13 @@
 //! Measures a heavy effect pass on the device, one band of it, before a frame first draws it.
 
-use crate::submission_planner::{MAX_BANDS, PLANNING_THRESHOLD_UNIT_PIXELS};
+use crate::submission_planner::PLANNING_THRESHOLD_UNIT_PIXELS;
 
-/// Draws of a pilot band; natively the faster is kept.
 const PILOT_DRAWS: u32 = 2;
-
-/// What the rows of a pilot are predicted to take at least, so submit and wait latency do not
-/// dominate what it measures.
 const PILOT_PREDICTED_MS: f64 = 4.0;
+const FEWEST_PILOT_ROWS: u32 = 2;
 
-/// Rows a pilot of a pass of `unit_pixels_per_row` draws over `height` rows at `ms_per_unit_pixel`:
-/// enough for [`PILOT_PREDICTED_MS`], at least one of the most bands, at most a quarter of them.
 pub(crate) fn pilot_rows(height: u32, unit_pixels_per_row: f64, ms_per_unit_pixel: f64) -> u32 {
-    let fewest = (height / MAX_BANDS).max(2);
+    let fewest = FEWEST_PILOT_ROWS;
     let most = (height / 4).max(fewest);
     let row_ms = unit_pixels_per_row * ms_per_unit_pixel;
     #[expect(
@@ -31,8 +26,6 @@ pub(crate) fn pilot_rows(height: u32, unit_pixels_per_row: f64, ms_per_unit_pixe
 }
 
 impl crate::Renderer {
-    /// Draws a pilot of each effect pass among `nodes` that is heavy enough to be planned
-    /// alone and that this device has not measured at `size`, keeping what each measured.
     pub(crate) fn pilot_passes<'a>(
         &self,
         nodes: impl IntoIterator<Item = &'a crate::graph::RenderNode<'a>>,
@@ -85,7 +78,10 @@ impl crate::Renderer {
             let Some(registered) = self.effects().get(effect) else {
                 continue;
             };
-            #[allow(clippy::cast_precision_loss)]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a cost in units over a frame, far below 2^52"
+            )]
             let unit_pixels = registered.cost.units() as f64 * pixels as f64;
             let key = alpha2_gpu::PassKey::new(registered.pass_id, pixels);
             if unit_pixels <= PLANNING_THRESHOLD_UNIT_PIXELS
@@ -95,7 +91,7 @@ impl crate::Renderer {
                 continue;
             }
             piloted.push(key);
-            let _ = self.pilot(
+            let piloted_pass = self.pilot(
                 &registered,
                 key,
                 crate::runtime_effect::EffectPass {
@@ -111,13 +107,12 @@ impl crate::Renderer {
                     output: &self.empty_input,
                 },
             );
+            if piloted_pass.is_err() {
+                self.gpu.rate().record_pass_rate(key, 0.0);
+            }
         }
     }
 
-    /// Draws the first rows of `pass` over scratch textures [`PILOT_DRAWS`] times and records
-    /// its rate under `key`. Natively each draw starts on an idle queue and is waited for. A
-    /// browser records no slowdown at once and replaces it with the mean of both draws when the
-    /// first started on an idle queue.
     fn pilot(
         &self,
         registered: &crate::registry::RegisteredEffect,
@@ -125,7 +120,10 @@ impl crate::Renderer {
         pass: crate::runtime_effect::EffectPass<'_>,
     ) -> Result<(), crate::RenderError> {
         let size = pass.size;
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a cost in units over a frame, far below 2^52"
+        )]
         let unit_pixels_per_row = registered.cost.units() as f64 * f64::from(size.width);
         let rows = pilot_rows(
             size.height,
@@ -193,7 +191,6 @@ impl crate::Renderer {
         Ok(())
     }
 
-    /// Draws the first `rows` rows of `pass` once over scratch textures and submits it.
     fn draw_pilot(
         &self,
         registered: &crate::registry::RegisteredEffect,
@@ -252,20 +249,16 @@ impl crate::Renderer {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_BANDS, PILOT_PREDICTED_MS, pilot_rows};
+    use super::{PILOT_PREDICTED_MS, pilot_rows};
 
     #[test]
     fn a_pilot_draws_enough_rows_for_its_predicted_time_within_a_quarter_of_the_frame() {
-        assert_eq!(
-            pilot_rows(4320, 1.0, 1.0),
-            67,
-            "one of the most bands at least"
-        );
+        assert_eq!(pilot_rows(4320, 1.0, 1.0), 4);
+        assert_eq!(pilot_rows(4320, 1.0, 100.0), 2, "two rows at the fewest");
         assert_eq!(pilot_rows(144, 0.1, 1.0), 36, "a quarter at most");
         assert_eq!(pilot_rows(1080, 1.0, PILOT_PREDICTED_MS / 32.0), 32);
         assert_eq!(pilot_rows(1080, 1.0, 0.0), 270);
         assert_eq!(pilot_rows(3, 1.0, 1.0), 2);
         assert_eq!(pilot_rows(1, 1.0, 1.0), 1);
-        assert!(pilot_rows(4320, 1.0, 1.0) >= 4320 / MAX_BANDS);
     }
 }

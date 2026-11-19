@@ -70,7 +70,6 @@ pub(crate) struct PassPlacement {
     pub(crate) cut_before: bool,
     /// Bands the pass is drawn in, each in a command buffer of its own.
     pub(crate) bands: u32,
-    /// Only these first rows are drawn, to measure the pass.
     pub(crate) pilot: Option<u32>,
 }
 
@@ -114,7 +113,6 @@ impl SubmissionPlanner {
         self.frame = true;
     }
 
-    /// Places every bandable pass as a pilot of its first `rows` rows.
     pub(crate) const fn mark_pilot(&mut self, rows: u32) {
         self.pilot_rows = Some(rows);
     }
@@ -201,7 +199,6 @@ impl SubmissionPlanner {
         self.cost
     }
 
-    /// The device rate and budget the frame was planned at.
     pub(crate) fn planned_at(&self) -> Option<(f64, f64)> {
         self.plan
             .as_ref()
@@ -246,7 +243,6 @@ fn calibration_definition() -> crate::EffectDef {
     }
 }
 
-/// Draws of the calibration effect; the first warms the device and is not timed natively.
 const CALIBRATION_DRAWS: u32 = 4;
 
 impl crate::Renderer {

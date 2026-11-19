@@ -129,8 +129,6 @@ fn effect_graph<'a>(
     graph
 }
 
-/// Draws `effect` and waits for its pack as an export does, returning how the frame was
-/// submitted and the milliseconds from encoding to the mapped readback.
 fn exported_frame(
     renderer: &Renderer,
     effect: &crate::EffectId,
@@ -153,7 +151,6 @@ fn exported_frame(
     (submissions, milliseconds)
 }
 
-/// Draws `effect` and waits for the whole device, as a caller that polls late does.
 fn polled_frame(
     renderer: &Renderer,
     effect: &crate::EffectId,
@@ -177,8 +174,6 @@ fn polled_frame(
         .expect("the frame's submissions")
 }
 
-/// The smallest square whose exported heavy frame keeps the GPU busy for the shortest watchdog
-/// a test can set, and that frame's milliseconds.
 fn busy_size(
     renderer: &Renderer,
     effect: &crate::EffectId,
@@ -195,7 +190,6 @@ fn busy_size(
         .expect("some size keeps the GPU busy for the shortest watchdog this test can set")
 }
 
-/// Runs `body` with the watchdog at `milliseconds`, restoring the default after.
 fn with_watchdog<T>(milliseconds: f64, body: impl FnOnce() -> T) -> T {
     #[expect(
         clippy::cast_possible_truncation,

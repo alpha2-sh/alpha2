@@ -5,9 +5,6 @@
 //! apart. Each submission's GPU time runs from the later of its submit and the previous
 //! submission's end to its own completion callback, so queueing is excluded. Callback latency
 //! (poll or event loop) is small beside [`alpha2_gpu::hung_threshold_ms`].
-//!
-//! A completion seen inside [`ClockedSubmission::wait`] on that submission or an earlier one is
-//! seen as it happens; every other one may be seen late.
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -16,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use web_time::Instant;
 
 /// Submissions kept; enough to cover the last frames' submissions.
-const KEPT: usize = 32;
+const KEPT: usize = 4 * crate::submission_planner::MAX_BANDS as usize;
 
 /// The frame a submission belongs to, as its caller knows it.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -53,11 +50,8 @@ struct Entry {
 struct ClockState {
     /// Sequence number of `entries[0]`.
     first: u64,
-    /// Submissions recorded, which is the next sequence number.
     recorded: u64,
-    /// Submissions known complete, counted from the first.
     completed: u64,
-    /// Completions a later frame waits to learn, by sequence.
     watched: Vec<(u64, PreviousCompletion)>,
     entries: VecDeque<Entry>,
     frame: Option<FrameMark>,
@@ -216,19 +210,14 @@ impl SubmissionClock {
     }
 }
 
-/// A recorded submission.
 #[derive(Clone, Debug)]
 pub(crate) struct Recorded {
     pub(crate) sequence: u64,
-    /// Every earlier submission of the clock had completed, so the GPU starts this one at once.
     pub(crate) queue_idle: bool,
-    /// The completion of the submission before, when it was watched and still running.
     pub(crate) previous: Option<PreviousCompletion>,
 }
 
 impl Recorded {
-    /// When the GPU started this submission, at the latest, given it was submitted at `at`: then
-    /// on an idle queue, else when a previous completion seen as it happened says so.
     pub(crate) fn started(&self, at: Instant) -> Option<Instant> {
         if self.queue_idle {
             return Some(at);
@@ -238,7 +227,6 @@ impl Recorded {
     }
 }
 
-/// When a submission completed and whether that was seen as it happened, once it did.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PreviousCompletion(Arc<Mutex<Option<(Instant, bool)>>>);
 
@@ -259,7 +247,6 @@ impl PreviousCompletion {
 }
 
 thread_local! {
-    /// The clock and sequence the calling thread is waiting for inside [`ClockedSubmission::wait`].
     static WAITING: Cell<Option<(usize, u64)>> = const { Cell::new(None) };
 }
 
@@ -268,7 +255,6 @@ impl SubmissionClock {
         Arc::as_ptr(self) as usize
     }
 
-    /// Whether a completion of `sequence` seen now on this thread is seen as it happens.
     pub(crate) fn sees_as_it_happens(self: &Arc<Self>, sequence: u64) -> bool {
         WAITING
             .get()
@@ -276,7 +262,23 @@ impl SubmissionClock {
     }
 }
 
-/// A renderer submission that a caller may wait for.
+#[cfg(not(target_arch = "wasm32"))]
+struct Waiting(Option<(usize, u64)>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Waiting {
+    fn on(clock: usize, sequence: u64) -> Self {
+        Self(WAITING.replace(Some((clock, sequence))))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        WAITING.set(self.0);
+    }
+}
+
 #[derive(Clone, Debug)]
 #[cfg_attr(
     target_arch = "wasm32",
@@ -301,9 +303,6 @@ impl ClockedSubmission {
         }
     }
 
-    /// Blocks until the submission completes. Completions already due are collected first, so
-    /// those seen during the wait are seen as they happen.
-    ///
     /// # Errors
     /// [`crate::RenderError::GpuTimeout`] past `timeout`, or
     /// [`crate::RenderError::TextureReadback`] when polling fails.
@@ -316,13 +315,13 @@ impl ClockedSubmission {
         gpu.device()
             .poll(wgpu::PollType::Poll)
             .map_err(crate::error::poll_error)?;
-        let previous = WAITING.replace(Some((self.clock.address(), self.sequence)));
-        let waited = gpu.device().poll(wgpu::PollType::Wait {
-            submission_index: Some(self.index.clone()),
-            timeout: Some(timeout),
-        });
-        WAITING.set(previous);
-        waited.map_err(crate::error::poll_error)?;
+        let _waiting = Waiting::on(self.clock.address(), self.sequence);
+        gpu.device()
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(self.index.clone()),
+                timeout: Some(timeout),
+            })
+            .map_err(crate::error::poll_error)?;
         Ok(())
     }
 }
