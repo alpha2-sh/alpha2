@@ -267,7 +267,7 @@ impl Renderer {
         let readback = self.complete_yuv420p_readback(
             readback_work,
             #[cfg(not(target_arch = "wasm32"))]
-            submitted.index,
+            submitted.submission,
             false,
         );
         for work in source_work {

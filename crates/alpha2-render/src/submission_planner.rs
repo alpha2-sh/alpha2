@@ -70,12 +70,19 @@ pub(crate) struct PassPlacement {
     pub(crate) cut_before: bool,
     /// Bands the pass is drawn in, each in a command buffer of its own.
     pub(crate) bands: u32,
+    pub(crate) pilot: Option<u32>,
+}
+
+#[derive(Debug)]
+struct Plan {
+    rate: std::sync::Arc<alpha2_gpu::GpuRate>,
+    ms_per_unit_pixel: f64,
+    budget_ms: f64,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct SubmissionPlanner {
-    /// Milliseconds per unit pixel and the budget, once planned.
-    plan: Option<(f64, f64)>,
+    plan: Option<Plan>,
     /// Predicted milliseconds of the command buffer being recorded.
     current_ms: f64,
     /// Predicted milliseconds of each command buffer finished before it.
@@ -85,29 +92,64 @@ pub(crate) struct SubmissionPlanner {
     cost: FrameCost,
     /// Set once a graph was encoded.
     frame: bool,
+    pilot_rows: Option<u32>,
 }
 
 impl SubmissionPlanner {
-    pub(crate) fn plan(&mut self, ms_per_unit_pixel: f64, budget_ms: f64) {
-        self.plan = Some((ms_per_unit_pixel, budget_ms.max(f64::MIN_POSITIVE)));
+    pub(crate) fn plan(
+        &mut self,
+        rate: std::sync::Arc<alpha2_gpu::GpuRate>,
+        ms_per_unit_pixel: f64,
+        budget_ms: f64,
+    ) {
+        self.plan = Some(Plan {
+            rate,
+            ms_per_unit_pixel,
+            budget_ms: budget_ms.max(f64::MIN_POSITIVE),
+        });
     }
 
     pub(crate) const fn mark_frame(&mut self) {
         self.frame = true;
     }
 
-    /// Charges a pass of `cost` over `pixels` and places it. A pass that is not `bandable` only
-    /// gets its own command buffer.
-    pub(crate) fn pass(&mut self, cost: EffectCost, pixels: u64, bandable: bool) -> PassPlacement {
+    pub(crate) const fn mark_pilot(&mut self, rows: u32) {
+        self.pilot_rows = Some(rows);
+    }
+
+    /// Charges a pass of `cost` over `pixels` and places it, at the rate measured for `pass` when
+    /// that is slower than the device. A pass that is not `bandable` only gets its own command
+    /// buffer.
+    pub(crate) fn pass(
+        &mut self,
+        cost: EffectCost,
+        pixels: u64,
+        bandable: bool,
+        pass: Option<alpha2_gpu::PassKey>,
+    ) -> PassPlacement {
         self.cost.add(cost, pixels);
-        let Some((rate, budget)) = self.plan else {
+        if let (Some(rows), true) = (self.pilot_rows, bandable) {
             return PassPlacement {
                 cut_before: false,
                 bands: 1,
+                pilot: Some(rows),
+            };
+        }
+        let Some(plan) = &self.plan else {
+            return PassPlacement {
+                cut_before: false,
+                bands: 1,
+                pilot: None,
             };
         };
+        let budget = plan.budget_ms;
+        let rate = plan.rate.planning_rate(plan.ms_per_unit_pixel, pass);
         #[allow(clippy::cast_precision_loss)]
         let ms = cost.units() as f64 * pixels as f64 * rate;
+        self.place(ms, budget, bandable)
+    }
+
+    fn place(&mut self, ms: f64, budget: f64, bandable: bool) -> PassPlacement {
         if ms > budget {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let bands = if bandable {
@@ -121,7 +163,11 @@ impl SubmissionPlanner {
             }
             self.band_ms = ms / f64::from(bands);
             self.current_ms = self.band_ms;
-            return PassPlacement { cut_before, bands };
+            return PassPlacement {
+                cut_before,
+                bands,
+                pilot: None,
+            };
         }
         let cut_before = self.current_ms > 0.0 && self.current_ms + ms > budget;
         if cut_before {
@@ -132,6 +178,7 @@ impl SubmissionPlanner {
         PassPlacement {
             cut_before,
             bands: 1,
+            pilot: None,
         }
     }
 
@@ -152,9 +199,15 @@ impl SubmissionPlanner {
         self.cost
     }
 
+    pub(crate) fn planned_at(&self) -> Option<(f64, f64)> {
+        self.plan
+            .as_ref()
+            .map(|plan| (plan.ms_per_unit_pixel, plan.budget_ms))
+    }
+
     /// Each command buffer's predicted milliseconds, when planned.
     pub(crate) fn buffer_ms(&self) -> Option<Vec<f64>> {
-        self.plan.map(|_| {
+        self.plan.as_ref().map(|_| {
             let mut buffers = self.finished_ms.clone();
             buffers.push(self.current_ms);
             buffers
@@ -190,10 +243,13 @@ fn calibration_definition() -> crate::EffectDef {
     }
 }
 
+const CALIBRATION_DRAWS: u32 = 4;
+
 impl crate::Renderer {
     /// Plans the frame when `cost` exceeds [`PLANNING_THRESHOLD_UNIT_PIXELS`], at the device rate
-    /// calibrated by the first such frame. A browser cannot wait for calibration, so it assumes
-    /// [`alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL`] meanwhile.
+    /// calibrated by the first such frame and again when frames disagree with it. A browser
+    /// cannot wait for calibration, so it assumes [`alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL`]
+    /// meanwhile.
     pub(crate) fn plan_submissions(
         &self,
         encoder: &mut crate::renderer::RenderEncoder,
@@ -204,26 +260,24 @@ impl crate::Renderer {
             return;
         }
         let rate = self.gpu.rate();
-        if rate.ms_per_unit_pixel().is_none()
-            && rate.begin_calibration()
-            && self.calibrate().is_err()
-        {
+        if rate.begin_calibration() && self.calibrate().is_err() {
             rate.abandon_calibration();
         }
         let ms_per_unit_pixel = rate
             .ms_per_unit_pixel()
             .unwrap_or(alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL);
         encoder.planner().plan(
+            std::sync::Arc::clone(rate),
             ms_per_unit_pixel,
             f64::from(alpha2_gpu::submission_budget_ms()),
         );
     }
 
-    /// Draws the calibration effect twice at 512x512, one submission each, and seeds the device
-    /// rate on completion.
+    /// Draws the calibration effect [`CALIBRATION_DRAWS`] times at 512x512, one submission each,
+    /// and seeds the device rate on completion.
     ///
-    /// Natively only the second (warm) draw is timed, since completions in one poll arrive
-    /// together. A browser cannot wait, so it uses half the summed span, which is conservative.
+    /// Natively each draw is waited for and the fastest timed one is kept. A browser cannot
+    /// wait, so it uses the mean of the summed span, cold draw included.
     fn calibrate(&self) -> Result<(), crate::RenderError> {
         let effect = self
             .calibration
@@ -233,9 +287,14 @@ impl crate::Renderer {
         let format = self.intermediate_format();
         let params = crate::EffectParams::new();
         let resources = crate::EffectResources::new();
-        let mut first = None;
-        let mut last = None;
-        for _ in 0..2 {
+        #[allow(clippy::cast_precision_loss)]
+        let unit_pixels =
+            effect.cost.units() as f64 * f64::from(CALIBRATION_SIDE) * f64::from(CALIBRATION_SIDE);
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut fastest: Option<f64> = None;
+        #[cfg(target_arch = "wasm32")]
+        let mut sequences: Option<std::ops::Range<u64>> = None;
+        for draw in 0..CALIBRATION_DRAWS {
             let mut encoder = self.command_encoder("alpha2 calibration encoder");
             let source =
                 self.textures
@@ -265,38 +324,40 @@ impl crate::Renderer {
             let submitted = self.submit_measured([encoder.finish()], false)?;
             uniforms.recycle();
             #[cfg(not(target_arch = "wasm32"))]
-            self.gpu
-                .device()
-                .poll(wgpu::PollType::Wait {
-                    submission_index: Some(submitted.index.clone()),
-                    timeout: Some(self.gpu_wait_timeout),
-                })
-                .map_err(crate::error::poll_error)?;
-            first.get_or_insert(submitted.sequences.start);
-            last = Some(submitted);
+            {
+                submitted
+                    .submission
+                    .wait(&self.gpu, self.gpu_wait_timeout)?;
+                if draw > 0
+                    && let Some(ms) = self.submission_clock.gpu_ms(submitted.sequences.clone())
+                {
+                    fastest = Some(fastest.map_or(ms, |fastest| fastest.min(ms)));
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = draw;
+                sequences = Some(sequences.map_or(submitted.sequences.clone(), |sequences| {
+                    sequences.start..submitted.sequences.end
+                }));
+            }
         }
-        let submitted = last.expect("two calibration draws");
-        #[cfg(not(target_arch = "wasm32"))]
-        let (sequences, draws) = (submitted.sequences.clone(), 1.0);
-        #[cfg(target_arch = "wasm32")]
-        let (sequences, draws) = (
-            first.unwrap_or(submitted.sequences.start)..submitted.sequences.end,
-            2.0,
-        );
-        #[allow(clippy::cast_precision_loss)]
-        let unit_pixels =
-            effect.cost.units() as f64 * f64::from(CALIBRATION_SIDE) * f64::from(CALIBRATION_SIDE);
-        let clock = std::sync::Arc::clone(&self.submission_clock);
         let rate = std::sync::Arc::clone(self.gpu.rate());
-        let seed = move || match clock.gpu_ms(sequences) {
-            Some(ms) => rate.seed(ms / draws / unit_pixels),
-            None => rate.abandon_calibration(),
-        };
-        // Natively both draws were waited for, so their completions have run.
         #[cfg(not(target_arch = "wasm32"))]
-        seed();
+        match fastest {
+            Some(ms) => rate.seed(ms / unit_pixels),
+            None => rate.abandon_calibration(),
+        }
         #[cfg(target_arch = "wasm32")]
-        self.gpu.on_submitted_work_done(seed);
+        {
+            let clock = std::sync::Arc::clone(&self.submission_clock);
+            let sequences = sequences.expect("calibration draws");
+            self.gpu
+                .on_submitted_work_done(move || match clock.gpu_ms(sequences) {
+                    Some(ms) => rate.seed(ms / f64::from(CALIBRATION_DRAWS) / unit_pixels),
+                    None => rate.abandon_calibration(),
+                });
+        }
         Ok(())
     }
 }
@@ -319,6 +380,14 @@ pub(crate) fn band_rows(band: u32, bands: u32, height: u32) -> (u32, u32) {
 mod tests {
     use super::*;
 
+    fn placed(cut_before: bool, bands: u32) -> PassPlacement {
+        PassPlacement {
+            cut_before,
+            bands,
+            pilot: None,
+        }
+    }
+
     #[test]
     fn passes_fill_a_buffer_up_to_the_budget_and_a_heavy_one_is_banded() {
         let mut planner = SubmissionPlanner::default();
@@ -327,32 +396,20 @@ mod tests {
             transcendentals: 0,
             arithmetic: 10,
         };
-        assert_eq!(planner.pass(pass, 100, true).bands, 1);
+        assert_eq!(planner.pass(pass, 100, true, None).bands, 1);
         assert_eq!(planner.buffer_ms(), None);
-        planner.plan(1.0, 2_500.0);
+        planner.plan(std::sync::Arc::default(), 1.0, 2_500.0);
         // 1000 ms each: two fit, the third starts a new buffer.
-        assert!(!planner.pass(pass, 100, true).cut_before);
-        assert!(!planner.pass(pass, 100, true).cut_before);
-        assert!(planner.pass(pass, 100, true).cut_before);
+        assert!(!planner.pass(pass, 100, true, None).cut_before);
+        assert!(!planner.pass(pass, 100, true, None).cut_before);
+        assert!(planner.pass(pass, 100, true, None).cut_before);
         // 10,000 ms: four bands of 2,500 after a cut.
-        let placed = planner.pass(pass, 1_000, true);
-        assert_eq!(
-            placed,
-            PassPlacement {
-                cut_before: true,
-                bands: 4
-            }
-        );
-        for _ in 1..placed.bands {
+        let placement = planner.pass(pass, 1_000, true, None);
+        assert_eq!(placement, placed(true, 4));
+        for _ in 1..placement.bands {
             planner.next_band();
         }
-        assert_eq!(
-            planner.pass(pass, 1_000, false),
-            PassPlacement {
-                cut_before: true,
-                bands: 1
-            }
-        );
+        assert_eq!(planner.pass(pass, 1_000, false, None), placed(true, 1));
         assert_eq!(
             planner.buffer_ms(),
             Some(vec![
@@ -360,6 +417,44 @@ mod tests {
             ])
         );
         assert!((planner.cost().unit_pixels() - 24_000.0).abs() < 1e-9);
+        assert_eq!(planner.planned_at(), Some((1.0, 2_500.0)));
+    }
+
+    #[test]
+    fn a_pass_measured_slower_than_the_device_is_banded_at_its_own_rate() {
+        let rate = std::sync::Arc::new(alpha2_gpu::GpuRate::default());
+        rate.seed(0.5);
+        let scattered = alpha2_gpu::PassKey::new(1, 100);
+        rate.record_pass_rate(scattered, 5.0);
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(rate, 1.0, 2_500.0);
+        let pass = EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 10,
+        };
+        assert_eq!(planner.pass(pass, 100, true, None), placed(false, 1));
+        assert_eq!(
+            planner.pass(pass, 100, true, Some(scattered)),
+            placed(true, 4)
+        );
+    }
+
+    #[test]
+    fn a_pilot_draws_its_rows_alone_and_plans_nothing() {
+        let mut planner = SubmissionPlanner::default();
+        planner.mark_pilot(6);
+        let pass = EffectCost::fixed(1, 0);
+        assert_eq!(
+            planner.pass(pass, 100, true, None),
+            PassPlacement {
+                cut_before: false,
+                bands: 1,
+                pilot: Some(6)
+            }
+        );
+        assert_eq!(planner.pass(pass, 100, false, None), placed(false, 1));
+        assert_eq!(planner.buffer_ms(), None);
     }
 
     #[test]

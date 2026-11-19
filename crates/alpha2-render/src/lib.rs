@@ -52,6 +52,7 @@ mod runtime_effect;
 mod settle;
 mod shader_inventory;
 mod submission_clock;
+mod submission_pilot;
 mod submission_planner;
 pub use submission_planner::{FrameCost, FrameSubmissions};
 mod target;

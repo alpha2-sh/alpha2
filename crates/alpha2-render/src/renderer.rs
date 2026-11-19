@@ -177,19 +177,20 @@ impl RenderEncoder {
         &mut self.planner
     }
 
-    /// Charges a pass to the plan and returns its band count, finishing the command buffer first
-    /// when the plan says so.
+    /// Charges a pass to the plan and places it, finishing the command buffer first when the plan
+    /// says so.
     pub(crate) fn place_pass(
         &mut self,
         cost: crate::effect_cost::EffectCost,
         pixels: u64,
         bandable: bool,
-    ) -> u32 {
-        let placement = self.planner.pass(cost, pixels, bandable);
+        pass: Option<alpha2_gpu::PassKey>,
+    ) -> crate::submission_planner::PassPlacement {
+        let placement = self.planner.pass(cost, pixels, bandable, pass);
         if placement.cut_before {
             self.cut();
         }
-        placement.bands
+        placement
     }
 
     pub(crate) fn next_band(&mut self) {
@@ -249,11 +250,13 @@ struct SubmittedBuffers {
     index: wgpu::SubmissionIndex,
     timings: SubmitTimings,
     sequences: std::ops::Range<u64>,
+    first: (web_time::Instant, crate::submission_clock::Recorded),
 }
 
 pub(crate) struct MeasuredSubmit {
-    pub(crate) index: wgpu::SubmissionIndex,
+    pub(crate) submission: crate::submission_clock::ClockedSubmission,
     pub(crate) sequences: std::ops::Range<u64>,
+    pub(crate) queue_idle: bool,
     pub(crate) timings: SubmitTimings,
     pub(crate) lease_retire: Duration,
 }
@@ -591,12 +594,15 @@ impl Renderer {
     ///
     /// # Errors
     /// [`RenderError::Gpu`] when a scope caught an error; then nothing in the submission ran.
-    pub(crate) fn submit<I>(&self, commands: I) -> Result<wgpu::SubmissionIndex, RenderError>
+    pub(crate) fn submit<I>(
+        &self,
+        commands: I,
+    ) -> Result<crate::submission_clock::ClockedSubmission, RenderError>
     where
         I: IntoIterator<Item = RenderCommands>,
     {
         self.submit_measured(commands, false)
-            .map(|submitted| submitted.index)
+            .map(|submitted| submitted.submission)
     }
 
     /// Opens a command encoder and the error scopes its submission closes.
@@ -670,13 +676,18 @@ impl Renderer {
             scopes.push(commands.scope);
             frames.push(commands.frame);
         }
-        let submitted = self.submit_buffers(command_buffers, measure);
+        let watch_previous = planners
+            .iter()
+            .any(|planner| planner.is_frame() && planner.is_planned());
+        let submitted = self.submit_buffers(command_buffers, measure, watch_previous);
         self.note_frame_submissions(&planners, &submitted);
         let SubmittedBuffers {
             index,
             timings,
             sequences,
+            first: (_, first),
         } = submitted;
+        let queue_idle = first.queue_idle;
         // Scopes close after the submit, in reverse order.
         let mut caught = None;
         for scope in errors.into_iter().rev() {
@@ -694,8 +705,13 @@ impl Renderer {
             return Err(RenderError::Gpu { kind });
         }
         Ok(MeasuredSubmit {
-            index,
+            submission: crate::submission_clock::ClockedSubmission::new(
+                index,
+                Arc::clone(&self.submission_clock),
+                sequences.end - 1,
+            ),
             sequences,
+            queue_idle,
             timings,
             lease_retire: drain_started.map_or(Duration::ZERO, |started| started.elapsed()),
         })
@@ -707,54 +723,67 @@ impl Renderer {
         &self,
         buffers: Vec<(wgpu::CommandBuffer, Option<f64>)>,
         measure: bool,
+        watch_previous: bool,
     ) -> SubmittedBuffers {
-        let submit = |buffers: Vec<wgpu::CommandBuffer>, predicted_ms: Option<f64>| {
-            let (index, timings) = if measure {
-                self.gpu.submit_timed(buffers)
-            } else {
-                (self.gpu.submit(buffers), SubmitTimings::default())
+        let submit =
+            |buffers: Vec<wgpu::CommandBuffer>, predicted_ms: Option<f64>, watch_previous: bool| {
+                let (index, timings) = if measure {
+                    self.gpu.submit_timed(buffers)
+                } else {
+                    (self.gpu.submit(buffers), SubmitTimings::default())
+                };
+                let at = web_time::Instant::now();
+                let recorded = self
+                    .submission_clock
+                    .record(at, predicted_ms, watch_previous);
+                let sequence = recorded.sequence;
+                let clock = Arc::clone(&self.submission_clock);
+                self.gpu.on_submitted_work_done(move || {
+                    let as_it_happens = clock.sees_as_it_happens(sequence);
+                    clock.complete(sequence, web_time::Instant::now(), as_it_happens);
+                });
+                (index, timings, sequence, (at, recorded))
             };
-            let sequence = self
-                .submission_clock
-                .record(web_time::Instant::now(), predicted_ms);
-            let clock = Arc::clone(&self.submission_clock);
-            self.gpu.on_submitted_work_done(move || {
-                clock.complete(sequence, web_time::Instant::now());
-            });
-            (index, timings, sequence)
-        };
         if buffers.len() <= 1 || buffers.iter().all(|(_, ms)| ms.is_none()) {
             let predicted_ms = buffers
                 .iter()
                 .filter_map(|(_, ms)| *ms)
                 .reduce(|a, b| a + b);
-            let (index, timings, sequence) = submit(
+            let (index, timings, sequence, first) = submit(
                 buffers.into_iter().map(|(buffer, _)| buffer).collect(),
                 predicted_ms,
+                watch_previous,
             );
             return SubmittedBuffers {
                 index,
                 timings,
                 sequences: sequence..sequence + 1,
+                first,
             };
         }
         let mut total = SubmitTimings::default();
         let mut last = None;
-        let mut first_sequence = None;
+        let mut first = None;
         for (buffer, predicted_ms) in buffers {
-            let (index, timings, sequence) = submit(vec![buffer], predicted_ms);
+            let (index, timings, sequence, started) = submit(
+                vec![buffer],
+                predicted_ms,
+                watch_previous && first.is_none(),
+            );
             total.queue_lock_wait = total
                 .queue_lock_wait
                 .saturating_add(timings.queue_lock_wait);
             total.queue_submit = total.queue_submit.saturating_add(timings.queue_submit);
-            first_sequence.get_or_insert(sequence);
+            first.get_or_insert((sequence, started));
             last = Some((index, sequence));
         }
         let (index, last_sequence) = last.expect("at least two buffers");
+        let (first_sequence, first) = first.expect("at least two buffers");
         SubmittedBuffers {
             index,
             timings: total,
-            sequences: first_sequence.unwrap_or(last_sequence)..last_sequence + 1,
+            sequences: first_sequence..last_sequence + 1,
+            first,
         }
     }
 
@@ -790,15 +819,29 @@ impl Renderer {
             .last_frame_submissions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(report);
-        if planner.is_planned() {
+        if let (Some(predicted_ms), Some((planned_ms_per_unit_pixel, budget_ms))) =
+            (report.predicted_ms, planner.planned_at())
+        {
             let clock = Arc::clone(&self.submission_clock);
             let rate = Arc::clone(self.gpu.rate());
-            let sequences = submitted.sequences.clone();
-            let unit_pixels = report.cost.unit_pixels();
+            let last = submitted.sequences.end - 1;
+            let (submitted_at, first) = submitted.first.clone();
             self.gpu.on_submitted_work_done(move || {
-                if let Some(measured_ms) = clock.gpu_ms(sequences) {
-                    rate.observe(measured_ms, unit_pixels);
-                }
+                let Some(started) = first.started(submitted_at) else {
+                    return;
+                };
+                let trust = if clock.sees_as_it_happens(last) {
+                    alpha2_gpu::SpanTrust::Exact
+                } else {
+                    alpha2_gpu::SpanTrust::UpperBound
+                };
+                rate.observe(alpha2_gpu::FrameMeasurement {
+                    measured_ms: started.elapsed().as_secs_f64() * 1_000.0,
+                    predicted_ms,
+                    planned_ms_per_unit_pixel,
+                    budget_ms,
+                    trust,
+                });
             });
         }
     }

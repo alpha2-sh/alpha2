@@ -42,7 +42,9 @@ pub use instance::{
     Dx12Compiler, InstanceSettings, InstanceSettingsError, ShaderCompiler, configure_instances,
     dx12_shader_compiler, instance_descriptor, instance_settings, new_instance, shader_compiler_of,
 };
-pub use rate::{GpuRate, UNCALIBRATED_MS_PER_UNIT_PIXEL};
+pub use rate::{
+    FrameMeasurement, GpuRate, MARGIN, PassKey, SpanTrust, UNCALIBRATED_MS_PER_UNIT_PIXEL,
+};
 pub use watchdog::{
     WATCHDOG_MS, hung_threshold_ms, set_watchdog_ms, submission_budget_ms, watchdog_ms,
 };
