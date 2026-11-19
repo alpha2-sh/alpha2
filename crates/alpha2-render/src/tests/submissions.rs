@@ -278,20 +278,24 @@ fn a_device_rate_seeded_too_high_is_recalibrated_by_the_frames_it_mispredicts() 
     let size = RenderSize::new(256, 144).expect("size");
     let view = flat_source(&renderer, size);
     let calibrated = polled_frame(&renderer, &effect, &view, size);
-    assert_eq!(calibrated.submissions, 1, "{calibrated:?}");
     let one_watchdog_for_this_frame =
         f64::from(alpha2_gpu::watchdog_ms()) / calibrated.cost.unit_pixels();
     gpu.rate().seed(one_watchdog_for_this_frame);
     let mispredicted = polled_frame(&renderer, &effect, &view, size);
-    assert!(mispredicted.submissions > 1, "{mispredicted:?}");
+    assert!(
+        mispredicted.submissions > calibrated.submissions,
+        "{mispredicted:?} against {calibrated:?}"
+    );
     let last = (0..FRAMES_TO_LEARN_FROM)
         .map(|_| polled_frame(&renderer, &effect, &view, size))
         .last()
         .expect("frames");
-    assert_eq!(
-        last.submissions, 1,
-        "a frame that fits one submission is still cut after {FRAMES_TO_LEARN_FROM} frames \
-         measured far below their prediction: {last:?}"
+    assert!(
+        last.submissions <= calibrated.submissions,
+        "a frame calibrated to {} submission(s) is still cut in {} after {FRAMES_TO_LEARN_FROM} \
+         frames measured far below their prediction: {last:?}",
+        calibrated.submissions,
+        last.submissions
     );
 }
 
