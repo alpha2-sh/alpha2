@@ -1,17 +1,37 @@
 //! Measures a heavy effect pass on the device, one band of it, before a frame first draws it.
 
-use crate::submission_planner::{MAX_BANDS, PLANNING_THRESHOLD_UNIT_PIXELS, band_rows};
+use crate::submission_planner::{MAX_BANDS, PLANNING_THRESHOLD_UNIT_PIXELS};
 
 /// Draws of a pilot band; natively the faster is kept.
 const PILOT_DRAWS: u32 = 2;
 
-/// Bands a pass of `height` rows is cut into for its pilot, each at least two rows.
-pub(crate) fn pilot_bands(height: u32) -> u32 {
-    (height / 2).clamp(1, MAX_BANDS)
+/// What the rows of a pilot are predicted to take at least, so submit and wait latency do not
+/// dominate what it measures.
+const PILOT_PREDICTED_MS: f64 = 4.0;
+
+/// Rows a pilot of a pass of `unit_pixels_per_row` draws over `height` rows at `ms_per_unit_pixel`:
+/// enough for [`PILOT_PREDICTED_MS`], at least one of the most bands, at most a quarter of them.
+pub(crate) fn pilot_rows(height: u32, unit_pixels_per_row: f64, ms_per_unit_pixel: f64) -> u32 {
+    let fewest = (height / MAX_BANDS).max(2);
+    let most = (height / 4).max(fewest);
+    let row_ms = unit_pixels_per_row * ms_per_unit_pixel;
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "clamped to the rows of a frame"
+    )]
+    let rows = if row_ms > 0.0 {
+        (PILOT_PREDICTED_MS / row_ms)
+            .ceil()
+            .clamp(f64::from(fewest), f64::from(most)) as u32
+    } else {
+        most
+    };
+    rows.clamp(1, height.max(1))
 }
 
 impl crate::Renderer {
-    /// Draws a pilot band of each effect pass among `nodes` that is heavy enough to be planned
+    /// Draws a pilot of each effect pass among `nodes` that is heavy enough to be planned
     /// alone and that this device has not measured at `size`, keeping what each measured.
     pub(crate) fn pilot_passes<'a>(
         &self,
@@ -94,7 +114,7 @@ impl crate::Renderer {
         }
     }
 
-    /// Draws the first band of `pass` over scratch textures [`PILOT_DRAWS`] times and records
+    /// Draws the first rows of `pass` over scratch textures [`PILOT_DRAWS`] times and records
     /// its rate under `key`. Natively each draw starts on an idle queue and is waited for. A
     /// browser records no slowdown at once and replaces it with the mean of both draws when the
     /// first started on an idle queue.
@@ -105,10 +125,17 @@ impl crate::Renderer {
         pass: crate::runtime_effect::EffectPass<'_>,
     ) -> Result<(), crate::RenderError> {
         let size = pass.size;
-        let (_, rows) = band_rows(0, pilot_bands(size.height), size.height);
         #[allow(clippy::cast_precision_loss)]
-        let band_unit_pixels =
-            registered.cost.units() as f64 * f64::from(size.width) * f64::from(rows.max(1));
+        let unit_pixels_per_row = registered.cost.units() as f64 * f64::from(size.width);
+        let rows = pilot_rows(
+            size.height,
+            unit_pixels_per_row,
+            self.gpu
+                .rate()
+                .ms_per_unit_pixel()
+                .unwrap_or(alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL),
+        );
+        let band_unit_pixels = unit_pixels_per_row * f64::from(rows);
         let alignment = u64::from(self.limits.min_uniform_buffer_offset_alignment.max(1));
         let uniform_bytes = crate::graph_execute::effect_uniform_capacity(
             registered.definition.params.len(),
@@ -127,7 +154,7 @@ impl crate::Renderer {
         #[cfg(target_arch = "wasm32")]
         let mut drawn: Option<(std::ops::Range<u64>, bool)> = None;
         for _ in 0..PILOT_DRAWS {
-            let submitted = self.draw_pilot(registered, pass, uniform_bytes)?;
+            let submitted = self.draw_pilot(registered, pass, rows, uniform_bytes)?;
             #[cfg(not(target_arch = "wasm32"))]
             {
                 submitted
@@ -166,16 +193,17 @@ impl crate::Renderer {
         Ok(())
     }
 
-    /// Draws the first band of `pass` once over scratch textures and submits it.
+    /// Draws the first `rows` rows of `pass` once over scratch textures and submits it.
     fn draw_pilot(
         &self,
         registered: &crate::registry::RegisteredEffect,
         pass: crate::runtime_effect::EffectPass<'_>,
+        rows: u32,
         uniform_bytes: u64,
     ) -> Result<crate::renderer::MeasuredSubmit, crate::RenderError> {
         let format = self.intermediate_format();
         let mut encoder = self.command_encoder("alpha2 pilot encoder");
-        encoder.planner().mark_pilot();
+        encoder.planner().mark_pilot(rows);
         let scratch = |label| {
             self.textures
                 .acquire(self.gpu.device(), pass.size, format, label)
@@ -219,5 +247,25 @@ impl crate::Renderer {
         let submitted = self.submit_measured([encoder.finish()], false)?;
         uniforms.recycle();
         Ok(submitted)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_BANDS, PILOT_PREDICTED_MS, pilot_rows};
+
+    #[test]
+    fn a_pilot_draws_enough_rows_for_its_predicted_time_within_a_quarter_of_the_frame() {
+        assert_eq!(
+            pilot_rows(4320, 1.0, 1.0),
+            67,
+            "one of the most bands at least"
+        );
+        assert_eq!(pilot_rows(144, 0.1, 1.0), 36, "a quarter at most");
+        assert_eq!(pilot_rows(1080, 1.0, PILOT_PREDICTED_MS / 32.0), 32);
+        assert_eq!(pilot_rows(1080, 1.0, 0.0), 270);
+        assert_eq!(pilot_rows(3, 1.0, 1.0), 2);
+        assert_eq!(pilot_rows(1, 1.0, 1.0), 1);
+        assert!(pilot_rows(4320, 1.0, 1.0) >= 4320 / MAX_BANDS);
     }
 }

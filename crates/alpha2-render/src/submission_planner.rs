@@ -70,8 +70,8 @@ pub(crate) struct PassPlacement {
     pub(crate) cut_before: bool,
     /// Bands the pass is drawn in, each in a command buffer of its own.
     pub(crate) bands: u32,
-    /// Only the first band is drawn, to measure the pass.
-    pub(crate) pilot: bool,
+    /// Only these first rows are drawn, to measure the pass.
+    pub(crate) pilot: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -93,7 +93,7 @@ pub(crate) struct SubmissionPlanner {
     cost: FrameCost,
     /// Set once a graph was encoded.
     frame: bool,
-    pilot: bool,
+    pilot_rows: Option<u32>,
 }
 
 impl SubmissionPlanner {
@@ -114,9 +114,9 @@ impl SubmissionPlanner {
         self.frame = true;
     }
 
-    /// Places every pass as a pilot: one band drawn of the most.
-    pub(crate) const fn mark_pilot(&mut self) {
-        self.pilot = true;
+    /// Places every bandable pass as a pilot of its first `rows` rows.
+    pub(crate) const fn mark_pilot(&mut self, rows: u32) {
+        self.pilot_rows = Some(rows);
     }
 
     /// Charges a pass of `cost` over `pixels` and places it, at the rate measured for `pass` when
@@ -130,18 +130,18 @@ impl SubmissionPlanner {
         pass: Option<alpha2_gpu::PassKey>,
     ) -> PassPlacement {
         self.cost.add(cost, pixels);
-        if self.pilot && bandable {
+        if let (Some(rows), true) = (self.pilot_rows, bandable) {
             return PassPlacement {
                 cut_before: false,
-                bands: MAX_BANDS,
-                pilot: true,
+                bands: 1,
+                pilot: Some(rows),
             };
         }
         let Some(plan) = &self.plan else {
             return PassPlacement {
                 cut_before: false,
                 bands: 1,
-                pilot: false,
+                pilot: None,
             };
         };
         let budget = plan.budget_ms;
@@ -168,7 +168,7 @@ impl SubmissionPlanner {
             return PassPlacement {
                 cut_before,
                 bands,
-                pilot: false,
+                pilot: None,
             };
         }
         let cut_before = self.current_ms > 0.0 && self.current_ms + ms > budget;
@@ -180,7 +180,7 @@ impl SubmissionPlanner {
         PassPlacement {
             cut_before,
             bands: 1,
-            pilot: false,
+            pilot: None,
         }
     }
 
@@ -388,7 +388,7 @@ mod tests {
         PassPlacement {
             cut_before,
             bands,
-            pilot: false,
+            pilot: None,
         }
     }
 
@@ -445,27 +445,20 @@ mod tests {
     }
 
     #[test]
-    fn a_pilot_draws_one_band_of_the_most_and_plans_nothing() {
+    fn a_pilot_draws_its_rows_alone_and_plans_nothing() {
         let mut planner = SubmissionPlanner::default();
-        planner.mark_pilot();
+        planner.mark_pilot(6);
         let pass = EffectCost::fixed(1, 0);
         assert_eq!(
             planner.pass(pass, 100, true, None),
             PassPlacement {
                 cut_before: false,
-                bands: MAX_BANDS,
-                pilot: true
+                bands: 1,
+                pilot: Some(6)
             }
         );
+        assert_eq!(planner.pass(pass, 100, false, None), placed(false, 1));
         assert_eq!(planner.buffer_ms(), None);
-        assert_eq!(crate::submission_pilot::pilot_bands(1), 1);
-        assert_eq!(crate::submission_pilot::pilot_bands(7), 3);
-        assert_eq!(crate::submission_pilot::pilot_bands(4320), MAX_BANDS);
-        for height in [1, 2, 3, 7, 100, 127, 128, 4320] {
-            let (top, rows) = band_rows(0, crate::submission_pilot::pilot_bands(height), height);
-            assert_eq!(top, 0);
-            assert!(rows >= height.min(2), "{height}: {rows}");
-        }
     }
 
     #[test]
