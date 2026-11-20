@@ -196,11 +196,25 @@ impl Renderer {
                 layout: &drawn.bind_group_layout,
                 entries: &entries,
             });
-        let bands = encoder.place_pass(
+        let pixels = u64::from(size.width) * u64::from(size.height);
+        let placement = encoder.place_pass(
             registered.cost,
-            u64::from(size.width) * u64::from(size.height),
+            pixels,
             true,
+            Some(alpha2_gpu::PassKey::new(registered.pass_id, pixels)),
         );
+        if let Some(rows) = placement.pilot {
+            encode_pass(
+                encoder,
+                &drawn.pipeline,
+                &bind_group,
+                output,
+                None,
+                Some((0, 0, size.width, rows)),
+            );
+            return Ok(None);
+        }
+        let bands = placement.bands;
         if bands > 1 {
             // Bands read only the pass's sources, never its target, so pixels match an unbanded
             // pass.

@@ -85,6 +85,8 @@ pub enum Capability {
     TimestampQuery,
     /// A GPU stall the render stall calibration can measure.
     MeasurableGpuStall,
+    /// A completion the device reports while a wait on it blocks.
+    ExactGpuCompletion,
     /// The packaged wasm builds.
     Wasm,
     /// The browser a harness was asked for.
@@ -176,6 +178,7 @@ impl Capability {
         Self::HalfFloatBlend,
         Self::TimestampQuery,
         Self::MeasurableGpuStall,
+        Self::ExactGpuCompletion,
         Self::Wasm,
         Self::Browser,
         Self::Python,
@@ -241,6 +244,7 @@ impl Capability {
             Self::HalfFloatBlend => "half-float-blend",
             Self::TimestampQuery => "timestamp-query",
             Self::MeasurableGpuStall => "measurable-gpu-stall",
+            Self::ExactGpuCompletion => "exact-gpu-completion",
             Self::Wasm => "wasm",
             Self::Browser => "browser",
             Self::Python => "python",

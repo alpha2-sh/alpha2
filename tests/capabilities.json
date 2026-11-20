@@ -127,6 +127,10 @@
     "description": "A GPU stall the render stall calibration can measure.",
     "probe": "the render stall calibration measures"
   },
+  "exact-gpu-completion": {
+    "description": "A completion the device reports while a wait on it blocks.",
+    "probe": "the test device's backend is not GL"
+  },
   "wasm": {
     "description": "The packaged wasm builds.",
     "probe": "packages/alpha2/wasm/alpha2_wasm_bg.wasm (and the extensions wasm a file needs) is built"

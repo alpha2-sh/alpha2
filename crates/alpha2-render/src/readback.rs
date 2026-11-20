@@ -627,7 +627,7 @@ impl Renderer {
     pub(crate) fn complete_yuv420p_readback(
         &self,
         encoded: EncodedYuv420pReadback,
-        #[cfg(not(target_arch = "wasm32"))] submission: wgpu::SubmissionIndex,
+        #[cfg(not(target_arch = "wasm32"))] submission: crate::submission_clock::ClockedSubmission,
         standalone_submission: bool,
     ) -> Yuv420pReadback {
         let EncodedYuv420pReadback {
@@ -1011,7 +1011,7 @@ pub struct Rgba8Readback {
     padded_bytes_per_row: u32,
     unpadded_bytes_per_row: u32,
     #[cfg(not(target_arch = "wasm32"))]
-    submission: wgpu::SubmissionIndex,
+    submission: crate::submission_clock::ClockedSubmission,
     #[cfg(not(target_arch = "wasm32"))]
     timeout: std::time::Duration,
     staging_bytes: u64,
@@ -1050,13 +1050,7 @@ impl Rgba8Readback {
         self.map_async(move |mapped| {
             let _ = sender.send(mapped);
         });
-        self.gpu
-            .device()
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(self.submission.clone()),
-                timeout: Some(self.timeout),
-            })
-            .map_err(crate::error::poll_error)?;
+        self.submission.wait(&self.gpu, self.timeout)?;
         receive_mapped(&self.gpu, &receiver, self.timeout)?
     }
 
@@ -1268,7 +1262,7 @@ pub struct Yuv420pReadback {
     /// is unused then.
     texels: Option<Box<TexelStaging>>,
     #[cfg(not(target_arch = "wasm32"))]
-    submission: wgpu::SubmissionIndex,
+    submission: crate::submission_clock::ClockedSubmission,
     #[cfg(not(target_arch = "wasm32"))]
     timeout: std::time::Duration,
     staging_bytes: u64,
@@ -1322,13 +1316,7 @@ impl Yuv420pReadback {
     /// [`RenderError::TextureReadback`] when device polling fails.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn wait_for_submission(&self) -> Result<(), RenderError> {
-        self.gpu
-            .device()
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(self.submission.clone()),
-                timeout: Some(self.timeout),
-            })
-            .map_err(crate::error::poll_error)?;
+        self.submission.wait(&self.gpu, self.timeout)?;
         Ok(())
     }
 
