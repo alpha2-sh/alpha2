@@ -2987,6 +2987,27 @@ def run_start_timeout(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeH
         assert text in (error.stderr or "")
 
 
+def test_a_start_timeout_keeps_the_preamble_a_slow_stdout_reader_delivers_late(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from alpha2 import _wire
+
+    read = _wire.read
+
+    def slow_read(stream: Any) -> Any:
+        for item in read(stream):
+            time.sleep(0.3)
+            yield item
+
+    monkeypatch.setattr(_wire, "read", slow_read)
+    host = preamble_host(tmp_path / "pids", "a library's diagnostic line\n", "held before ready\n")
+    client = HostClient(host_path=fake_host(tmp_path, host, ready=False), host_start_timeout=0.5)
+    error = refused(client)
+    assert error.code == "HOST_START_TIMEOUT", error.message
+    assert "a library's diagnostic line" in (error.stderr or "")
+    assert "held before ready" in (error.stderr or "")
+
+
 class FloatLike:
     def __float__(self) -> float:
         return 0.25

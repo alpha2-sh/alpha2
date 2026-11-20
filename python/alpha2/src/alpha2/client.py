@@ -1463,14 +1463,17 @@ class _Host:
 
     def settle_stderr(self) -> None:
         """Waits, at most a second, until standard error is drained, so the diagnostics the host
-        wrote before an answer stay with it."""
+        wrote before an answer stay with it. Once the host has ended, that includes what it wrote
+        to standard output before its first frame."""
         deadline = time.monotonic() + _STDERR_SETTLE_SECONDS
         with self._stderr_changed:
             while time.monotonic() < deadline and self._readers[1].is_alive():
                 seen = self._stderr_total
                 self._stderr_changed.wait(_STDERR_QUIET_SECONDS)
                 if self._stderr_total == seen and not self._stderr_pending():
-                    return
+                    break
+        if self.process.poll() is not None:
+            self._readers[0].join(max(0.0, deadline - time.monotonic()))
 
     def _stderr_pending(self) -> bool:
         if sys.platform == "win32" or self.process.stderr is None:
