@@ -858,3 +858,43 @@ fn an_export_without_gpu_time_says_which_frames_it_lacks() {
     };
     assert!(reason(flat).contains("did not advance"));
 }
+
+#[test]
+fn a_4k_alpha_prores_export_keeps_two_frames_in_flight_under_the_default_budget() {
+    let size = RenderSize::new(3_840, 2_160).expect("4K");
+    let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuva444p10le").expect("layout");
+    let limits = export_pipeline_limits(
+        size,
+        (wgpu::TextureFormat::Rgba16Float, layout),
+        default_budget(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
+        crate::DEFAULT_IN_FLIGHT_VIDEO_FRAMES,
+        None,
+    )
+    .expect("the default budget holds a 4K ProRes 4444 export");
+    let two_in_flight = limits.staging_bytes_per_frame * 2
+        + limits.packed_bytes_per_frame
+            * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
+    assert!(
+        two_in_flight <= limits.byte_budget,
+        "two readbacks and a rendezvous channel fit: {limits:?}"
+    );
+    assert_eq!(
+        (limits.readback_depth, limits.encode_channel_depth),
+        (2, 0),
+        "{limits:?}"
+    );
+
+    let pinned = export_pipeline_limits(
+        size,
+        (wgpu::TextureFormat::Rgba16Float, layout),
+        default_budget(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
+        crate::DEFAULT_IN_FLIGHT_VIDEO_FRAMES,
+        Some(1),
+    )
+    .expect("a pinned channel still fits");
+    assert_eq!(
+        (pinned.readback_depth, pinned.encode_channel_depth),
+        (1, 1),
+        "a pinned channel keeps its slots: {pinned:?}"
+    );
+}

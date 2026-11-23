@@ -51,6 +51,12 @@ All notable changes to this project are documented in this file.
   `GpuFrameRenderer` gains the required `render_frame_layout_readback`, `Renderer` gains
   `render_graph_layout_readback`, and `FrameGpuTimes` gains `timed_frames` and `unread_frames`.
 
+- **Breaking:** an export's in-flight plan gives up encode channel slots, down to a rendezvous,
+  before it gives up a frame in flight: where the in-flight budget holds the requested readbacks
+  beside the least the encoder side needs, they are kept (ProRes 4444 at 3840x2160 under the
+  default budget now keeps two frames in flight and no queued frame, where it kept one and one).
+  A pinned encode queue depth (`ALPHA2_ENCODE_QUEUE_DEPTH`) still keeps its slots first.
+
 ### Fixed
 
 - Each submission of a split frame names the effects encoded into its own command buffers in loss

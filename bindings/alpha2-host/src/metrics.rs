@@ -309,9 +309,10 @@ pub struct ExportPipelineLimits {
 /// Divides the in-flight byte budget between readbacks and the encode channel.
 ///
 /// `requested_encode_depth` pins the depth; `None` derives it. Readbacks are capped at
-/// [`MAX_IN_FLIGHT_VIDEO_FRAMES`], then the encode channel takes what is left within
-/// [`MIN_ENCODE_CHANNEL_DEPTH`]..=[`MAX_ENCODE_CHANNEL_DEPTH`], reduced until both fit, so a small
-/// budget degrades instead of failing.
+/// `requested_depth` and [`MAX_IN_FLIGHT_VIDEO_FRAMES`], and the encode channel takes what is left
+/// within [`MIN_ENCODE_CHANNEL_DEPTH`]..=[`MAX_ENCODE_CHANNEL_DEPTH`]. Where both do not fit, a
+/// derived channel gives up slots, down to a rendezvous, before a readback is given up; a pinned
+/// one keeps its slots first. So a small budget degrades instead of failing.
 ///
 /// # Errors
 /// When the budget cannot hold one readback and two packed frames (a rendezvous channel's), which
@@ -343,32 +344,47 @@ pub fn export_pipeline_limits(
         },
         |depth| depth.min(MAX_ENCODE_CHANNEL_DEPTH),
     );
-    for encode_channel_depth in (0..=start).rev() {
+    let fits = |readback_depth: usize, encode_channel_depth: usize| {
         let encode_slots =
             u64::try_from(readback_encode_frame_bound(encode_channel_depth)).unwrap_or(u64::MAX);
-        let encode_reserve = packed_bytes_per_frame.saturating_mul(encode_slots);
-        let available = byte_budget.saturating_sub(encode_reserve);
-        let possible_depth = available / staging_bytes_per_frame.max(1);
-        let readback_depth = usize::try_from(possible_depth)
-            .unwrap_or(MAX_IN_FLIGHT_VIDEO_FRAMES)
-            .min(requested_depth)
-            .min(MAX_IN_FLIGHT_VIDEO_FRAMES);
-        if readback_depth > 0
-            && encode_reserve.saturating_add(
-                staging_bytes_per_frame
-                    .saturating_mul(u64::try_from(readback_depth).unwrap_or(u64::MAX)),
-            ) <= byte_budget
-        {
-            return Ok(ExportPipelineLimits {
-                byte_budget,
-                readback_depth,
-                encode_channel_depth,
-                staging_bytes_per_frame,
-                packed_bytes_per_frame,
-                #[cfg(feature = "hwencode")]
-                gpu: None,
-            });
-        }
+        let readbacks = u64::try_from(readback_depth).unwrap_or(u64::MAX);
+        packed_bytes_per_frame
+            .saturating_mul(encode_slots)
+            .saturating_add(staging_bytes_per_frame.saturating_mul(readbacks))
+            <= byte_budget
+    };
+    let wanted = requested_depth.min(MAX_IN_FLIGHT_VIDEO_FRAMES);
+    let channel_first = || {
+        (0..=start).rev().find_map(|encode_channel_depth| {
+            (1..=wanted)
+                .rev()
+                .find(|&readback_depth| fits(readback_depth, encode_channel_depth))
+                .map(|readback_depth| (readback_depth, encode_channel_depth))
+        })
+    };
+    let readbacks_first = || {
+        (1..=wanted).rev().find_map(|readback_depth| {
+            (0..=start)
+                .rev()
+                .find(|&encode_channel_depth| fits(readback_depth, encode_channel_depth))
+                .map(|encode_channel_depth| (readback_depth, encode_channel_depth))
+        })
+    };
+    let plan = if requested_encode_depth.is_some() {
+        channel_first()
+    } else {
+        readbacks_first()
+    };
+    if let Some((readback_depth, encode_channel_depth)) = plan {
+        return Ok(ExportPipelineLimits {
+            byte_budget,
+            readback_depth,
+            encode_channel_depth,
+            staging_bytes_per_frame,
+            packed_bytes_per_frame,
+            #[cfg(feature = "hwencode")]
+            gpu: None,
+        });
     }
     Err(crate::memory::resource_limit(format!(
         "{} cannot hold one readback and two packed {}x{} {} frames",
