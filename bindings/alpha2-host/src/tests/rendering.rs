@@ -449,11 +449,8 @@ fn hdr_sources_decode_and_tone_map_or_are_refused_in_words() {
                 tone,
             )
             .expect("reference");
-            let expected = alpha2_render::encode_linear_rgb(
-                [linear[0], linear[1], linear[2]],
-                alpha2_render::SdrOutputTransfer::Srgb,
-            )
-            .map(|value| (value * 255.0).round() as u8);
+            let expected = srgb_encoded([linear[0], linear[1], linear[2]])
+                .map(|value| (value * 255.0).round() as u8);
             let pixel = &pixels[x * 4..x * 4 + 3];
             for channel in 0..3 {
                 assert!(
@@ -511,11 +508,7 @@ fn a_bt2020_sdr_source_converts_into_bt709_primaries_without_a_tone_map() {
         )
         .expect("SDR");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        alpha2_render::encode_linear_rgb(
-            [linear[0], linear[1], linear[2]],
-            alpha2_render::SdrOutputTransfer::Srgb,
-        )
-        .map(|value| (value * 255.0).round() as u8)
+        srgb_encoded([linear[0], linear[1], linear[2]]).map(|value| (value * 255.0).round() as u8)
     };
     let as_bt709 = alpha2_media::ColorMetadata {
         primaries: alpha2_media::ColorPrimaries::Bt709,
@@ -554,6 +547,17 @@ fn a_bt2020_sdr_source_converts_into_bt709_primaries_without_a_tone_map() {
             ),
         }
     }
+}
+
+fn srgb_encoded(linear: [f32; 3]) -> [f32; 3] {
+    linear.map(|value| {
+        let value = value.clamp(0.0, 1.0);
+        if value <= 0.003_130_8 {
+            12.92 * value
+        } else {
+            1.055 * value.powf(1.0 / 2.4) - 0.055
+        }
+    })
 }
 
 /// Read back as stored: sRGB-encoded, premultiplied RGBA.

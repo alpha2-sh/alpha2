@@ -151,7 +151,8 @@ pub enum ColorPrimaries {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TransferFunction {
-    /// BT.709 opto-electronic transfer function.
+    /// BT.709, which every export is tagged with. Read with the sRGB curve like `srgb`, so SDR
+    /// sources tagged either way are the same picture.
     Bt709,
     /// IEC sRGB transfer function.
     Srgb,

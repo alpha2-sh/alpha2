@@ -16,15 +16,6 @@ pub struct YuvSample {
     pub alpha: f32,
 }
 
-/// SDR transfer used when encoding a render result.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum SdrOutputTransfer {
-    /// IEC sRGB.
-    Srgb,
-    /// BT.709 OETF.
-    Bt709,
-}
-
 /// What happens to an HDR (PQ or HLG) source.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ColorPolicy {
@@ -174,26 +165,14 @@ pub(crate) fn check_packable(encoding: YuvEncoding) -> Result<(), RenderError> {
     Ok(())
 }
 
-/// Encodes linear-light RGB for an SDR output target.
-#[must_use]
-pub fn encode_linear_rgb(rgb: [f32; 3], transfer: SdrOutputTransfer) -> [f32; 3] {
+#[cfg(test)]
+pub(crate) fn encode_srgb(rgb: [f32; 3]) -> [f32; 3] {
     rgb.map(|value| {
         let value = value.clamp(0.0, 1.0);
-        match transfer {
-            SdrOutputTransfer::Srgb => {
-                if value <= 0.003_130_8 {
-                    12.92 * value
-                } else {
-                    1.055 * libm::powf(value, 1.0 / 2.4) - 0.055
-                }
-            }
-            SdrOutputTransfer::Bt709 => {
-                if value < 0.018 {
-                    4.5 * value
-                } else {
-                    1.099 * libm::powf(value, 0.45) - 0.099
-                }
-            }
+        if value <= 0.003_130_8 {
+            12.92 * value
+        } else {
+            1.055 * libm::powf(value, 1.0 / 2.4) - 0.055
         }
     })
 }
@@ -382,8 +361,7 @@ mod tests {
                     ColorPolicy::RejectHdr,
                 )
                 .expect("SDR");
-                let encoded =
-                    encode_linear_rgb([linear[0], linear[1], linear[2]], SdrOutputTransfer::Srgb);
+                let encoded = encode_srgb([linear[0], linear[1], linear[2]]);
                 let expected = (f32::from(code) - 16.0) / 219.0;
                 assert!(
                     encoded

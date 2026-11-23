@@ -11,6 +11,9 @@ All notable changes to this project are documented in this file.
   or BT.601 with the new `RenderError::UnsupportedOutputColor`, coded `INVALID_INPUT`. The packs
   follow only the color's matrix and range, so such a tag would have described other pixels than
   the planes hold. No binding requested such a color.
+- **Breaking:** `alpha2-render` no longer exports `SdrOutputTransfer` or `encode_linear_rgb`.
+  Nothing outside tests called them, and the export path never applied either curve: it writes
+  the working space's sRGB-coded values and tags them BT.709.
 
 ### Removed
 

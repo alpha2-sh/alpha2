@@ -739,11 +739,7 @@ fn read_back_as(color: ColorMetadata, codes: [u16; 3], depth: u8) -> [u8; 3] {
         ColorPolicy::ToneMapHdr(crate::hdr::HdrToneMap::default()),
     )
     .expect("a tone-mapping import takes every tag");
-    crate::encode_linear_rgb(
-        [linear[0], linear[1], linear[2]],
-        crate::SdrOutputTransfer::Srgb,
-    )
-    .map(quantize_unorm8)
+    crate::color::encode_srgb([linear[0], linear[1], linear[2]]).map(quantize_unorm8)
 }
 
 fn returns_the_patch(back: [u8; 3]) -> bool {

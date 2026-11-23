@@ -78,8 +78,7 @@ pub use builtins::{
 };
 pub use catalog::{builtin_catalog, builtin_catalog_document, builtin_catalog_json};
 pub use color::{
-    Color, ColorDiagnostic, ColorError, ColorPolicy, SdrOutputTransfer, YuvSample,
-    convert_yuv_to_linear_rgba, encode_linear_rgb, is_hdr,
+    Color, ColorDiagnostic, ColorError, ColorPolicy, YuvSample, convert_yuv_to_linear_rgba, is_hdr,
 };
 pub use composite::{CompositeLayer, LayerTransform};
 pub use cpu::{

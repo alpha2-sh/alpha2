@@ -67,11 +67,8 @@ fn gpu_wide_gamut_sdr_sources_convert_into_bt709_as_the_reference_does() {
                     ColorPolicy::RejectHdr,
                 )
                 .expect("reference");
-                crate::encode_linear_rgb(
-                    [linear[0], linear[1], linear[2]],
-                    crate::SdrOutputTransfer::Srgb,
-                )
-                .map(|value| (value * 255.0).round() as u8)
+                crate::color::encode_srgb([linear[0], linear[1], linear[2]])
+                    .map(|value| (value * 255.0).round() as u8)
             })
             .collect::<Vec<_>>();
         assert_rgb_close(&pixels, &expected, &format!("{primaries:?}"));
@@ -177,11 +174,8 @@ fn gpu_hdr_sources_tone_map_into_the_sdr_working_space_as_the_reference_does() {
                     "{transfer:?} at {} nits, code {index}: {linear:?}",
                     tone.source_peak_nits
                 );
-                crate::encode_linear_rgb(
-                    [linear[0], linear[1], linear[2]],
-                    crate::SdrOutputTransfer::Srgb,
-                )
-                .map(|value| (value * 255.0).round() as u8)
+                crate::color::encode_srgb([linear[0], linear[1], linear[2]])
+                    .map(|value| (value * 255.0).round() as u8)
             })
             .collect::<Vec<_>>();
         assert_rgb_close(

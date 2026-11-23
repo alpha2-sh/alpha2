@@ -7554,7 +7554,7 @@
       "oneOf": [
         {
           "const": "bt709",
-          "description": "BT.709 opto-electronic transfer function.",
+          "description": "BT.709, which every export is tagged with. Read with the sRGB curve like `srgb`, so SDR\nsources tagged either way are the same picture.",
           "type": "string"
         },
         {
