@@ -328,3 +328,55 @@ fn the_pack_decodes_each_row_once_on_the_renderers_threads() {
         }
     }
 }
+
+fn pack_threads() -> std::collections::HashSet<std::thread::ThreadId> {
+    let threads = std::sync::Mutex::new(std::collections::HashSet::new());
+    let caller = std::thread::current().id();
+    let row = |_: usize, out: &mut [[f32; 4]]| {
+        let thread = std::thread::current().id();
+        if thread != caller {
+            threads
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(thread);
+        }
+        out.fill([0.5, 0.25, 0.75, 1.0]);
+    };
+    let picture = Picture {
+        width: 256,
+        height: 256,
+        row: &row,
+    };
+    let layout = layout(Chroma::Yuv422, BitDepth::Ten, false);
+    let planes = layout.planes(256, 256);
+    let mut memory: Vec<Vec<u8>> = planes
+        .iter()
+        .map(|&(plane_width, rows, bytes)| vec![0; (plane_width * rows * bytes) as usize])
+        .collect();
+    let mut targets: Vec<PlaneTarget<'_>> = memory
+        .iter_mut()
+        .zip(&planes)
+        .map(|(bytes, &(plane_width, _, size))| {
+            PlaneTarget::new(bytes, (plane_width * size) as usize)
+        })
+        .collect();
+    pack(&picture, CENTRED, layout, &mut targets).expect("packs");
+    threads
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[test]
+fn the_readback_pack_keeps_its_threads_from_one_frame_to_the_next() {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    let mut used = std::collections::HashSet::new();
+    for _ in 0..=cores {
+        used.extend(pack_threads());
+    }
+    assert!(
+        used.len() <= cores,
+        "{} frames were packed on {} threads, more than the {cores} cores",
+        cores + 1,
+        used.len()
+    );
+}

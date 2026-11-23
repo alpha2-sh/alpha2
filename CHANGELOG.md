@@ -41,6 +41,8 @@ All notable changes to this project are documented in this file.
   `lossReport` and `GpuLossReport`. A time that ends at a completion seen late is an upper bound,
   and the hung message then says "ran up to t ms in one submission" or "completed together within
   t ms".
+- GPU exports to layouts other than 8-bit 4:2:0 (10-bit, 4:2:2, 4:4:4, alpha) pack each frame on
+  threads kept for the process, one per core, instead of up to eight threads started per frame.
 
 ### Fixed
 

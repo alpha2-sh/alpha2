@@ -69,6 +69,10 @@ impl Workers {
     /// `threads` workers (one means the calling thread); falls back to the calling thread if the
     /// pool cannot start.
     pub(crate) fn new(threads: usize) -> Self {
+        Self::named(threads, "alpha2-cpu-render")
+    }
+
+    pub(crate) fn named(threads: usize, name: &'static str) -> Self {
         let threads = threads.max(1);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -76,7 +80,7 @@ impl Workers {
                 .then(|| {
                     rayon::ThreadPoolBuilder::new()
                         .num_threads(threads)
-                        .thread_name(|index| format!("alpha2-cpu-render-{index}"))
+                        .thread_name(move |index| format!("{name}-{index}"))
                         .build()
                         .ok()
                 })
@@ -90,7 +94,7 @@ impl Workers {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = threads;
+            let _ = (threads, name);
             Self {
                 threads: 1,
                 fixed_rows: None,

@@ -42,4 +42,5 @@ pub(crate) use vector::over as premultiplied_over;
 pub use image::CpuImage;
 pub use renderer::{CpuRenderStats, CpuRenderer};
 pub use source::{CpuSource, RgbaPixels, YuvPlanes};
+pub(crate) use workers::Workers;
 pub use workers::{BandProgress, report_band_progress};
