@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- A GPU-resident export of a clip whose container and coded stream declare different colors no
+  longer fails with "a decoded picture is ..., not the output's ...". The YUV transcode is planned
+  from the color the stream itself declares (the H.264 or HEVC VUI), and a picture that still
+  differs from the output is rendered instead of failing the export.
+
 ### Changed
 
 - **Breaking:** every YUV pack in `alpha2-render` (the GPU readbacks, the NV12 pack and the CPU

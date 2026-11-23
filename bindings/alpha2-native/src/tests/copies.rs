@@ -76,6 +76,13 @@ fn a_yuv_transcode_takes_any_codec_whose_pictures_already_are_the_output() {
         ("h264-bt709-vui-sar.mp4", 128, 96, h264, "4:3 pixels"),
         ("h264-bt709-vui-sar.ts", 128, 96, h264, "4:3 pixels"),
         ("h264-bt709-pasp.mp4", 128, 96, h264, "4:3 pixels"),
+        (
+            "h264-bt709-transcode-vui-bt601.mp4",
+            256,
+            144,
+            h264,
+            "stream declares",
+        ),
     ] {
         let reason =
             crate::check_yuv_transcode(&corpus(name), width, height, output).expect_err(name);

@@ -23,7 +23,7 @@ use crate::metrics::{
 };
 use crate::protocol::{HostError, LoudnessRequest};
 use crate::trace::{AudioBlockTrace, ExportTrace, VideoFrameTrace};
-use crate::yuv_transcode::TranscodePlan;
+use crate::yuv_transcode::{TranscodeFrame, TranscodePlan};
 use crate::{WORKER_RETRY_INTERVAL, error_message};
 use alpha2_audio::TransportState;
 use alpha2_engine::{
@@ -287,6 +287,7 @@ impl Host {
         progress: &mut dyn FnMut(crate::protocol::Progress) -> Result<(), HostError>,
     ) -> Result<Value, GpuEncodeOutcome> {
         let transcode_plan = transcode.as_ref().ok();
+        let mut transcode_refused = false;
         let size = RenderSize::new(project.settings.width, project.settings.height)
             .map_err(|error| GpuEncodeOutcome::Unavailable(format!("{error:?}")))?;
         capability
@@ -617,9 +618,23 @@ impl Host {
                 let bytes = decoded.bytes;
                 // A transcoded frame is copied into the encoder's planes once acquired; anything
                 // else is installed now. The set's bytes are released after its last use.
-                let picture = if let Some(plan) = transcode_plan {
-                    Some(plan.picture(decoded)?)
-                } else {
+                let (picture, rendered) = match transcode_plan {
+                    Some(plan) => match plan.take(decoded, size, exporter.encoding())? {
+                        TranscodeFrame::Repack(picture) => (Some(picture), None),
+                        TranscodeFrame::Render(decoded, reason) => {
+                            if !transcode_refused {
+                                transcode_refused = true;
+                                alpha2_os::diagnostic!(
+                                    "alpha2 native export: frame {frame_index} renders instead of \
+                                     transcoding: {reason}"
+                                );
+                            }
+                            (None, Some(*decoded))
+                        }
+                    },
+                    None => (None, Some(decoded)),
+                };
+                if let Some(decoded) = rendered {
                     let prepare = Instant::now();
                     self.failure.enter(ExportPhase::Upload, Some(frame_index));
                     let upload = gpu_frames.install(self.gpu_renderer(), decoded)?;
@@ -627,8 +642,7 @@ impl Host {
                         metrics.source_prepare.saturating_add(prepare.elapsed());
                     metrics.record_install(&upload);
                     decode_worker.release(bytes);
-                    None
-                };
+                }
                 if let Some(sink) = metrics.trace.as_ref() {
                     frame_trace.installed = sink.now();
                 }

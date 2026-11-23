@@ -681,6 +681,91 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode"
+))]
+#[test]
+fn a_clip_whose_stream_and_container_disagree_on_colour_renders_as_its_pictures() {
+    let _gpu = gpu_test_lock();
+    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Auto) else {
+        return;
+    };
+    let directory = scratch_directory("colour-apart");
+    let end = alpha2_time::TICKS_PER_SECOND / 2;
+    let source = corpus("h264-bt709-transcode-vui-bt601.mp4");
+    let project = json!({
+        "schema_version": 1, "id": "apart", "name": "Apart",
+        "settings": {"width": 256, "height": 144, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+        "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+        "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+            "id": "clip", "source_id": "video",
+            "timeline_range": {"start": 0, "end": end},
+            "source_range": {"start": 0, "end": end}
+        }]}]}
+    });
+    let assets = HashMap::from([("video".to_owned(), source.clone())]);
+    let export = |host: &mut Host, name: &str| {
+        let output = directory.join(name);
+        let result = host
+            .export(
+                &project.to_string(),
+                &assets,
+                &HashMap::new(),
+                Vec::new(),
+                0,
+                end,
+                RateRequest { num: 30, den: 1 },
+                false,
+                crate::protocol::ResolvedFormat {
+                    container: alpha2_media::Container::Mp4,
+                    video: NativeVideoCodec::H264,
+                    audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
+                },
+                None,
+                VideoQualityRequest::Level(QualityLevel::VeryHigh),
+                AudioQualityRequest::Level(QualityLevel::High),
+                None,
+                &output,
+                &mut |_| Ok(()),
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        (result, decoded_planes(&output))
+    };
+    let (resident, resident_planes) = export(&mut host, "resident.mp4");
+    assert_eq!(
+        resident["videoPipeline"],
+        json!("gpu-resident"),
+        "{resident}"
+    );
+    assert_eq!(resident["videoTranscode"], Value::Null, "{resident}");
+    assert!(
+        resident["yuvTranscodeIneligible"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("stream declares")),
+        "{resident}"
+    );
+    host.input_policy = crate::config::VideoInputPolicy::CpuReadback;
+    let (readback, readback_planes) = export(&mut host, "readback.mp4");
+    assert_eq!(readback["videoPipeline"], json!("readback"), "{readback}");
+    if let Err(problem) = plane_check(&resident_planes, &readback_planes, 256, PLANE_PSNR_FLOOR_DB)
+    {
+        panic!("the two paths read the pictures differently: {problem}");
+    }
+    assert!(
+        plane_check(
+            &resident_planes,
+            &decoded_planes(&source),
+            256,
+            PLANE_PSNR_FLOOR_DB
+        )
+        .is_err(),
+        "the BT.601 pictures were exported as BT.709 codes unchanged"
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Every frame is another solid primary or secondary, so chroma that was not copied, came from
 /// another slot, or had U and V swapped decodes as the wrong color. Primaries are 0 and 1, which
 /// encode the same under every transfer curve.
@@ -942,7 +1027,7 @@ fn a_decoded_picture_is_transcoded_only_when_a_render_would_not_change_it() {
 
 #[cfg(feature = "hwencode")]
 #[test]
-fn a_transcoded_picture_is_the_last_of_its_frame_set() {
+fn a_transcoded_picture_is_the_last_of_its_frame_set_and_a_changed_one_renders() {
     let end = alpha2_time::TICKS_PER_SECOND / 2;
     let project = Project::from_json(
         &json!({
@@ -966,53 +1051,81 @@ fn a_transcoded_picture_is_the_last_of_its_frame_set() {
         alpha2_media::YuvEncoding::export(alpha2_media::VideoCodec::H264),
     )
     .unwrap_or_else(|reason| panic!("the clip is transcoded: {reason}"));
-    let frame = Arc::new(alpha2_native::NativeVideoFrame::Cpu(DecodedVideoFrame {
-        pts: MediaTime::ZERO,
-        dts: None,
-        duration: None,
-        visible_rect: Rect {
-            x: 0,
-            y: 0,
-            width: 2,
-            height: 2,
-        },
-        sample_aspect_ratio: SampleAspectRatio::default(),
-        orientation: Orientation::UPRIGHT,
-        pixel_format: PixelFormat::Yuv(alpha2_media::YuvFormat::I420),
-        chroma_location: alpha2_media::ChromaLocation::Left,
-        color: Some(ColorMetadata::EXPORT),
-        planes: Vec::new(),
-    }));
-    let held = Arc::downgrade(&frame);
-    let set = crate::decode::DecodedFrameSet {
-        generation: 0,
-        index: 0,
-        time: MediaTime::ZERO,
-        frames: vec![DecodedSourceFrame {
-            source: SourceId::new("video").expect("source"),
-            clip: ClipId::new("clip").expect("clip"),
-            requested: MediaTime::ZERO,
-            kind: MediaKind::Video,
-            frame,
-        }],
-        stills: Vec::new(),
-        bytes: 6,
-        decode_time: Duration::ZERO,
-        stage_timings: alpha2_native::DecodeStageTimings::default(),
-        reverse_cache_hits: 0,
-        reverse_windows_built: 0,
-        reverse_cache_bytes: 0,
-        software_decoded_frames: 1,
-        hardware_decoded_frames: 0,
-        hardware_fallbacks: HardwareFallbackCounts::default(),
-        decoder_session_reopens: 0,
+    let set_of = |color| {
+        let frame = Arc::new(alpha2_native::NativeVideoFrame::Cpu(DecodedVideoFrame {
+            pts: MediaTime::ZERO,
+            dts: None,
+            duration: None,
+            visible_rect: Rect {
+                x: 0,
+                y: 0,
+                width: 256,
+                height: 144,
+            },
+            sample_aspect_ratio: SampleAspectRatio::default(),
+            orientation: Orientation::UPRIGHT,
+            pixel_format: PixelFormat::Yuv(alpha2_media::YuvFormat::I420),
+            chroma_location: alpha2_media::ChromaLocation::Left,
+            color: Some(color),
+            planes: Vec::new(),
+        }));
+        let held = Arc::downgrade(&frame);
+        (
+            crate::decode::DecodedFrameSet {
+                generation: 0,
+                index: 0,
+                time: MediaTime::ZERO,
+                frames: vec![DecodedSourceFrame {
+                    source: SourceId::new("video").expect("source"),
+                    clip: ClipId::new("clip").expect("clip"),
+                    requested: MediaTime::ZERO,
+                    kind: MediaKind::Video,
+                    frame,
+                }],
+                stills: Vec::new(),
+                bytes: 6,
+                decode_time: Duration::ZERO,
+                stage_timings: alpha2_native::DecodeStageTimings::default(),
+                reverse_cache_hits: 0,
+                reverse_windows_built: 0,
+                reverse_cache_bytes: 0,
+                software_decoded_frames: 1,
+                hardware_decoded_frames: 0,
+                hardware_fallbacks: HardwareFallbackCounts::default(),
+                decoder_session_reopens: 0,
+            },
+            held,
+        )
     };
-    let picture = plan.picture(set).expect("the frame's picture");
+    let size = RenderSize::new(256, 144).expect("size");
+    let encoding = alpha2_media::YuvEncoding::export(alpha2_media::VideoCodec::H264);
+    let (set, held) = set_of(ColorMetadata::EXPORT);
+    let Ok(crate::yuv_transcode::TranscodeFrame::Repack(picture)) = plan.take(set, size, encoding)
+    else {
+        panic!("the frame's picture is repacked");
+    };
     drop(picture);
     assert!(
         held.upgrade().is_none(),
         "the picture is still held once the frame let it go"
     );
+    let bt601 = ColorMetadata {
+        primaries: alpha2_media::ColorPrimaries::Bt601,
+        matrix: alpha2_media::ColorMatrix::Bt601,
+        ..ColorMetadata::EXPORT
+    };
+    let (set, held) = set_of(bt601);
+    let Ok(crate::yuv_transcode::TranscodeFrame::Render(set, reason)) =
+        plan.take(set, size, encoding)
+    else {
+        panic!("a BT.601 picture renders");
+    };
+    assert!(reason.contains("Bt601"), "{reason}");
+    assert!(
+        held.upgrade().is_some(),
+        "the rendered set keeps its picture"
+    );
+    drop(set);
 }
 
 /// Skips, recorded as the `d3d12-video` capability, without a D3D12VA device.

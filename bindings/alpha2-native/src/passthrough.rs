@@ -595,6 +595,15 @@ pub fn check_yuv_transcode(
         .ok_or_else(|| "the source has no video stream".to_owned())?;
     check_picture(&probed, video_index, (width, height), encoding.color)?;
     let parameters = input.streams()[video_index].codecpar();
+    let extradata = alpha2_ffmpeg_bridge::codec_parameters_extradata(&parameters);
+    if let Some(declared) = stream_declared_color(parameters.codec_id, &extradata)
+        && declared != encoding.color
+    {
+        return Err(format!(
+            "the source's stream declares {declared:?}, and the output must be tagged {:?}",
+            encoding.color
+        ));
+    }
     check_sampling(
         parameters.format,
         parameters.field_order,
@@ -609,6 +618,18 @@ pub fn check_yuv_transcode(
         ));
     }
     Ok(())
+}
+
+/// The color an H.264 or HEVC SPS declares in its VUI, which `FFmpeg`'s decoders give the
+/// pictures over the container's.
+fn stream_declared_color(codec_id: ffi::AVCodecID, extradata: &[u8]) -> Option<ColorMetadata> {
+    use alpha2_host_core::parameter_sets::{ParameterSetCodec, sequence_facts};
+    let codec = match codec_id {
+        ffi::AV_CODEC_ID_H264 => ParameterSetCodec::H264,
+        ffi::AV_CODEC_ID_HEVC => ParameterSetCodec::Hevc,
+        _ => return None,
+    };
+    sequence_facts(codec, extradata)?.vui.color
 }
 
 /// Whether chroma sited at `source` matches `output`, reading unspecified as centred like import.

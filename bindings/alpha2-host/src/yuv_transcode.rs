@@ -8,7 +8,7 @@
 //! ([`alpha2_native::check_yuv_transcode`]) allows any container, codec and frame grid, but keeps
 //! everything the render would have changed: size, orientation, pixel shape, color, 8-bit 4:2:0
 //! and chroma siting. Each picture is checked again as it arrives, since a stream may change
-//! mid-way.
+//! mid-way; a picture that no longer qualifies is rendered instead.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -19,23 +19,33 @@ use alpha2_engine::PassthroughSegment;
 use alpha2_media::YuvEncoding;
 use alpha2_model::{MediaKind, Project};
 use alpha2_native::NativeVideoFrame;
+use alpha2_render::RenderSize;
 use alpha2_time::TimeRange;
 
 pub(crate) struct TranscodePlan {
     segments: Vec<PassthroughSegment>,
 }
 
+pub(crate) enum TranscodeFrame {
+    Repack(Arc<NativeVideoFrame>),
+    Render(Box<DecodedFrameSet>, String),
+}
+
 impl TranscodePlan {
-    /// Takes the frame's picture out of the set. It is all the set keeps, so once it is dropped
-    /// the decode-budget release is exact.
+    /// Takes the frame's picture out of the set when it is the `size` output frame encoded as
+    /// `encoding` ([`crate::frames::check_repackable`]); otherwise hands the set back to render.
+    /// A repacked picture is all the set keeps, so once it is dropped the decode-budget release
+    /// is exact.
     ///
     /// # Errors
     /// When no clip covers the time or the set lacks the picture, which means the decode and the
     /// plan disagree.
-    pub(crate) fn picture(
+    pub(crate) fn take(
         &self,
-        decoded: DecodedFrameSet,
-    ) -> Result<Arc<NativeVideoFrame>, String> {
+        mut decoded: DecodedFrameSet,
+        size: RenderSize,
+        encoding: YuvEncoding,
+    ) -> Result<TranscodeFrame, String> {
         let time = decoded.time;
         let segment = self
             .segments
@@ -45,21 +55,26 @@ impl TranscodePlan {
             })
             .ok_or_else(|| format!("no transcoded clip covers {time:?}"))?;
         let source_time = segment.source_time(time);
-        decoded
+        let at = decoded
             .frames
-            .into_iter()
-            .find(|frame| {
+            .iter()
+            .position(|frame| {
                 frame.kind == MediaKind::Video
                     && frame.source == segment.source_id
                     && frame.requested == source_time
             })
-            .map(|frame| frame.frame)
             .ok_or_else(|| {
                 format!(
                     "the decoded frame set for {time:?} lacks clip {}'s picture at {source_time:?}",
                     segment.clip_id
                 )
-            })
+            })?;
+        if let Err(reason) =
+            crate::frames::check_repackable(&decoded.frames[at].frame.metadata(), size, encoding)
+        {
+            return Ok(TranscodeFrame::Render(Box::new(decoded), reason));
+        }
+        Ok(TranscodeFrame::Repack(decoded.frames.swap_remove(at).frame))
     }
 }
 
