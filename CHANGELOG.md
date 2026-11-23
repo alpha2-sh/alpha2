@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.7.0] - 2026-11-24
 
 ### Changed
 
@@ -30,22 +30,6 @@ All notable changes to this project are documented in this file.
   mostly at bright levels; pictures at power-of-two canvas sizes drawn through canvas-size layers
   are unchanged. The levels, lift-gamma-gain, alpha-adjust and color-controls shaders skip `pow` at
   an exponent of one, as the CPU renderer does (alpha-adjust now does too).
-
-- A GPU frame writes its uniforms (each source's conversion, the graph's passes and the YUV or
-  NV12 pack) into one buffer with one queue write, where each conversion and the pack had a buffer
-  and a write of their own.
-
-### Removed
-
-- **Breaking:** the motion blur subframe count, which no pass read. Removed from Rust:
-  `QualityProfile::motion_blur_subframes` and `MAX_MOTION_BLUR_SUBFRAMES`,
-  `RenderQualityControls::motion_blur_subframes`, `RenderPlan::temporal_offsets`, and the
-  `motion_blur_subframes` fields of `RenderDiagnostics` and `BenchmarkMetadata`; the browser
-  diagnostics drop `motionBlurSubframes`. `set_quality_controls` (on `Renderer` and in
-  `RenderControls`) takes only the filter sample budget, so a quality change drops kept results
-  and moves the content epoch only when that budget changes. The plan no longer depends on
-  quality: `RenderPlan::filter_sample_limit` and `RenderGraph::compile_with_quality` are removed,
-  and `RenderGraph::compile` is the one way to compile. Graph cache keys change value.
 - **Breaking:** GPU loss reports count submissions whose completions were seen together as one
   group, whose time is their total. `SubmissionReport` and `RenderError::GpuDeviceHung` gain
   `submissions`, and a hung group's message reads "n submissions from frame F on completed
@@ -77,6 +61,12 @@ All notable changes to this project are documented in this file.
   beside the least the encoder side needs, they are kept (ProRes 4444 at 3840x2160 under the
   default budget now keeps two frames in flight and no queued frame, where it kept one and one).
   A pinned encode queue depth (`ALPHA2_ENCODE_QUEUE_DEPTH`) still keeps its slots first.
+- **Breaking:** `Nv12PlaneTargets` takes default views of the NV12 plane textures instead of the
+  textures, and `HardwareEncodeInput::planes` returns the views it keeps with its plane textures,
+  so packing or repacking a frame into an encoder's planes creates no texture view.
+- A GPU frame writes its uniforms (each source's conversion, the graph's passes and the YUV or
+  NV12 pack) into one buffer with one queue write, where each conversion and the pack had a buffer
+  and a write of their own.
 - When the cap at a quarter of the GPU memory budget lowers a texture budget the caller set (an
   export's or a preview's, not only the start-up default), `RenderDiagnostics::degradations`
   reports `CapabilityDiagnostic::TextureBudgetReduced`, and `alpha2-host` prints the requested and
@@ -93,9 +83,18 @@ All notable changes to this project are documented in this file.
   The WGSL the runtime effect wrapper generates declares `source_sampler` there and renumbers group
   0: parameters at 2, the runtime block at 3, resources from 4, named inputs from 20. Effect bodies
   name these, not numbers, and are unaffected.
-- **Breaking:** `Nv12PlaneTargets` takes default views of the NV12 plane textures instead of the
-  textures, and `HardwareEncodeInput::planes` returns the views it keeps with its plane textures,
-  so packing or repacking a frame into an encoder's planes creates no texture view.
+
+### Removed
+
+- **Breaking:** the motion blur subframe count, which no pass read. Removed from Rust:
+  `QualityProfile::motion_blur_subframes` and `MAX_MOTION_BLUR_SUBFRAMES`,
+  `RenderQualityControls::motion_blur_subframes`, `RenderPlan::temporal_offsets`, and the
+  `motion_blur_subframes` fields of `RenderDiagnostics` and `BenchmarkMetadata`; the browser
+  diagnostics drop `motionBlurSubframes`. `set_quality_controls` (on `Renderer` and in
+  `RenderControls`) takes only the filter sample budget, so a quality change drops kept results
+  and moves the content epoch only when that budget changes. The plan no longer depends on
+  quality: `RenderPlan::filter_sample_limit` and `RenderGraph::compile_with_quality` are removed,
+  and `RenderGraph::compile` is the one way to compile. Graph cache keys change value.
 
 ### Fixed
 
