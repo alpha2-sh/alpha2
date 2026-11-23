@@ -20,7 +20,6 @@ pub(crate) const PLANNING_THRESHOLD_UNIT_PIXELS: f64 = 64.0 * 1_048_576.0;
 /// The most bands a pass is drawn in.
 pub(crate) const MAX_BANDS: u32 = 64;
 
-/// The most tiles a band is cut into past [`MAX_BANDS`].
 pub(crate) const MAX_TILE_COLUMNS: u32 = 16;
 
 /// A frame's predicted cost in unit pixels per kind of work.
@@ -127,8 +126,6 @@ impl Pieces {
     }
 }
 
-/// One piece of a pass: its scissor, `None` for the whole target, and whether it is the pass's
-/// first piece, which alone may clear the target; later pieces load it.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Piece {
     pub(crate) scissor: Option<PixelRect>,
