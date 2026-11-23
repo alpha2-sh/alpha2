@@ -754,31 +754,7 @@ impl Renderer {
                 ReadbackFailure::UnsupportedTarget,
             ));
         }
-        let chroma_size = RenderSize {
-            width: target.size.width / 2,
-            height: target.size.height / 2,
-        };
-        // Planes may belong to a hardware encoder, so check them here rather than hit a validation
-        // error.
-        let attachment = |texture: &wgpu::Texture| {
-            texture
-                .usage()
-                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
-                && texture.mip_level_count() == 1
-                && texture.sample_count() == 1
-                && texture.depth_or_array_layers() == 1
-        };
-        if planes.luma.format() != wgpu::TextureFormat::R8Unorm
-            || planes.chroma.format() != wgpu::TextureFormat::Rg8Unorm
-            || planes.luma.width() != target.size.width
-            || planes.luma.height() != target.size.height
-            || planes.chroma.width() != chroma_size.width
-            || planes.chroma.height() != chroma_size.height
-            || !attachment(planes.luma)
-            || !attachment(planes.chroma)
-        {
-            return Err(RenderError::InvalidPlaneTarget);
-        }
+        planes.check(target.size)?;
         let uniform_bytes = f32_bytes(yuv_uniform(encoding));
         let mut uniforms = self.uniform_buffers.acquire(
             self.gpu.device(),
@@ -787,21 +763,19 @@ impl Renderer {
         let uniform = uniforms.write(&uniform_bytes);
         let cached = self.yuv_readback_pipeline()?;
         let bind_group = self.yuv_pack_bind_group(target, cached, &uniforms, uniform);
-        let luma_view = crate::pool::default_view(planes.luma);
         encode_yuv_render_pass(
             encoder,
             "alpha2 GPU NV12 Y pack pass",
             &cached.y_pipeline,
             &bind_group,
-            &luma_view,
+            planes.luma,
         );
-        let chroma_view = crate::pool::default_view(planes.chroma);
         encode_yuv_render_pass(
             encoder,
             "alpha2 GPU NV12 UV pack pass",
             &cached.uv_nv12_pipeline,
             &bind_group,
-            &chroma_view,
+            planes.chroma,
         );
         // `write` fills only the host copy; the shader reads stale data without the flush.
         uniforms.flush(self.gpu.queue());
@@ -1201,17 +1175,43 @@ impl Drop for EncodedNv12Pack {
     }
 }
 
-/// Caller-owned NV12 plane textures for a readback-free pack.
+/// Default views of caller-owned NV12 plane textures for a readback-free pack.
 ///
-/// `luma` is `R8Unorm` at the output size; `chroma` is `Rg8Unorm` at half size with U in red and
-/// V in green.
+/// `luma` views an `R8Unorm` texture at the output size; `chroma` an `Rg8Unorm` texture at half
+/// size with U in red and V in green. Keep the views with their textures: a pack creates none.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
 pub struct Nv12PlaneTargets<'a> {
     /// Full-size single-channel luma target.
-    pub luma: &'a wgpu::Texture,
+    pub luma: &'a wgpu::TextureView,
     /// Half-size two-channel interleaved chroma target.
-    pub chroma: &'a wgpu::Texture,
+    pub chroma: &'a wgpu::TextureView,
+}
+
+impl Nv12PlaneTargets<'_> {
+    pub(crate) fn check(self, size: RenderSize) -> Result<(), RenderError> {
+        let attachment = |texture: &wgpu::Texture| {
+            texture
+                .usage()
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+                && texture.mip_level_count() == 1
+                && texture.sample_count() == 1
+                && texture.depth_or_array_layers() == 1
+        };
+        let (luma, chroma) = (self.luma.texture(), self.chroma.texture());
+        if luma.format() != wgpu::TextureFormat::R8Unorm
+            || chroma.format() != wgpu::TextureFormat::Rg8Unorm
+            || luma.width() != size.width
+            || luma.height() != size.height
+            || chroma.width() != size.width / 2
+            || chroma.height() != size.height / 2
+            || !attachment(luma)
+            || !attachment(chroma)
+        {
+            return Err(RenderError::InvalidPlaneTarget);
+        }
+        Ok(())
+    }
 }
 
 /// A caller-owned destination for one packed plane.

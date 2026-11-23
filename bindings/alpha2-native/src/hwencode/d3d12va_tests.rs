@@ -176,7 +176,7 @@ fn pack(shared: &SharedD3D12Context, input: &HardwareEncodeInput, frame: &InputF
         .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     let (y, uv) = input.planes(frame);
-    for (texture, color) in [
+    for (view, color) in [
         (
             y,
             wgpu::Color {
@@ -196,11 +196,10 @@ fn pack(shared: &SharedD3D12Context, input: &HardwareEncodeInput, frame: &InputF
             },
         ),
     ] {
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("pack"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
+                view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {

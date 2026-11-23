@@ -379,21 +379,23 @@ pub(super) fn open(
     // One pair per copier slot: the coordinator runs ahead of the encoder, so one pair would let
     // the next render overwrite planes a copy is still reading.
     let planes = (0..alpha2_native_gpu::VulkanEncodeCopier::slots())
-        .map(|_| Nv12PlanePair {
-            luma: plane_texture(
-                gpu.device(),
-                "alpha2 NV12 luma",
-                width,
-                height,
-                wgpu::TextureFormat::R8Unorm,
-            ),
-            chroma: plane_texture(
-                gpu.device(),
-                "alpha2 NV12 chroma",
-                width / 2,
-                height / 2,
-                wgpu::TextureFormat::Rg8Unorm,
-            ),
+        .map(|_| {
+            super::Nv12Planes::new(
+                &plane_texture(
+                    gpu.device(),
+                    "alpha2 NV12 luma",
+                    width,
+                    height,
+                    wgpu::TextureFormat::R8Unorm,
+                ),
+                &plane_texture(
+                    gpu.device(),
+                    "alpha2 NV12 chroma",
+                    width / 2,
+                    height / 2,
+                    wgpu::TextureFormat::Rg8Unorm,
+                ),
+            )
         })
         .collect();
     let input = VulkanEncodeInput {
@@ -464,11 +466,6 @@ fn plane_texture(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
-}
-
-struct Nv12PlanePair {
-    luma: wgpu::Texture,
-    chroma: wgpu::Texture,
 }
 
 /// Opens `encoder` (`h264_vulkan` or `hevc_vulkan`) on `device` with an NV12 encoder-input pool.
@@ -600,7 +597,7 @@ pub(super) struct VulkanEncodeSession {
 /// Dropping the planes first would free them under a running copy.
 pub(super) struct VulkanEncodeInput {
     copier: alpha2_native_gpu::VulkanEncodeCopier,
-    planes: Vec<Nv12PlanePair>,
+    planes: Vec<super::Nv12Planes>,
     frames: AVHWFramesContext,
     size: (u32, u32),
     time_base: AVRational,
@@ -660,9 +657,8 @@ impl VulkanEncodeInput {
         Ok(InputFrame { slot })
     }
 
-    pub(super) fn planes(&self, frame: &InputFrame) -> (&wgpu::Texture, &wgpu::Texture) {
-        let pair = &self.planes[frame.slot];
-        (&pair.luma, &pair.chroma)
+    pub(super) fn planes(&self, frame: &InputFrame) -> (&wgpu::TextureView, &wgpu::TextureView) {
+        self.planes[frame.slot].views()
     }
 
     /// Copies `frame`'s planes into `backing`, signalling the frame's timeline semaphore
@@ -679,7 +675,12 @@ impl VulkanEncodeInput {
         let mut access = alpha2_ffmpeg_bridge::VulkanEncodeFrameAccess::begin(&mut backing.0)
             .map_err(encode_adapter_error)?;
         self.copier
-            .submit(&mut access, &pair.luma, &pair.chroma, self.size)
+            .submit(
+                &mut access,
+                pair.luma.texture(),
+                pair.chroma.texture(),
+                self.size,
+            )
             .map_err(encode_adapter_error)?;
         self.stats.copy_operations = self.stats.copy_operations.saturating_add(2);
         self.stats.copy_bytes = self

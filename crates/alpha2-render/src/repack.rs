@@ -90,7 +90,7 @@ impl Renderer {
         {
             return Err(RenderError::InvalidImageData);
         }
-        check_targets(targets, output)?;
+        targets.check(output)?;
         self.check_submitted_work()?;
         let passes = self.repack_passes(source, visible, targets)?;
         self.submit_repack(&passes, started, timings)
@@ -134,7 +134,7 @@ impl Renderer {
             .collect::<Vec<_>>();
         let pass = |label: &'static str,
                     pipeline: &wgpu::RenderPipeline,
-                    target: &wgpu::Texture,
+                    target: &wgpu::TextureView,
                     uploads: Vec<UploadTexture>,
                     external_leases: Vec<Arc<dyn ExternalTextureLease>>| {
             let mut uniforms = self.uniform_buffers.acquire(
@@ -163,7 +163,7 @@ impl Renderer {
                 bind_group,
                 uniform_offset: slice.dynamic_offset(),
                 sampler: None,
-                output_view: crate::pool::default_view(target),
+                output_view: target.clone(),
                 uniforms,
                 uploads,
                 external_leases,
@@ -374,28 +374,4 @@ fn texture_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry
         binding,
         resource: wgpu::BindingResource::TextureView(view),
     }
-}
-
-/// The same target checks the NV12 pack makes.
-fn check_targets(targets: Nv12PlaneTargets<'_>, size: RenderSize) -> Result<(), RenderError> {
-    let attachment = |texture: &wgpu::Texture| {
-        texture
-            .usage()
-            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
-            && texture.mip_level_count() == 1
-            && texture.sample_count() == 1
-            && texture.depth_or_array_layers() == 1
-    };
-    if targets.luma.format() != wgpu::TextureFormat::R8Unorm
-        || targets.chroma.format() != wgpu::TextureFormat::Rg8Unorm
-        || targets.luma.width() != size.width
-        || targets.luma.height() != size.height
-        || targets.chroma.width() != size.width / 2
-        || targets.chroma.height() != size.height / 2
-        || !attachment(targets.luma)
-        || !attachment(targets.chroma)
-    {
-        return Err(RenderError::InvalidPlaneTarget);
-    }
-    Ok(())
 }

@@ -152,6 +152,10 @@ fn work_that_reads_nothing_back_is_checked_by_its_own_canary() {
         RenderSize::new(4, 2).expect("chroma size"),
         wgpu::TextureFormat::Rg8Unorm,
     );
+    let (luma, chroma) = (
+        luma.create_view(&wgpu::TextureViewDescriptor::default()),
+        chroma.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
     let planes = || crate::Nv12PlaneTargets {
         luma: &luma,
         chroma: &chroma,

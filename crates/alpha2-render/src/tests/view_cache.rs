@@ -134,6 +134,78 @@ fn a_warm_frame_creates_no_bind_group() {
 }
 
 #[test]
+fn a_warm_frame_packed_into_the_same_planes_creates_no_texture_view() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let plane = |format, width, height| {
+        renderer
+            .gpu
+            .device()
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("test plane target"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    };
+    let luma = plane(wgpu::TextureFormat::R8Unorm, size.width, size.height);
+    let chroma = plane(
+        wgpu::TextureFormat::Rg8Unorm,
+        size.width / 2,
+        size.height / 2,
+    );
+    let source = renderer
+        .render_solid(size, crate::Color::rgba(0.8, 0.3, 0.1, 1.0))
+        .expect("source");
+    let mut graph = RenderGraph::new(size);
+    let node = graph.add_source(SourceView::from_wgpu(source.view()));
+    let output = graph
+        .add_composite(vec![GraphLayer {
+            source: node,
+            visual: visual([1.0, 1.0], 1.0),
+            blend_mode: BlendMode::Normal,
+        }])
+        .expect("dependency exists");
+    graph.set_output(output).expect("output exists");
+    let pack = || {
+        renderer
+            .render_graph_nv12_timed(
+                &graph,
+                &[],
+                crate::Nv12PlaneTargets {
+                    luma: &luma,
+                    chroma: &chroma,
+                },
+                centred(ColorMetadata::default()),
+                &mut crate::FrameSubmitTimings::default(),
+            )
+            .expect("frame submits");
+    };
+    for _ in 0..2 {
+        pack();
+    }
+    VIEWS_CREATED.set(0);
+    for _ in 0..6 {
+        pack();
+    }
+    assert_eq!(
+        VIEWS_CREATED.get(),
+        0,
+        "six warm frames packed into the same two planes created texture views"
+    );
+}
+
+#[test]
 fn a_kept_bind_group_leaves_with_the_texture_it_binds() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());

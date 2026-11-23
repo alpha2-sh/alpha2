@@ -71,6 +71,9 @@ All notable changes to this project are documented in this file.
   The WGSL the runtime effect wrapper generates declares `source_sampler` there and renumbers group
   0: parameters at 2, the runtime block at 3, resources from 4, named inputs from 20. Effect bodies
   name these, not numbers, and are unaffected.
+- **Breaking:** `Nv12PlaneTargets` takes default views of the NV12 plane textures instead of the
+  textures, and `HardwareEncodeInput::planes` returns the views it keeps with its plane textures,
+  so packing or repacking a frame into an encoder's planes creates no texture view.
 
 ### Fixed
 

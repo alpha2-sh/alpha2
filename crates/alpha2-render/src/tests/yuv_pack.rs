@@ -364,7 +364,10 @@ fn nv12_plane_targets_or_colours_the_pack_cannot_write_are_refused_before_record
             .push_error_scope(wgpu::ErrorFilter::Validation);
         let packed = renderer.encode_nv12_pack(
             &target,
-            crate::Nv12PlaneTargets { luma, chroma },
+            crate::Nv12PlaneTargets {
+                luma: &luma.create_view(&wgpu::TextureViewDescriptor::default()),
+                chroma: &chroma.create_view(&wgpu::TextureViewDescriptor::default()),
+            },
             centred(ColorMetadata::default()),
             &mut encoder,
         );
@@ -387,8 +390,8 @@ fn nv12_plane_targets_or_colours_the_pack_cannot_write_are_refused_before_record
     let packed = renderer.encode_nv12_pack(
         &target,
         crate::Nv12PlaneTargets {
-            luma: &luma,
-            chroma: &chroma,
+            luma: &luma.create_view(&wgpu::TextureViewDescriptor::default()),
+            chroma: &chroma.create_view(&wgpu::TextureViewDescriptor::default()),
         },
         centred(wide),
         &mut encoder,
@@ -595,8 +598,8 @@ fn nv12_planes_with(
         .encode_nv12_pack(
             target,
             crate::Nv12PlaneTargets {
-                luma: &luma,
-                chroma: &chroma,
+                luma: &luma.create_view(&wgpu::TextureViewDescriptor::default()),
+                chroma: &chroma.create_view(&wgpu::TextureViewDescriptor::default()),
             },
             centred(ColorMetadata::default()),
             &mut encoder,

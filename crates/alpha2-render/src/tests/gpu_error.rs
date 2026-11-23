@@ -137,8 +137,8 @@ fn a_rejected_frame_for_an_encoder_fails_alone_and_tracks_no_canary() {
             &graph,
             &[],
             crate::Nv12PlaneTargets {
-                luma: &luma,
-                chroma: &chroma,
+                luma: &luma.create_view(&wgpu::TextureViewDescriptor::default()),
+                chroma: &chroma.create_view(&wgpu::TextureViewDescriptor::default()),
             },
             centred(ColorMetadata::default()),
             &mut crate::FrameSubmitTimings::default(),
