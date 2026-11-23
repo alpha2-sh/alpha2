@@ -314,7 +314,7 @@ impl CpuRenderer {
                     let y = bounds.y + (first_row + index) as u32;
                     kernel.row(&context, y, bounds.x, row);
                     for (out, value) in line.iter_mut().zip(row.iter()) {
-                        *out = half::store4(*value);
+                        *out = half::store4_nearest(*value);
                     }
                 }
             },

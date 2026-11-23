@@ -4,7 +4,9 @@ fn effect(_uv: vec2f, src: vec4f) -> vec4f {
     let rgb = builtin_straight(src);
     let range = max(params.input_white - params.input_black, 0.0001);
     let x = clamp((rgb - vec3f(params.input_black)) / range, vec3f(0.0), vec3f(1.0));
-    let y = pow(max(x, vec3f(1.0e-10)), vec3f(1.0 / params.gamma));
+    let exponent = 1.0 / params.gamma;
+    let base = max(x, vec3f(1.0e-10));
+    let y = select(pow(base, vec3f(exponent)), base, exponent == 1.0);
     let leveled = mix(vec3f(params.output_black), vec3f(params.output_white), y);
     var mask = vec3f(1.0);
     if params.channel == 1u { mask = vec3f(1.0, 0.0, 0.0); }

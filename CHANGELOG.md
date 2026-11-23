@@ -22,6 +22,14 @@ All notable changes to this project are documented in this file.
 - **Breaking:** `alpha2-render` no longer exports `SdrOutputTransfer` or `encode_linear_rgb`.
   Nothing outside tests called them, and the export path never applied either curve: it writes
   the working space's sRGB-coded values and tags them BT.709.
+- **Breaking:** effect and composite passes round their results to the nearest half float, ties
+  to even, before the intermediate stores them, and full edge coverage is computed exactly (one
+  minus what the edges cut off). Stored values no longer drift down with every composite, blur,
+  transition or edge-sampling effect, and unsharp masks no longer drift up: a pass that computes
+  a stored value to within half a step stores that value. Exported codes move by at most a few half steps per pass,
+  mostly at bright levels; pictures at power-of-two canvas sizes drawn through canvas-size layers
+  are unchanged. The levels, lift-gamma-gain, alpha-adjust and color-controls shaders skip `pow`
+  at an exponent of one, as the CPU renderer does (alpha-adjust now does too).
 
 - A GPU frame writes its uniforms (each source's conversion, the graph's passes and the YUV or
   NV12 pack) into one buffer with one queue write, where each conversion and the pack had a buffer

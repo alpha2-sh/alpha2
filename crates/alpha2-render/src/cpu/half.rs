@@ -2,8 +2,9 @@
 //!
 //! GPU `Rgba16Float` targets round finite values toward zero, keep subnormals, saturate finite
 //! overflow to the largest half and keep infinity (measured across Vulkan, DX12 and Metal on
-//! several vendors and software rasterizers). The composite shader writes values that are
-//! already halves (`stored_half`). Both go through [`store`], so CPU pictures hold GPU bits.
+//! several vendors and software rasterizers); [`store`] is that conversion. Effect and composite
+//! passes round their results to the nearest half first ([`store_nearest`]), so the conversion
+//! only sees halves.
 
 use std::sync::OnceLock;
 
@@ -57,6 +58,34 @@ fn store_slow(bits: u32) -> u16 {
         return sign | ((mantissa | 0x0080_0000) >> shift) as u16;
     }
     sign
+}
+
+const SMALLEST_NORMAL: f32 = 1.0 / 16_384.0;
+
+const SUBNORMAL_STEPS: f32 = 16_777_216.0;
+
+/// Mirrors composite.wesl's `stored_half`: `value` rounded to the nearest half, ties to even.
+#[must_use]
+#[inline]
+pub(crate) fn nearest(value: f32) -> f32 {
+    if value.abs() >= SMALLEST_NORMAL {
+        let bits = value.to_bits();
+        f32::from_bits(bits.wrapping_add(0x0fff + ((bits >> 13) & 1)) & 0xffff_e000)
+    } else {
+        (value * SUBNORMAL_STEPS).round_ties_even() * (1.0 / SUBNORMAL_STEPS)
+    }
+}
+
+#[must_use]
+#[inline]
+pub(crate) fn store_nearest(value: f32) -> u16 {
+    store(nearest(value))
+}
+
+#[must_use]
+#[inline]
+pub(crate) fn store4_nearest(value: [f32; 4]) -> [u16; 4] {
+    value.map(store_nearest)
 }
 
 /// The four components of a pixel, stored.
@@ -168,20 +197,38 @@ mod tests {
     }
 
     #[test]
-    fn the_composite_shaders_stored_half_agrees() {
-        // composite.wesl: normals masked to 10 fraction bits, subnormals trunc(v * 2^24) / 2^24.
-        let shader = |value: f32| {
-            if value >= 1.0 / 16_384.0 {
-                f32::from_bits(value.to_bits() & 0xffff_e000)
-            } else {
-                (value * 16_777_216.0).trunc() * (1.0 / 16_777_216.0)
+    fn rounding_to_nearest_matches_ieee_half_conversion_in_range() {
+        for bits in 0..=u16::MAX {
+            let value = half::f16::from_bits(bits);
+            if !value.is_finite() {
+                continue;
             }
-        };
-        let mut value = 1.0e-8_f32;
-        while value < 60_000.0 {
-            assert_eq!(load(store(value)), shader(value), "{value}");
+            let exact = value.to_f32();
+            assert_eq!(store_nearest(exact), bits, "{exact} keeps its bits");
+            for neighbour in [exact.next_up(), exact.next_down()] {
+                if neighbour.abs() < 65_504.0 {
+                    assert_eq!(
+                        store_nearest(neighbour),
+                        half::f16::from_f32(neighbour).to_bits(),
+                        "{neighbour}"
+                    );
+                }
+            }
+        }
+        let mut value = 1.0e-9_f32;
+        while value < 65_504.0 {
+            for signed in [value, -value] {
+                assert_eq!(
+                    store_nearest(signed),
+                    half::f16::from_f32(signed).to_bits(),
+                    "{signed}"
+                );
+            }
             value *= 1.000_37;
         }
+        assert_eq!(store_nearest(65_520.0), 0x7bff);
+        assert_eq!(store_nearest(f32::INFINITY), 0x7c00);
+        assert!(half::f16::from_bits(store_nearest(f32::NAN)).is_nan());
     }
 
     #[test]

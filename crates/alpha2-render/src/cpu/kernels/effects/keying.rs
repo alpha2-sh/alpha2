@@ -133,15 +133,22 @@ impl CpuKernel for AlphaAdjust {
         let black = context.float("black");
         let range = (context.float("white") - black).max(0.0001);
         let exponent = 1.0 / context.float("gamma");
+        #[expect(
+            clippy::float_cmp,
+            reason = "only an exponent of exactly one skips pow"
+        )]
+        let unit_gamma = exponent == 1.0;
         let invert = context.boolean("invert");
         let tables = pow_tables();
         effect_row(context, y, x0, out, |_, _, src| {
             let rgb = straight(src, 0.0001);
             let x = saturate((src[3] - black) / range);
-            let curved = if x > 0.0 {
-                table_pow(tables, x.max(1.0e-10), exponent)
-            } else {
+            let curved = if x <= 0.0 {
                 0.0
+            } else if unit_gamma {
+                x.max(1.0e-10)
+            } else {
+                table_pow(tables, x.max(1.0e-10), exponent)
             };
             output(rgb, if invert { 1.0 - curved } else { curved })
         });

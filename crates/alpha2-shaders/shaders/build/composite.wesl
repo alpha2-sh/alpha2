@@ -346,17 +346,17 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
 // The shader, not the device's conversion, decides what a pixel stores, so batched layers
 // (read from a register) match layers drawn one per pass.
 //
-// Half floats round toward zero, as half-float render targets store finite values, keeping
-// subnormals and infinity. 8-bit values are rounded to the nearest code in the shader because
-// some devices truncate (storing v * 255 = n.51 as n).
+// Values round to the nearest half or 8-bit code, ties to even, in the shader because some
+// devices truncate (half-float targets round toward zero; v * 255 = n.51 stores as n).
 
-// A non-negative value as a half-float texture stores it. Normals keep 10 fraction bits;
-// subnormals truncate to multiples of 2^-24 via an exact 2^24 scale. Both are computed and one
-// selected without branching, so software rasterizers run one path.
+// `value` rounded to the nearest half. Normals round their top 10 fraction bits; subnormals
+// round to multiples of 2^-24 via an exact 2^24 scale. Both are computed and one selected
+// without branching, so software rasterizers run one path.
 fn stored_half(value: vec4f) -> vec4f {
-    let normal = bitcast<vec4f>(bitcast<vec4u>(value) & vec4u(0xffffe000u));
-    let subnormal = trunc(value * 16777216.0) * (1.0 / 16777216.0);
-    return select(subnormal, normal, value >= vec4f(1.0 / 16384.0));
+    let bits = bitcast<vec4u>(value);
+    let rounded = (bits + 0x0fffu + ((bits >> vec4u(13u)) & vec4u(1u))) & vec4u(0xffffe000u);
+    let subnormal = round(value * 16777216.0) * (1.0 / 16777216.0);
+    return select(subnormal, bitcast<vec4f>(rounded), abs(value) >= vec4f(1.0 / 16384.0));
 }
 
 fn stored_unorm8(value: vec4f) -> vec4f {
@@ -383,22 +383,10 @@ fn stored_backdrop(value: vec4f) -> vec4f {
     return value;
 }
 
-// `value` for the one-layer entry point: a cheap cut to 10 fraction bits, leaving subnormals to
-// the device, whose rounding toward zero agrees.
-fn stored_pass(value: vec4f) -> vec4f {
-    if STORED_FORMAT == 1u {
-        return bitcast<vec4f>(bitcast<vec4u>(value) & vec4u(0xffffe000u));
-    }
-    if STORED_FORMAT == 2u {
-        return stored_unorm8(value);
-    }
-    return value;
-}
-
 // Composites layer `index` over `backdrop`; shared by both entry points.
 //
-// `looped` is true in `fs`, where a layer runs only on 2 x 2 quads overlapping its bounds and
-// its result is rounded as stored. It is false in `fs_layer`, for a large layer alone.
+// `looped` is true in `fs`, where a layer runs only on 2 x 2 quads overlapping its bounds. It
+// is false in `fs_layer`, for a large layer alone.
 fn composite_layer(
     input: VertexOutput,
     backdrop: vec4f,
@@ -417,11 +405,7 @@ fn composite_layer(
     if source.coverage <= 0.0 || source.color.a <= 0.0 {
         return backdrop;
     }
-    let color = composite(backdrop, source.color, batch.layers[index].blend.x);
-    if looped {
-        return stored(color);
-    }
-    return stored_pass(color);
+    return stored(composite(backdrop, source.color, batch.layers[index].blend.x));
 }
 
 // The canvas background in the first pass (so no clear is needed), else the backdrop texture.

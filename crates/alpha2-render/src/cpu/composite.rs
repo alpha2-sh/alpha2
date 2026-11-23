@@ -440,10 +440,10 @@ impl<'a> PreparedLayer<'a> {
             let below = backdrop.map(|bits| self.halves[usize::from(bits)]);
             let rest = 1.0 - source[3].min(1.0);
             return [
-                half::store((source[0] + below[0] * rest).clamp(0.0, 1.0)),
-                half::store((source[1] + below[1] * rest).clamp(0.0, 1.0)),
-                half::store((source[2] + below[2] * rest).clamp(0.0, 1.0)),
-                half::store((source[3] + below[3] * rest).min(1.0)),
+                half::store_nearest((source[0] + below[0] * rest).clamp(0.0, 1.0)),
+                half::store_nearest((source[1] + below[1] * rest).clamp(0.0, 1.0)),
+                half::store_nearest((source[2] + below[2] * rest).clamp(0.0, 1.0)),
+                half::store_nearest((source[3] + below[3] * rest).min(1.0)),
             ];
         }
         self.blend_pixel(backdrop, source, linear_light)
@@ -452,7 +452,7 @@ impl<'a> PreparedLayer<'a> {
     /// The full blend, out of line since most pixels take a shortcut.
     #[inline(never)]
     fn blend_pixel(&self, backdrop: [u16; 4], source: [f32; 4], linear_light: bool) -> [u16; 4] {
-        half::store4(blend(
+        half::store4_nearest(blend(
             backdrop.map(|bits| self.halves[usize::from(bits)]),
             source,
             self.blend_mode,

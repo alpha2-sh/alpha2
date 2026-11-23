@@ -35,7 +35,7 @@ mod vector;
 mod workers;
 
 #[cfg(test)]
-pub(crate) use image::Pixels;
+pub(crate) use image::{PixelBox, Pixels};
 #[cfg(test)]
 pub(crate) use vector::over as premultiplied_over;
 

@@ -47,6 +47,16 @@ pub(crate) const MAX_EFFECT_BINDINGS: usize = INPUT_BINDING_BASE as usize + MAX_
 /// `ResourceMetadata_<name>`: `domain_min` and `domain_max`, two `vec4f`.
 const RESOURCE_METADATA_BYTES: usize = 32;
 
+/// Mirrors `cpu::half::nearest`; some devices' own half conversion truncates.
+const STORED_RESULT: &str = "override alpha2_stored_half: bool = true;
+fn alpha2_stored(value: vec4f) -> vec4f {
+    if !alpha2_stored_half { return value; }
+    let bits = bitcast<vec4u>(value);
+    let rounded = (bits + 0x0fffu + ((bits >> vec4u(13u)) & vec4u(1u))) & vec4u(0xffffe000u);
+    let subnormal = round(value * 16777216.0) * (1.0 / 16777216.0);
+    return select(subnormal, bitcast<vec4f>(rounded), abs(value) >= vec4f(1.0 / 16384.0));
+}";
+
 /// Stack size for effect shader and pipeline compiles. naga recurses per nested statement and
 /// DXC per operand, which needs about 1.5 MiB at [`MAX_WGSL_STATEMENT_OPERATORS`]; a caller's
 /// thread may have 1 MiB or less.
@@ -735,6 +745,7 @@ fn runtime_pipeline(
         bind_group_layouts: &[Some(bind_group_layout), Some(sampler_layout)],
         immediate_size: 0,
     });
+    let stored_half = f64::from(u8::from(format == wgpu::TextureFormat::Rgba16Float));
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("alpha2 runtime effect pipeline"),
         layout: Some(&layout),
@@ -748,7 +759,10 @@ fn runtime_pipeline(
             module: shader,
             entry_point: Some("alpha2_fs"),
             targets: &[Some(format.into())],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &[("alpha2_stored_half", stored_half)],
+                ..wgpu::PipelineCompilationOptions::default()
+            },
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
@@ -874,10 +888,11 @@ struct VertexOutput {{ @builtin(position) position: vec4f, @location(0) uv: vec2
     var u = array<vec2f, 3>(vec2f(0.0, 1.0), vec2f(2.0, 1.0), vec2f(0.0, -1.0));
     return VertexOutput(vec4f(p[index], 0.0, 1.0), u[index]);
 }}
+{STORED_RESULT}
 @fragment fn alpha2_fs(input: VertexOutput) -> @location(0) vec4f {{
     params = load_params();
     {BUDGET} = {MAX_LOOP_ITERATIONS}u;
-    return {call};
+    return alpha2_stored({call});
 }}
 ",
         // Registration already delimited loops; this covers definitions that skipped it.

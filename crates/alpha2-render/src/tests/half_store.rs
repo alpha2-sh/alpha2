@@ -1,6 +1,7 @@
-//! Device half-float stores against the CPU model (`cpu/half.rs` for stores, `cpu/vector.rs` for
-//! the premultiplied `over` blend). 8-bit targets are excluded: their tie rounding differs between
-//! GPUs by design, and every 8-bit pass rounds to a code first.
+//! Device half-float stores against the CPU model (`cpu/half.rs` for the device's conversion,
+//! `cpu/vector.rs` for the premultiplied `over` blend), and what passes store. 8-bit targets are
+//! excluded: their tie rounding differs between GPUs by design, and every 8-bit pass rounds to a
+//! code first.
 
 #![allow(
     clippy::cast_possible_truncation,
@@ -14,8 +15,9 @@ use super::device_precision::{Probe, TEXELS, VALUES};
 use super::{adapter_gpu, gpu_test_lock, read_stored, rgba_image_texture, visual};
 use crate::cpu::{Pixels, half};
 use crate::{
-    BlendMode, BlendSpace, CompositeLayer, CpuImage, CpuRenderer, CpuSource, GraphLayer,
-    RenderGraph, RenderSize, Renderer, SourceView,
+    BlendMode, BlendSpace, CompositeLayer, CpuImage, CpuRenderer, CpuSource, EffectId,
+    EffectParams, EffectRuntime, GraphLayer, ParamValue, RenderGraph, RenderNodeId, RenderSize,
+    Renderer, SourceView,
 };
 
 struct Lcg(u64);
@@ -92,7 +94,7 @@ fn halves(bytes: &[u8]) -> Vec<u16> {
 }
 
 #[test]
-fn rgba16float_stores_match_the_cpu_half_model() {
+fn rgba16float_targets_convert_as_the_cpu_truncating_model() {
     let _lock = gpu_test_lock();
     let gpu = adapter_gpu();
     let probe = Probe::new(gpu);
@@ -313,6 +315,294 @@ fn transparent_layers_leave_the_cpu_backdrop_unchanged() {
                 base,
                 cpu_stack(&cpu, count, space),
                 "{space:?} {count} layers"
+            );
+        }
+    }
+}
+
+fn canvas_sizes() -> [RenderSize; 3] {
+    [(5, 5), (160, 90), (1920, 1080)]
+        .map(|(width, height)| RenderSize::new(width, height).expect("size"))
+}
+
+fn flat_picture(size: RenderSize, code: u8) -> Vec<u8> {
+    [code, code, code, 255].repeat(size.width as usize * size.height as usize)
+}
+
+fn stored_picture(rgba8: &[u8]) -> Vec<u16> {
+    rgba8
+        .iter()
+        .map(|code| half::store_nearest(half::unorm8_value(*code)))
+        .collect()
+}
+
+fn changed_halves(stored: &[u16], picture: &[u8]) -> usize {
+    stored
+        .iter()
+        .zip(stored_picture(picture))
+        .filter(|(stored, expected)| **stored != *expected)
+        .count()
+}
+
+fn largest_step(stored: &[u16], picture: &[u8]) -> u16 {
+    stored
+        .iter()
+        .zip(stored_picture(picture))
+        .map(|(stored, expected)| stored.abs_diff(expected))
+        .max()
+        .unwrap_or(0)
+}
+
+fn gpu_graph_halves<'a>(
+    renderer: &Renderer,
+    size: RenderSize,
+    view: &'a wgpu::TextureView,
+    build: impl Fn(&mut RenderGraph<'a>, RenderNodeId) -> RenderNodeId,
+) -> Vec<u16> {
+    let mut graph = RenderGraph::new(size);
+    graph.set_blend_space(BlendSpace::SrgbEncoded);
+    let source = graph.add_source(SourceView::from_wgpu(view));
+    let output = build(&mut graph, source);
+    graph.set_output(output).expect("output");
+    let drawn = renderer.execute_graph(&graph).expect("GPU draws");
+    halves(&read_stored(renderer, &drawn))
+}
+
+fn cpu_graph_halves<'a>(
+    cpu: &CpuRenderer,
+    size: RenderSize,
+    source: &'a CpuSource,
+    build: impl Fn(&mut RenderGraph<'a>, RenderNodeId) -> RenderNodeId,
+) -> Vec<u16> {
+    let mut graph = RenderGraph::new(size);
+    graph.set_blend_space(BlendSpace::SrgbEncoded);
+    let source = graph.add_source(SourceView::cpu(source));
+    let output = build(&mut graph, source);
+    graph.set_output(output).expect("output");
+    match cpu.execute_graph(&graph).expect("CPU draws").pixels() {
+        Pixels::Half(pixels) => pixels.as_flattened().to_vec(),
+        Pixels::Unorm8(_) => panic!("a pass stores halves"),
+    }
+}
+
+fn canvas_size_layer(graph: &mut RenderGraph<'_>, source: RenderNodeId) -> RenderNodeId {
+    graph
+        .add_composite(vec![GraphLayer {
+            source,
+            visual: visual([1.0, 1.0], 1.0),
+            blend_mode: BlendMode::Normal,
+        }])
+        .expect("composite")
+}
+
+fn unmoved_offset(graph: &mut RenderGraph<'_>, source: RenderNodeId) -> RenderNodeId {
+    graph
+        .add_effect(
+            EffectId::new("alpha2.effect.offset".into(), 1),
+            source,
+            EffectParams::new().with("edge", ParamValue::Enum(0)),
+            EffectRuntime::default(),
+        )
+        .expect("effect")
+}
+
+const FLAT_CODES: [u8; 6] = [16, 64, 118, 128, 200, 235];
+
+#[test]
+fn an_opaque_canvas_size_layer_stores_its_picture_unchanged_at_any_canvas_size() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(adapter_gpu());
+    if renderer.intermediate_format() != wgpu::TextureFormat::Rgba16Float {
+        eprintln!("skipped: the adapter's intermediate is not half float");
+        return;
+    }
+    for size in canvas_sizes() {
+        for code in FLAT_CODES {
+            let picture = flat_picture(size, code);
+            let texture = rgba_image_texture(&renderer, size, &picture);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let stored = gpu_graph_halves(&renderer, size, &view, canvas_size_layer);
+            let changed = changed_halves(&stored, &picture);
+            assert_eq!(
+                changed, 0,
+                "{}x{} code {code}: {changed} stored halves differ from the picture's",
+                size.width, size.height
+            );
+        }
+    }
+}
+
+#[test]
+fn an_opaque_canvas_size_layer_stores_its_cpu_picture_unchanged_at_any_canvas_size() {
+    let cpu = CpuRenderer::new(1);
+    for size in canvas_sizes() {
+        for code in FLAT_CODES {
+            let picture = flat_picture(size, code);
+            let source = CpuSource::image(Arc::new(
+                CpuImage::from_premultiplied_rgba8(size, &picture).expect("picture"),
+            ));
+            let stored = cpu_graph_halves(&cpu, size, &source, canvas_size_layer);
+            let changed = changed_halves(&stored, &picture);
+            assert_eq!(
+                changed, 0,
+                "{}x{} code {code}: {changed} stored halves differ from the picture's",
+                size.width, size.height
+            );
+        }
+    }
+}
+
+#[test]
+fn an_offset_that_moves_nothing_stores_its_source_unchanged_at_any_canvas_size() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(adapter_gpu());
+    if renderer.intermediate_format() != wgpu::TextureFormat::Rgba16Float {
+        eprintln!("skipped: the adapter's intermediate is not half float");
+        return;
+    }
+    renderer.register_builtins().expect("built-ins register");
+    let cpu = CpuRenderer::new(1);
+    for size in canvas_sizes() {
+        for code in FLAT_CODES {
+            let picture = flat_picture(size, code);
+            let texture = rgba_image_texture(&renderer, size, &picture);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let device_changed = changed_halves(
+                &gpu_graph_halves(&renderer, size, &view, unmoved_offset),
+                &picture,
+            );
+            let source = CpuSource::image(Arc::new(
+                CpuImage::from_premultiplied_rgba8(size, &picture).expect("picture"),
+            ));
+            let cpu_changed = changed_halves(
+                &cpu_graph_halves(&cpu, size, &source, unmoved_offset),
+                &picture,
+            );
+            assert_eq!(
+                (device_changed, cpu_changed),
+                (0, 0),
+                "{}x{} code {code}: stored halves differing from the source's on the GPU and on the CPU",
+                size.width,
+                size.height
+            );
+        }
+    }
+}
+
+#[test]
+fn a_gaussian_blur_moves_a_flat_picture_at_most_one_step_and_not_again() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(adapter_gpu());
+    if renderer.intermediate_format() != wgpu::TextureFormat::Rgba16Float {
+        eprintln!("skipped: the adapter's intermediate is not half float");
+        return;
+    }
+    renderer.register_builtins().expect("built-ins register");
+    let cpu = CpuRenderer::new(1);
+    let size = RenderSize::new(64, 64).expect("size");
+    for sigma_pixels in [4.32_f32, 15.66, 16.74] {
+        let blurs = |count: usize| {
+            move |graph: &mut RenderGraph<'_>, source: RenderNodeId| {
+                (0..count).fold(source, |node, _| {
+                    graph
+                        .add_gaussian_pixels(node, sigma_pixels, EffectRuntime::default())
+                        .expect("blur")
+                })
+            }
+        };
+        for code in FLAT_CODES {
+            let picture = flat_picture(size, code);
+            let texture = rgba_image_texture(&renderer, size, &picture);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let source = CpuSource::image(Arc::new(
+                CpuImage::from_premultiplied_rgba8(size, &picture).expect("picture"),
+            ));
+            for (renderer_name, once, twice) in [
+                (
+                    "GPU",
+                    gpu_graph_halves(&renderer, size, &view, blurs(1)),
+                    gpu_graph_halves(&renderer, size, &view, blurs(2)),
+                ),
+                (
+                    "CPU",
+                    cpu_graph_halves(&cpu, size, &source, blurs(1)),
+                    cpu_graph_halves(&cpu, size, &source, blurs(2)),
+                ),
+            ] {
+                let step = largest_step(&once, &picture);
+                assert!(
+                    step <= 1,
+                    "{renderer_name} deviation {sigma_pixels} code {code}: one blur moved a flat level {step} half steps"
+                );
+                assert!(
+                    once == twice,
+                    "{renderer_name} deviation {sigma_pixels} code {code}: a second blur moved the level again"
+                );
+            }
+        }
+    }
+}
+
+fn every_level(size: RenderSize, as_alpha: bool) -> Vec<[u16; 4]> {
+    let one = half::store(1.0);
+    (0..size.width * size.height)
+        .map(|index| u16::try_from(index).map_or(one, |bits| bits.min(one)))
+        .map(|level| {
+            if as_alpha {
+                [0, 0, 0, level]
+            } else {
+                [level, level, level, one]
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn effects_at_a_unit_exponent_store_every_level_unchanged() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(adapter_gpu());
+    if renderer.intermediate_format() != wgpu::TextureFormat::Rgba16Float {
+        eprintln!("skipped: the adapter's intermediate is not half float");
+        return;
+    }
+    renderer.register_builtins().expect("built-ins register");
+    let cpu = CpuRenderer::new(1);
+    let size = RenderSize::new(128, 121).expect("size");
+    for (id, as_alpha) in [
+        ("alpha2.effect.levels", false),
+        ("alpha2.effect.lift-gamma-gain", false),
+        ("alpha2.effect.alpha-adjust", true),
+    ] {
+        let levels = every_level(size, as_alpha);
+        let effect = |graph: &mut RenderGraph<'_>, source: RenderNodeId| {
+            graph
+                .add_effect(
+                    EffectId::new(id.into(), 1),
+                    source,
+                    EffectParams::new(),
+                    EffectRuntime::default(),
+                )
+                .expect("effect")
+        };
+        let upload = renderer
+            .upload_linear_rgba16f(size, levels.as_flattened())
+            .expect("upload");
+        let device = gpu_graph_halves(&renderer, size, upload.view(), effect);
+        let source = CpuSource::image(Arc::new(CpuImage::new(
+            size,
+            crate::cpu::PixelBox::whole(size),
+            Pixels::Half(levels.clone()),
+        )));
+        let host = cpu_graph_halves(&cpu, size, &source, effect);
+        for (renderer_name, stored) in [("GPU", device), ("CPU", host)] {
+            let moved = stored
+                .iter()
+                .zip(levels.as_flattened())
+                .filter(|(stored, level)| stored != level)
+                .count();
+            assert_eq!(
+                moved, 0,
+                "{renderer_name} {id}: {moved} stored halves moved"
             );
         }
     }

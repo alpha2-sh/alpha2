@@ -107,7 +107,7 @@ fn cpu_frames_are_the_same_on_every_target_and_thread_count() {
     assert_eq!(fnv(&one), PINNED, "this target draws another frame");
 }
 
-const PINNED: u64 = 4_158_224_015_832_628_688;
+const PINNED: u64 = 2_317_355_044_482_758_383;
 
 #[test]
 fn reused_frame_buffers_do_not_change_the_next_frame() {

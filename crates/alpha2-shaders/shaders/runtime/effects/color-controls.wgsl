@@ -8,7 +8,8 @@ fn effect(_uv: vec2f, src: vec4f) -> vec4f {
     let encoded = builtin_straight(src);
     var rgb = vec3f(builtin_decode(encoded.r), builtin_decode(encoded.g), builtin_decode(encoded.b));
     rgb *= exp2(vec3f(params.exposure) + vec3f(params.temperature, params.tint, -params.temperature) * 0.5);
-    rgb = BUILTIN_MIDDLE_GREY * pow(max(rgb / BUILTIN_MIDDLE_GREY, vec3f(1.0e-10)), vec3f(params.contrast));
+    let ratio = max(rgb / BUILTIN_MIDDLE_GREY, vec3f(1.0e-10));
+    rgb = BUILTIN_MIDDLE_GREY * select(pow(ratio, vec3f(params.contrast)), ratio, params.contrast == 1.0);
     rgb = mix(vec3f(builtin_luminance(rgb)), rgb, params.saturation);
     rgb = clamp(rgb, vec3f(0.0), vec3f(1.0));
     let graded = vec3f(builtin_encode(rgb.r), builtin_encode(rgb.g), builtin_encode(rgb.b));
