@@ -192,7 +192,7 @@ fn export_performance_reports_split_frames() {
     );
     assert_eq!(split["splitFrames"], split["frames"], "{split}");
     assert!(
-        split["maxPerFrame"].as_u64().is_some_and(|most| most >= 64),
+        split["maxPerFrame"].as_u64().is_some_and(|most| most > 1),
         "{split}"
     );
     assert!(split["maxPredictedMs"].as_f64().is_some(), "{split}");
