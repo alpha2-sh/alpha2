@@ -151,11 +151,11 @@ impl Renderer {
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: uniforms.binding(parameter_uniform),
+                resource: uniforms.dynamic_binding(parameter_uniform.size()),
             },
             wgpu::BindGroupEntry {
                 binding: 4,
-                resource: uniforms.binding(runtime_uniform),
+                resource: uniforms.dynamic_binding(runtime_uniform.size()),
             },
         ];
         for (index, resource) in bound.iter().enumerate() {
@@ -188,14 +188,17 @@ impl Renderer {
                 resource: wgpu::BindingResource::TextureView(view),
             });
         }
-        let bind_group = self
-            .gpu
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = crate::bind_group::OffsetBindGroup {
+            group: self.bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("alpha2 runtime effect bind group"),
                 layout: &drawn.bind_group_layout,
                 entries: &entries,
-            });
+            }),
+            offsets: [
+                parameter_uniform.dynamic_offset(),
+                runtime_uniform.dynamic_offset(),
+            ],
+        };
         let pixels = u64::from(size.width) * u64::from(size.height);
         let placement = encoder.place_pass(
             registered.cost,
@@ -474,7 +477,7 @@ pub(crate) fn render_scale_fixed(scale: f32) -> u32 {
 fn encode_pass(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
+    bind_group: &crate::bind_group::OffsetBindGroup<2>,
     output: &wgpu::TextureView,
     timestamp_queries: Option<&wgpu::QuerySet>,
     band: Option<(u32, u32, u32, u32)>,
@@ -504,7 +507,7 @@ fn encode_pass(
         multiview_mask: None,
     });
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bind_group, &[]);
+    bind_group.set(&mut pass, 0);
     if let Some((_, top, width, rows)) = band {
         pass.set_scissor_rect(0, top, width, rows);
     }

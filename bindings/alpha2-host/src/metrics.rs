@@ -833,6 +833,18 @@ pub fn append_buffer_pool_metrics(
             .saturating_sub(before.textures.evicted)
     );
     value["textureHighWaterBytes"] = json!(after.textures.high_water_bytes);
+    value["bindGroupsCreated"] = json!(
+        after
+            .bind_groups
+            .created
+            .saturating_sub(before.bind_groups.created)
+    );
+    value["bindGroupsReused"] = json!(
+        after
+            .bind_groups
+            .reused
+            .saturating_sub(before.bind_groups.reused)
+    );
     value["uploadTexturesCreated"] = json!(
         after
             .upload_textures

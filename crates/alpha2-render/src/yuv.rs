@@ -55,6 +55,7 @@ pub(crate) struct SourceWork {
     pub(crate) conversion: bool,
     pub(crate) pipeline: wgpu::RenderPipeline,
     pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) uniform_offset: u32,
     pub(crate) output_view: wgpu::TextureView,
     pub(crate) uniforms: UniformArenaLease,
     pub(crate) uploads: Vec<UploadTexture>,
@@ -215,7 +216,7 @@ impl SourceWorkTicket<'_> {
             multiview_mask: None,
         });
         pass.set_pipeline(&work.pipeline);
-        pass.set_bind_group(0, &work.bind_group, &[]);
+        pass.set_bind_group(0, &work.bind_group, &[work.uniform_offset]);
         pass.draw(0..3, 0..1);
     }
 
@@ -589,27 +590,24 @@ impl Renderer {
             u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
         );
         let uniform = uniforms.write(&uniform_bytes);
-        let bind_group = self
-            .gpu
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("alpha2 RGBA presentation bind group"),
-                layout: &cached.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(source_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&cached.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: uniforms.binding(uniform),
-                    },
-                ],
-            });
+        let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("alpha2 RGBA presentation bind group"),
+            layout: &cached.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&cached.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniforms.dynamic_binding(uniform.size()),
+                },
+            ],
+        });
         let output_view = output.view().clone();
         Ok(PreparedSourceTexture {
             texture: RenderedTexture::pooled(presentation.output_size, output_format, output),
@@ -618,6 +616,7 @@ impl Renderer {
                 conversion: true,
                 pipeline: cached.pipeline.clone(),
                 bind_group,
+                uniform_offset: uniform.dynamic_offset(),
                 output_view,
                 uniforms,
                 uploads: inputs,
@@ -695,7 +694,7 @@ impl Renderer {
                                 visibility: wgpu::ShaderStages::FRAGMENT,
                                 ty: wgpu::BindingType::Buffer {
                                     ty: wgpu::BufferBindingType::Uniform,
-                                    has_dynamic_offset: false,
+                                    has_dynamic_offset: true,
                                     min_binding_size: None,
                                 },
                                 count: None,
@@ -1013,44 +1012,37 @@ impl Renderer {
             u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
         );
         let uniform = uniforms.write(&uniform_bytes);
-        let bind_group = self
-            .gpu
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("alpha2 YUV bind group"),
-                layout: &cached.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(planes.y),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(planes.chroma),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(
-                            planes.v.unwrap_or(planes.chroma),
-                        ),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&cached.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: uniforms.binding(uniform),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        // An opaque format reads no alpha; any plane fills the slot.
-                        resource: wgpu::BindingResource::TextureView(
-                            alpha_plane.unwrap_or(planes.y),
-                        ),
-                    },
-                ],
-            });
+        let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("alpha2 YUV bind group"),
+            layout: &cached.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(planes.y),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(planes.chroma),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(planes.v.unwrap_or(planes.chroma)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&cached.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: uniforms.dynamic_binding(uniform.size()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    // An opaque format reads no alpha; any plane fills the slot.
+                    resource: wgpu::BindingResource::TextureView(alpha_plane.unwrap_or(planes.y)),
+                },
+            ],
+        });
         Ok(PreparedSourceTexture {
             texture: RenderedTexture::pooled(presentation.output_size, output_format, output),
             pending: Some(PendingSourceWork::new(SourceWork {
@@ -1058,6 +1050,7 @@ impl Renderer {
                 conversion: true,
                 pipeline: cached.pipeline.clone(),
                 bind_group,
+                uniform_offset: uniform.dynamic_offset(),
                 output_view,
                 uniforms,
                 uploads,
@@ -1166,7 +1159,7 @@ impl Renderer {
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
+                            has_dynamic_offset: true,
                             min_binding_size: None,
                         },
                         count: None,

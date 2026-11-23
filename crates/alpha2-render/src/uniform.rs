@@ -103,6 +103,14 @@ impl UniformSlice {
     pub(crate) const fn offset(self) -> u64 {
         self.offset
     }
+
+    pub(crate) fn dynamic_offset(self) -> u32 {
+        u32::try_from(self.offset).expect("a uniform arena is smaller than 4 GiB")
+    }
+
+    pub(crate) const fn size(self) -> NonZeroU64 {
+        self.size
+    }
 }
 
 impl UniformBufferPool {
@@ -153,13 +161,15 @@ impl UniformBufferPool {
             state.created = state.created.saturating_add(1);
             drop(state);
             let generation = self.retirement.generation();
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("alpha2 uniform arena"),
+                size: capacity,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.retirement.bind_groups.adopt_buffer(&buffer);
             (
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("alpha2 uniform arena"),
-                    size: capacity,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
+                buffer,
                 vec![0; usize::try_from(capacity).expect("uniform arena fits host indexing")],
                 generation,
             )
@@ -335,20 +345,13 @@ impl UniformArenaLease {
         }
     }
 
-    /// The arena's first `size` bytes as a dynamic-offset binding.
+    /// The arena's first `size` bytes as a dynamic-offset binding; pass a slice's
+    /// [`UniformSlice::dynamic_offset`] when drawing.
     pub(crate) fn dynamic_binding(&self, size: NonZeroU64) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::Buffer(wgpu::BufferBinding {
             buffer: self.buffer.as_ref().expect("live uniform arena"),
             offset: 0,
             size: Some(size),
-        })
-    }
-
-    pub(crate) fn binding(&self, slice: UniformSlice) -> wgpu::BindingResource<'_> {
-        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-            buffer: self.buffer.as_ref().expect("live uniform arena"),
-            offset: slice.offset,
-            size: Some(slice.size),
         })
     }
 

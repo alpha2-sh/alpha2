@@ -642,8 +642,8 @@ fn runtime_bind_group_layout(
         },
         // Bind at exact struct sizes so a shader reading past them fails to compile instead of
         // reading the next arena slot.
-        runtime_uniform_entry(3, param_uniform_bytes(params.len())),
-        runtime_uniform_entry(4, RUNTIME_UNIFORM_WORDS * size_of::<f32>()),
+        runtime_uniform_entry(3, param_uniform_bytes(params.len()), true),
+        runtime_uniform_entry(4, RUNTIME_UNIFORM_WORDS * size_of::<f32>(), true),
     ];
     for (index, resource) in resources.iter().enumerate() {
         let binding = u32::try_from(index).unwrap_or(0) * 2 + 5;
@@ -651,7 +651,11 @@ fn runtime_bind_group_layout(
             EffectResourceKind::Lut3d => wgpu::TextureViewDimension::D3,
         };
         entries.push(runtime_texture_entry(binding, dimension));
-        entries.push(runtime_uniform_entry(binding + 1, RESOURCE_METADATA_BYTES));
+        entries.push(runtime_uniform_entry(
+            binding + 1,
+            RESOURCE_METADATA_BYTES,
+            false,
+        ));
     }
     for index in 0..inputs.len() {
         entries.push(runtime_texture_entry(
@@ -685,13 +689,17 @@ fn runtime_texture_entry(
     }
 }
 
-fn runtime_uniform_entry(binding: u32, bytes: usize) -> wgpu::BindGroupLayoutEntry {
+fn runtime_uniform_entry(
+    binding: u32,
+    bytes: usize,
+    has_dynamic_offset: bool,
+) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
+            has_dynamic_offset,
             min_binding_size: u64::try_from(bytes)
                 .ok()
                 .and_then(std::num::NonZeroU64::new),

@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
 
+use crate::bind_group::OffsetBindGroup;
 use crate::canary::{CANARY_BYTES, Canary};
 use crate::{
     ReadbackFailure, RenderError, RenderSize, RenderedTexture, Renderer,
@@ -818,23 +819,25 @@ impl Renderer {
         cached: &CachedYuvReadbackPipeline,
         uniforms: &crate::uniform::UniformArenaLease,
         uniform: crate::uniform::UniformSlice,
-    ) -> wgpu::BindGroup {
-        self.gpu
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("alpha2 RGB to YUV bind group"),
-                layout: &cached.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(target.view()),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: uniforms.binding(uniform),
-                    },
-                ],
-            })
+    ) -> OffsetBindGroup<1> {
+        let group = self.bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("alpha2 RGB to YUV bind group"),
+            layout: &cached.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(target.view()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: uniforms.dynamic_binding(uniform.size()),
+                },
+            ],
+        });
+        OffsetBindGroup {
+            group,
+            offsets: [uniform.dynamic_offset()],
+        }
     }
 
     fn encode_yuv420_pack(
@@ -890,7 +893,7 @@ impl Renderer {
                                 visibility: wgpu::ShaderStages::FRAGMENT,
                                 ty: wgpu::BindingType::Buffer {
                                     ty: wgpu::BufferBindingType::Uniform,
-                                    has_dynamic_offset: false,
+                                    has_dynamic_offset: true,
                                     min_binding_size: None,
                                 },
                                 count: None,
@@ -954,17 +957,14 @@ impl Renderer {
             "alpha2 GPU-packed RGBA8 readback texture",
         );
         let cached = self.readback_pack_pipeline()?;
-        let bind_group = self
-            .gpu
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("alpha2 readback pack bind group"),
-                layout: &cached.bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(target.view()),
-                }],
-            });
+        let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("alpha2 readback pack bind group"),
+            layout: &cached.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(target.view()),
+            }],
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("alpha2 GPU RGBA8 readback pack pass"),
@@ -1793,7 +1793,7 @@ fn encode_yuv_render_pass(
     encoder: &mut wgpu::CommandEncoder,
     label: &'static str,
     pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
+    bind_group: &OffsetBindGroup<1>,
     target: &wgpu::TextureView,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1813,7 +1813,7 @@ fn encode_yuv_render_pass(
         multiview_mask: None,
     });
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bind_group, &[]);
+    bind_group.set(&mut pass, 0);
     pass.draw(0..3, 0..1);
 }
 
@@ -1821,7 +1821,7 @@ fn encode_yuv_render_pass_pair(
     encoder: &mut wgpu::CommandEncoder,
     label: &'static str,
     pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
+    bind_group: &OffsetBindGroup<1>,
     targets: [&wgpu::TextureView; 2],
 ) {
     let attachments = targets.map(|target| {
@@ -1844,7 +1844,7 @@ fn encode_yuv_render_pass_pair(
         multiview_mask: None,
     });
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bind_group, &[]);
+    bind_group.set(&mut pass, 0);
     pass.draw(0..3, 0..1);
 }
 

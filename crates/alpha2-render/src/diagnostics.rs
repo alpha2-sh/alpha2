@@ -69,6 +69,8 @@ pub struct RenderDiagnostics {
     pub uniform_buffers: UniformBufferPoolStats,
     /// Runtime and built-in pipeline cache counts.
     pub pipelines: PipelineCacheStats,
+    /// Bind groups created and reused.
+    pub bind_groups: crate::BindGroupStats,
     /// Pipeline creations and their CPU time; a first draw that compiles shaders stalls its frame.
     pub pipeline_creation: PipelineCreationStats,
     /// Kept graph results: budget, occupancy, hits, misses, invalidations.
@@ -204,6 +206,7 @@ pub(crate) struct ResourceDiagnostics {
     pub(crate) readback_buffers: ReadbackBufferPoolStats,
     pub(crate) uniform_buffers: UniformBufferPoolStats,
     pub(crate) pipelines: PipelineCacheStats,
+    pub(crate) bind_groups: crate::BindGroupStats,
     pub(crate) result_cache: crate::ResultCacheStats,
 }
 
@@ -334,6 +337,7 @@ pub(crate) fn snapshot(
         readback_buffers: resources.readback_buffers,
         uniform_buffers: resources.uniform_buffers,
         pipelines: resources.pipelines,
+        bind_groups: resources.bind_groups,
         pipeline_creation: state.pipeline_creation,
         result_cache: resources.result_cache,
         presented_frames: state.presented_frames,

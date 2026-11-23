@@ -38,6 +38,7 @@ pub(crate) struct Retirement {
     /// [`Retirement::doubt`]).
     generation: AtomicU64,
     submitted_frames: AtomicU64,
+    pub(crate) bind_groups: crate::bind_group::BindGroups,
 }
 
 #[derive(Debug, Default)]
@@ -67,6 +68,7 @@ impl Retirement {
         {
             let mut state = self.lock();
             for (resource, bytes) in resources {
+                self.bind_groups.release(&resource);
                 state.retired_bytes = state.retired_bytes.saturating_add(bytes);
                 if state.open == 0 {
                     now.push(resource);

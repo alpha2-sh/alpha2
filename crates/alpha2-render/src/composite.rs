@@ -1,3 +1,4 @@
+use crate::bind_group::OffsetBindGroup;
 use crate::{
     BlendMode, Color, GraphError, GraphLayer, RenderError, RenderGraph, RenderSize,
     RenderedTexture, Renderer, SourceView,
@@ -121,7 +122,7 @@ impl Renderer {
 
         let cached = self.composite_pipeline()?;
         let preparation = BatchPreparationContext {
-            device: self.gpu.device(),
+            renderer: self,
             layout: &cached.bind_group_layout,
             sampler: &cached.sampler,
             no_backdrop: &self.empty_input,
@@ -227,7 +228,7 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         cached: &CachedCompositePipeline,
         (program, tier, layers): (CompositeProgram, LayerTier, usize),
-        bind_group: &wgpu::BindGroup,
+        bind_group: &OffsetBindGroup<1>,
         target: &wgpu::TextureView,
         pass: PassTarget,
     ) -> Result<(), RenderError> {
@@ -531,7 +532,7 @@ impl StoredValue {
 }
 
 struct BatchPreparationContext<'a> {
-    device: &'a wgpu::Device,
+    renderer: &'a crate::Renderer,
     layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
     /// Bound as the first pass's backdrop, which composites over `background` and reads nothing.
@@ -549,7 +550,7 @@ fn prepare_batch(
     backdrop: Option<&wgpu::TextureView>,
     batch: &[(&CompositeLayer<'_>, PixelRect, LayerTier)],
     uniforms: &mut UniformArenaLease,
-) -> wgpu::BindGroup {
+) -> OffsetBindGroup<1> {
     debug_assert!(!batch.is_empty() && batch.len() <= COMPOSITE_BATCH_LAYERS);
     let mut values = [0.0_f32; BATCH_UNIFORM_FLOATS];
     #[allow(clippy::cast_precision_loss)]
@@ -614,15 +615,16 @@ fn prepare_batch(
     });
     entries.push(wgpu::BindGroupEntry {
         binding: UNIFORM_BINDING,
-        resource: uniforms.binding(uniform),
+        resource: uniforms.dynamic_binding(uniform.size()),
     });
-    context
-        .device
-        .create_bind_group(&wgpu::BindGroupDescriptor {
+    OffsetBindGroup {
+        group: context.renderer.bind_group(&wgpu::BindGroupDescriptor {
             label: Some("alpha2 layer batch bind group"),
             layout: context.layout,
             entries: &entries,
-        })
+        }),
+        offsets: [uniform.dynamic_offset()],
+    }
 }
 
 /// Clears `target` to `stored`, a value its format holds exactly, so the clear matches what a
@@ -672,7 +674,7 @@ fn stored_color(stored: [f32; 4]) -> wgpu::Color {
 fn encode_batch(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
+    bind_group: &OffsetBindGroup<1>,
     target: &wgpu::TextureView,
     PassTarget { load, scissor }: PassTarget,
 ) {
@@ -693,7 +695,7 @@ fn encode_batch(
         multiview_mask: None,
     });
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bind_group, &[]);
+    bind_group.set(&mut pass, 0);
     if let Some(scissor) = scissor {
         pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
     }
@@ -889,7 +891,7 @@ fn batch_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 fn batch_uniform_binding() -> wgpu::BindingType {
     wgpu::BindingType::Buffer {
         ty: wgpu::BufferBindingType::Uniform,
-        has_dynamic_offset: false,
+        has_dynamic_offset: true,
         min_binding_size: std::num::NonZeroU64::new(float_uniform_bytes(BATCH_UNIFORM_FLOATS)),
     }
 }

@@ -3,6 +3,7 @@
 /// The pipeline that copies a rendered texture onto a presentation surface (a canvas, a
 /// `CAMetalLayer`, an Android window), stretched to the surface's size.
 pub struct SurfacePresenter {
+    bind_groups: crate::bind_group::BindGroups,
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
@@ -74,6 +75,7 @@ impl SurfacePresenter {
             ..Default::default()
         });
         Self {
+            bind_groups: crate::bind_group::BindGroups::default(),
             layout,
             pipeline,
             sampler,
@@ -88,20 +90,24 @@ impl SurfacePresenter {
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
     ) {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("alpha2 surface presenter bind group"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
+        let bind_group = self.bind_groups.create(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("alpha2 surface presenter bind group"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            },
+            0,
+        );
         // Submitted before returning, reading only the caller's view: no pooled texture can be
         // let go of while it is unsubmitted.
         #[allow(clippy::disallowed_methods)]

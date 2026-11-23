@@ -59,6 +59,12 @@ All notable changes to this project are documented in this file.
   export's or a preview's, not only the start-up default), `RenderDiagnostics::degradations`
   reports `CapabilityDiagnostic::TextureBudgetReduced`, and `alpha2-host` prints the requested and
   applied budgets once per change.
+- The renderer keeps bind groups by what they bind and reuses them on later frames while every
+  texture, upload and uniform arena they bind is its own; they leave with those resources or after
+  64 frames unused. Uniform blocks are bound with dynamic offsets. A warm frame of an unchanged
+  graph creates no bind group. `RenderDiagnostics::bind_groups` (`BindGroupStats`) counts created,
+  reused and kept bind groups; the browser and host diagnostics report them as `bindGroups`, and
+  export metrics as `bindGroupsCreated` and `bindGroupsReused`.
 
 ### Fixed
 

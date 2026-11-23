@@ -325,6 +325,7 @@ impl TexturePool {
             drop(state);
             let generation = self.retirement.generation();
             let texture = create_texture(device, size, format, label);
+            self.retirement.bind_groups.adopt_texture(&texture);
             let view = default_view(&texture);
             ((texture, view), generation)
         });
@@ -462,6 +463,7 @@ impl UploadTexturePool {
         let entry = reused.unwrap_or_else(|| {
             let generation = self.retirement.generation();
             let texture = create_upload_texture(device, size, format, label);
+            self.retirement.bind_groups.adopt_texture(&texture);
             let view = default_view(&texture);
             let mut state = self
                 .state

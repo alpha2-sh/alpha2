@@ -557,7 +557,7 @@ impl Renderer {
         let binding =
             uniforms.dynamic_binding(NonZeroU64::new(VECTOR_UNIFORM_BYTES).expect("non-zero"));
         let group = |view: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+            self.bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("alpha2 vector group"),
                 layout: &cached.layout,
                 entries: &[

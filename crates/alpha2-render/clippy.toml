@@ -5,6 +5,7 @@ disallowed-methods = [
   { path = "wgpu::BufferSlice::map_async", reason = "use `GpuContext::map_async`: wgpu flushes the buffer's pending writes there, which is a queue submission" },
   { path = "wgpu::Buffer::map_async", reason = "use `GpuContext::map_async`: wgpu flushes the buffer's pending writes there, which is a queue submission" },
   { path = "wgpu::Device::limits", reason = "read once in `Renderer::new`; use `Renderer::limits`" },
+  { path = "wgpu::Device::create_bind_group", reason = "use `Renderer::bind_group`: bind groups are kept by what they bind and counted in the diagnostics" },
   { path = "wgpu::Device::create_command_encoder", reason = "use `Renderer::command_encoder`: what the pools let go of must not be destroyed while an encoder that uses it is unsubmitted" },
   { path = "f32::sin", reason = "platform math library; use `libm::sinf`" },
   { path = "f32::cos", reason = "platform math library; use `libm::cosf`" },

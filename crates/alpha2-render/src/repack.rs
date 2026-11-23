@@ -143,27 +143,25 @@ impl Renderer {
             );
             let slice = uniforms.write(&origin);
 
-            let bind_group = self
-                .gpu
-                .device()
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("alpha2 YUV repack bind group"),
-                    layout: &cached.bind_group_layout,
-                    entries: &[
-                        texture_entry(0, &planes[0]),
-                        texture_entry(1, &planes[1]),
-                        texture_entry(2, planes.get(2).unwrap_or(&planes[1])),
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: uniforms.binding(slice),
-                        },
-                    ],
-                });
+            let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("alpha2 YUV repack bind group"),
+                layout: &cached.bind_group_layout,
+                entries: &[
+                    texture_entry(0, &planes[0]),
+                    texture_entry(1, &planes[1]),
+                    texture_entry(2, planes.get(2).unwrap_or(&planes[1])),
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: uniforms.dynamic_binding(slice.size()),
+                    },
+                ],
+            });
             PendingSourceWork::new(SourceWork {
                 label,
                 conversion: false,
                 pipeline: pipeline.clone(),
                 bind_group,
+                uniform_offset: slice.dynamic_offset(),
                 output_view: crate::pool::default_view(target),
                 uniforms,
                 uploads,
@@ -301,7 +299,7 @@ impl Renderer {
                                 visibility: wgpu::ShaderStages::FRAGMENT,
                                 ty: wgpu::BindingType::Buffer {
                                     ty: wgpu::BufferBindingType::Uniform,
-                                    has_dynamic_offset: false,
+                                    has_dynamic_offset: true,
                                     min_binding_size: None,
                                 },
                                 count: None,

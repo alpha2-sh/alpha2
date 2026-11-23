@@ -8,6 +8,8 @@
 //! otherwise hidden and not part of this crate's API.
 
 mod backend;
+mod bind_group;
+pub use bind_group::BindGroupStats;
 mod blend;
 mod builtins;
 mod call_budget;

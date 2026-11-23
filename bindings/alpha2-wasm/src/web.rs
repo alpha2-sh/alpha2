@@ -2116,6 +2116,11 @@ impl WebEffectRegistry {
                 "runtimeEffects": diagnostics.pipelines.runtime_effects,
                 "builtins": diagnostics.pipelines.builtins,
             },
+            "bindGroups": {
+                "created": diagnostics.bind_groups.created,
+                "reused": diagnostics.bind_groups.reused,
+                "kept": diagnostics.bind_groups.kept,
+            },
             "frames": {
                 "presented": diagnostics.presented_frames,
                 "dropped": diagnostics.dropped_frames,

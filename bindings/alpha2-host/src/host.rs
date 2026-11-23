@@ -3514,6 +3514,11 @@ impl Host {
                 "available": diagnostics.uniform_buffers.available,
                 "availableBytes": diagnostics.uniform_buffers.available_bytes,
             },
+            "bindGroups": {
+                "created": diagnostics.bind_groups.created,
+                "reused": diagnostics.bind_groups.reused,
+                "kept": diagnostics.bind_groups.kept,
+            },
             "framesPresented": diagnostics.presented_frames,
             "framesDropped": diagnostics.dropped_frames,
         })

@@ -350,6 +350,7 @@ impl Renderer {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             }));
+        retirement.bind_groups.adopt_texture(empty_input.texture());
         let textures = crate::Shared::new(crate::pool::TexturePool::new(crate::Shared::clone(
             &retirement,
         )));
@@ -653,6 +654,14 @@ impl Renderer {
             scope,
             frame,
         }
+    }
+
+    pub(crate) fn bind_group(&self, descriptor: &wgpu::BindGroupDescriptor<'_>) -> wgpu::BindGroup {
+        self.retirement.bind_groups.create(
+            self.gpu.device(),
+            descriptor,
+            self.retirement.submitted_frames(),
+        )
     }
 
     /// Defers destruction of released pool resources until the returned scope is dropped.
@@ -977,6 +986,7 @@ impl Renderer {
         self.readback_buffers.clear();
         self.uniform_buffers.clear();
         self.canaries.clear();
+        self.retirement.bind_groups.clear();
         self.vector_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1147,6 +1157,7 @@ impl Renderer {
                 readback_buffers: self.readback_buffers.stats(),
                 uniform_buffers: self.uniform_buffers.stats(),
                 pipelines: self.pipeline_cache_stats(),
+                bind_groups: self.retirement.bind_groups.stats(),
                 result_cache: self.result_cache_stats(),
             },
             self.quality_controls().max_filter_samples,
