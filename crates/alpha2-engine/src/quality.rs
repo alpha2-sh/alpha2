@@ -17,8 +17,6 @@ pub struct QualityProfile {
     pub resolution_scale: f32,
     /// Maximum sampling work available to a filter pass.
     pub max_filter_samples: u32,
-    /// Temporal samples used by motion blur implementations.
-    pub motion_blur_subframes: u32,
     /// Soft budget available to reusable GPU textures.
     pub texture_budget_bytes: u64,
 }
@@ -35,8 +33,6 @@ impl QualityProfile {
     /// Largest per-pass filter sampling budget
     /// ([`alpha2_render::RenderQualityControls::MAX_FILTER_SAMPLES`]). Tier B applies less.
     pub const MAX_FILTER_SAMPLES: u32 = alpha2_render::RenderQualityControls::MAX_FILTER_SAMPLES;
-    /// Largest temporal sample count allocated for one render plan.
-    pub const MAX_MOTION_BLUR_SUBFRAMES: u32 = 256;
     /// Smallest useful reusable-texture pool budget.
     pub const MIN_TEXTURE_BUDGET_BYTES: u64 = 1024 * 1024;
     /// Largest accepted reusable-texture pool budget.
@@ -48,7 +44,6 @@ impl QualityProfile {
         Self {
             resolution_scale: 1.0,
             max_filter_samples: 64,
-            motion_blur_subframes: 1,
             texture_budget_bytes: 512 * 1024 * 1024,
         }
     }
@@ -59,7 +54,6 @@ impl QualityProfile {
         Self {
             resolution_scale: 0.5,
             max_filter_samples: 32,
-            motion_blur_subframes: 1,
             texture_budget_bytes: 256 * 1024 * 1024,
         }
     }
@@ -80,7 +74,6 @@ impl QualityProfile {
             && self.resolution_scale > 0.0
             && self.resolution_scale <= Self::MAX_RESOLUTION_SCALE
             && (1..=Self::MAX_FILTER_SAMPLES).contains(&self.max_filter_samples)
-            && (1..=Self::MAX_MOTION_BLUR_SUBFRAMES).contains(&self.motion_blur_subframes)
             && (Self::MIN_TEXTURE_BUDGET_BYTES..=Self::MAX_TEXTURE_BUDGET_BYTES)
                 .contains(&self.texture_budget_bytes)
         {
@@ -142,7 +135,6 @@ impl QualityProfile {
             dimensions: (size.width, size.height),
             resolution_scale: self.resolution_scale,
             max_filter_samples: self.max_filter_samples,
-            motion_blur_subframes: self.motion_blur_subframes,
             texture_budget_bytes: self.texture_budget_bytes,
         })
     }
@@ -182,14 +174,6 @@ mod tests {
         assert_eq!(
             QualityProfile {
                 resolution_scale: 0.0,
-                ..QualityProfile::default()
-            }
-            .validate(),
-            Err(EngineError::InvalidQualityProfile)
-        );
-        assert_eq!(
-            QualityProfile {
-                motion_blur_subframes: u32::MAX,
                 ..QualityProfile::default()
             }
             .validate(),

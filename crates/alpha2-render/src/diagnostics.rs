@@ -83,8 +83,6 @@ pub struct RenderDiagnostics {
     pub decoder_wait: Duration,
     /// Active filter sample budget, possibly below the request (see [`Self::degradations`]).
     pub max_filter_samples: u32,
-    /// Active temporal subframe count.
-    pub motion_blur_subframes: u32,
     /// Fallbacks applied to the caller's request, such as a reduced filter sample budget.
     pub degradations: Vec<crate::CapabilityDiagnostic>,
     /// Non-source nodes encoded by completed graph executions.
@@ -162,8 +160,6 @@ pub struct BenchmarkMetadata {
     pub resolution_scale: f32,
     /// Filter sample budget.
     pub max_filter_samples: u32,
-    /// Temporal sample count.
-    pub motion_blur_subframes: u32,
     /// Texture byte budget.
     pub texture_budget_bytes: u64,
 }
@@ -317,7 +313,6 @@ pub(crate) fn snapshot(
     capabilities: &Capabilities,
     resources: &ResourceDiagnostics,
     max_filter_samples: u32,
-    motion_blur_subframes: u32,
     degradations: Vec<crate::CapabilityDiagnostic>,
 ) -> RenderDiagnostics {
     let state = state
@@ -346,7 +341,6 @@ pub(crate) fn snapshot(
         repeated_frames: state.repeated_frames,
         decoder_wait: state.decoder_wait,
         max_filter_samples,
-        motion_blur_subframes,
         degradations,
         graph_nodes: state.graph_nodes,
         graph_passes: state.graph_passes,

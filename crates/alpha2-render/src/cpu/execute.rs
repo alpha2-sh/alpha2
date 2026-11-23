@@ -41,7 +41,7 @@ impl CpuRenderer {
     pub fn execute_graph(&self, graph: &RenderGraph<'_>) -> Result<Arc<CpuImage>, GraphError> {
         let started = Instant::now();
         let quality = self.quality_controls();
-        let plan = graph.compile_with_quality(quality)?;
+        let plan = graph.compile()?;
         if matches!(graph.nodes[plan.output.index], RenderNode::Source(_)) {
             return Err(GraphError::SourceOutput);
         }

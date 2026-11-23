@@ -1668,7 +1668,7 @@ impl WebCpuRenderer {
     fn use_export_quality(renderer: &CpuRenderer) {
         let quality = QualityProfile::export();
         renderer.set_texture_budget_bytes(quality.texture_budget_bytes);
-        renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+        renderer.set_quality_controls(quality.max_filter_samples);
     }
 
     /// The project's frame at `time_ticks`, drawn at export quality at `width` x `height` from the

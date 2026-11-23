@@ -935,20 +935,4 @@ mod tests {
             [output]
         );
     }
-
-    #[test]
-    fn quality_compilation_exposes_centered_temporal_schedule() {
-        let size = RenderSize::new(16, 9).expect("non-zero size");
-        let mut graph = RenderGraph::new(size);
-        let output = graph.add_composite(Vec::new()).expect("empty clear node");
-        graph.set_output(output).expect("known output");
-        let plan = graph
-            .compile_with_quality(crate::RenderQualityControls {
-                max_filter_samples: 12,
-                motion_blur_subframes: 4,
-            })
-            .expect("compiled");
-        assert_eq!(plan.temporal_offsets(), [-0.375, -0.125, 0.125, 0.375]);
-        assert_eq!(plan.filter_sample_limit(output), None);
-    }
 }

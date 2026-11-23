@@ -45,12 +45,11 @@ impl Renderer {
     /// # Errors
     /// Returns [`GraphError::MissingOutput`] when no output was selected.
     pub fn graph_cache_key(&self, graph: &RenderGraph<'_>) -> Result<RenderCacheKey, GraphError> {
-        let quality = self.quality_controls();
-        let plan = graph.compile_with_quality(quality)?;
+        let plan = graph.compile()?;
         Ok(renderer_cache_key(
             plan.cache_key,
             graph.blend_space.unwrap_or(self.blend_space).shader_value(),
-            quality,
+            self.quality_controls(),
             self.intermediate_format(),
         ))
     }

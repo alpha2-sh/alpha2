@@ -355,11 +355,10 @@ impl EffectCatalog for CpuRenderer {
 }
 
 impl RenderControls for CpuRenderer {
-    fn set_quality_controls(&self, max_filter_samples: u32, motion_blur_subframes: u32) {
+    fn set_quality_controls(&self, max_filter_samples: u32) {
         let next = RenderQualityControls {
             max_filter_samples: max_filter_samples
                 .clamp(1, RenderQualityControls::MAX_FILTER_SAMPLES),
-            motion_blur_subframes: motion_blur_subframes.max(1),
         };
         let mut quality = self.quality.lock().unwrap_or_else(PoisonError::into_inner);
         if *quality != next {
@@ -388,12 +387,11 @@ impl RenderControls for CpuRenderer {
     }
 
     fn graph_cache_key(&self, graph: &RenderGraph<'_>) -> Result<RenderCacheKey, GraphError> {
-        let quality = self.quality_controls();
-        let plan = graph.compile_with_quality(quality)?;
+        let plan = graph.compile()?;
         Ok(crate::graph_cache::cpu_renderer_cache_key(
             plan.cache_key,
             graph.blend_space.unwrap_or(self.blend_space).shader_value(),
-            quality,
+            self.quality_controls(),
         ))
     }
 }

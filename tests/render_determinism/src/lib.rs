@@ -756,7 +756,7 @@ pub fn project_hash() -> u64 {
         .register_lut3d("grade", &Lut3dData::from_cube(GRADE_CUBE).expect("cube"))
         .expect("lut");
     renderer.set_texture_budget_bytes(quality.texture_budget_bytes);
-    renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+    renderer.set_quality_controls(quality.max_filter_samples);
     let card = |opaque| {
         CpuSource::image(Arc::new(
             CpuImage::from_premultiplied_rgba8(size, &test_card(size, opaque)).expect("card"),

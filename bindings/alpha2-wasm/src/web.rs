@@ -2131,7 +2131,6 @@ impl WebEffectRegistry {
             "webgl2Uploads": crate::interop::measured_webgl2_uploads()
                 .filter(|_| !self.browser_webgpu)
                 .map(crate::interop::WebGl2Uploads::name),
-            "motionBlurSubframes": diagnostics.motion_blur_subframes,
             "degradations": diagnostics
                 .degradations
                 .iter()
@@ -2810,7 +2809,7 @@ impl WebEffectRegistry {
         self.renderer
             .set_texture_budget_bytes(quality.texture_budget_bytes);
         self.renderer
-            .set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+            .set_quality_controls(quality.max_filter_samples);
         self.texts
             .prepare(&self.renderer, &frame, size)
             .map_err(|error| typed_error(&error))?;

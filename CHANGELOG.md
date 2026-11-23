@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Removed
+
+- **Breaking:** the motion blur subframe count, which no pass read. Removed from Rust:
+  `QualityProfile::motion_blur_subframes` and `MAX_MOTION_BLUR_SUBFRAMES`,
+  `RenderQualityControls::motion_blur_subframes`, `RenderPlan::temporal_offsets`, and the
+  `motion_blur_subframes` fields of `RenderDiagnostics` and `BenchmarkMetadata`; the browser
+  diagnostics drop `motionBlurSubframes`. `set_quality_controls` (on `Renderer` and in
+  `RenderControls`) takes only the filter sample budget, so a quality change drops kept results
+  and moves the content epoch only when that budget changes. The plan no longer depends on
+  quality: `RenderPlan::filter_sample_limit` and `RenderGraph::compile_with_quality` are removed,
+  and `RenderGraph::compile` is the one way to compile. Graph cache keys change value.
+
 ## [0.6.1] - 2026-11-18
 
 ### Fixed

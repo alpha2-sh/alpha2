@@ -268,8 +268,6 @@ pub struct RenderQualityControls {
     /// Maximum samples for filter effects and layer minification. Analytic edge coverage stays
     /// on even with a one-sample budget.
     pub max_filter_samples: u32,
-    /// Temporal samples used by motion-aware runners.
-    pub motion_blur_subframes: u32,
 }
 
 impl RenderQualityControls {
@@ -281,7 +279,6 @@ impl Default for RenderQualityControls {
     fn default() -> Self {
         Self {
             max_filter_samples: Self::MAX_FILTER_SAMPLES,
-            motion_blur_subframes: 1,
         }
     }
 }
@@ -298,7 +295,6 @@ impl QualityState {
         Self {
             applied: RenderQualityControls {
                 max_filter_samples: requested.max_filter_samples.min(limit),
-                ..requested
             },
             requested_filter_samples: requested.max_filter_samples,
         }
@@ -991,16 +987,15 @@ impl Renderer {
         self.gpu_memory_budget().map_or(u64::MAX, |bytes| bytes / 4)
     }
 
-    /// Applies filter and temporal sampling controls.
+    /// Applies the filter sample budget.
     ///
-    /// The filter budget is capped at [`Self::filter_sample_limit`]; a reduction is reported as
+    /// The budget is capped at [`Self::filter_sample_limit`]; a reduction is reported as
     /// [`crate::CapabilityDiagnostic::FilterSamplesReduced`]. Kept results are dropped only when
-    /// the applied values change.
-    pub fn set_quality_controls(&self, max_filter_samples: u32, motion_blur_subframes: u32) {
+    /// the applied budget changes.
+    pub fn set_quality_controls(&self, max_filter_samples: u32) {
         let requested = max_filter_samples.max(1);
         let next = RenderQualityControls {
             max_filter_samples: requested.min(self.filter_sample_limit()),
-            motion_blur_subframes: motion_blur_subframes.max(1),
         };
         let mut quality = self
             .quality
@@ -1088,7 +1083,6 @@ impl Renderer {
     /// Returns a stable snapshot for telemetry or benchmark output.
     #[must_use]
     pub fn diagnostics(&self) -> crate::RenderDiagnostics {
-        let quality = self.quality_controls();
         crate::diagnostics::snapshot(
             &self.diagnostics,
             self.gpu.capabilities(),
@@ -1100,8 +1094,7 @@ impl Renderer {
                 pipelines: self.pipeline_cache_stats(),
                 result_cache: self.result_cache_stats(),
             },
-            quality.max_filter_samples,
-            quality.motion_blur_subframes,
+            self.quality_controls().max_filter_samples,
             self.degradations(),
         )
     }

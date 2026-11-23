@@ -575,10 +575,7 @@ impl Exporter {
         let evaluate = prepare_started.duration_since(evaluate_started);
         let size = self.quality.render_size(&project.project().settings)?;
         renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
-        renderer.set_quality_controls(
-            self.quality.max_filter_samples,
-            self.quality.motion_blur_subframes,
-        );
+        renderer.set_quality_controls(self.quality.max_filter_samples);
         let prepare = prepare_started.elapsed();
         let mut submit = FrameSubmitTimings::default();
         let attempt = renderer.render_frame_nv12_timed(
@@ -636,10 +633,7 @@ impl Exporter {
         let evaluate = prepare_started.duration_since(evaluate_started);
         let size = self.quality.render_size(&project.project().settings)?;
         renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
-        renderer.set_quality_controls(
-            self.quality.max_filter_samples,
-            self.quality.motion_blur_subframes,
-        );
+        renderer.set_quality_controls(self.quality.max_filter_samples);
         let draw_started = Instant::now();
         let prepare = draw_started.duration_since(prepare_started);
         let report =
@@ -708,10 +702,7 @@ impl Exporter {
         let evaluate = prepare_started.duration_since(evaluate_started);
         let size = self.quality.render_size(&project.project().settings)?;
         renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
-        renderer.set_quality_controls(
-            self.quality.max_filter_samples,
-            self.quality.motion_blur_subframes,
-        );
+        renderer.set_quality_controls(self.quality.max_filter_samples);
         let draw_started = Instant::now();
         let prepare = draw_started.duration_since(prepare_started);
         let report = renderer.render_frame_into_planes(
@@ -768,10 +759,7 @@ impl Exporter {
         crate::frame::check_frame_effects(renderer, &frame)?;
         let size = self.quality.render_size(&project.project().settings)?;
         renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
-        renderer.set_quality_controls(
-            self.quality.max_filter_samples,
-            self.quality.motion_blur_subframes,
-        );
+        renderer.set_quality_controls(self.quality.max_filter_samples);
         let render = crate::FrameRenderer::render_frame(renderer, size, &frame, frames)?;
         let Some(texture) = render.texture else {
             return Ok(ExportTextureStep::Waiting {
@@ -814,10 +802,7 @@ impl Exporter {
             });
         let size = self.quality.render_size(&project.project().settings)?;
         renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
-        renderer.set_quality_controls(
-            self.quality.max_filter_samples,
-            self.quality.motion_blur_subframes,
-        );
+        renderer.set_quality_controls(self.quality.max_filter_samples);
         let prepare = prepare_started.map_or(Duration::ZERO, |started| started.elapsed());
         if !self.pixels.is_yuv420p() {
             // Read back as stored and pack on the CPU once the readback finishes.

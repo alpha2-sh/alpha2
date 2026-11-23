@@ -219,13 +219,13 @@ fn what_keys_leave_out_clears_the_cache() {
 
     fill(&renderer);
     let quality = renderer.quality_controls();
-    renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+    renderer.set_quality_controls(quality.max_filter_samples);
     assert_eq!(
         renderer.result_cache_stats().entries,
         2,
         "unchanged quality keeps it"
     );
-    renderer.set_quality_controls(quality.max_filter_samples / 2, 1);
+    renderer.set_quality_controls(quality.max_filter_samples / 2);
     let stats = renderer.result_cache_stats();
     assert_eq!((stats.entries, stats.invalidations[2]), (0, 1));
 
@@ -265,7 +265,7 @@ fn the_content_epoch_moves_on_every_clear_even_of_an_empty_cache() {
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let epoch = renderer.content_epoch();
     let quality = renderer.quality_controls();
-    renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+    renderer.set_quality_controls(quality.max_filter_samples);
     run(&renderer, &graph(&view, true, &tint, 0.5, 1.0).graph);
     assert_eq!(
         renderer.content_epoch(),
@@ -278,7 +278,7 @@ fn the_content_epoch_moves_on_every_clear_even_of_an_empty_cache() {
         assert_ne!(now, epoch, "{what}");
         epoch = now;
     };
-    renderer.set_quality_controls(quality.max_filter_samples / 2, 1);
+    renderer.set_quality_controls(quality.max_filter_samples / 2);
     moved(&renderer, "quality");
     let lut = crate::Lut3dData {
         edge_length: 2,
@@ -387,13 +387,6 @@ fn a_filter_sample_budget_past_what_a_pass_takes_is_applied_and_reported_as_what
     let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let built = graph(&view, true, &tint, 0.5, 1.0);
-    let planned = |renderer: &Renderer| {
-        built
-            .graph
-            .compile_with_quality(renderer.quality_controls())
-            .expect("compiles")
-            .filter_sample_limit(built.effect)
-    };
     let reduced = |requested| {
         vec![crate::CapabilityDiagnostic::FilterSamplesReduced {
             requested,
@@ -404,25 +397,23 @@ fn a_filter_sample_budget_past_what_a_pass_takes_is_applied_and_reported_as_what
         renderer.result_cache_stats().invalidations[crate::CacheInvalidation::Quality as usize]
     };
 
-    renderer.set_quality_controls(256, 1);
+    renderer.set_quality_controls(256);
     assert_eq!(renderer.quality_controls().max_filter_samples, limit);
     assert_eq!(renderer.diagnostics().max_filter_samples, limit);
-    assert_eq!(planned(&renderer), Some(limit));
     assert_eq!(renderer.diagnostics().degradations, reduced(256));
 
     renderer.set_result_cache_budget(1 << 20);
     run(&renderer, &built.graph);
     assert_eq!(renderer.result_cache_stats().entries, 2);
     let before = quality_invalidations(&renderer);
-    renderer.set_quality_controls(4096, 1);
+    renderer.set_quality_controls(4096);
     assert_eq!(renderer.result_cache_stats().entries, 2);
     assert_eq!(quality_invalidations(&renderer), before);
     assert_eq!(renderer.diagnostics().degradations, reduced(4096));
 
     // A budget passes take is applied as asked, unreported, and changes the cached pixels.
-    renderer.set_quality_controls(limit / 2, 1);
+    renderer.set_quality_controls(limit / 2);
     assert_eq!(renderer.quality_controls().max_filter_samples, limit / 2);
-    assert_eq!(planned(&renderer), Some(limit / 2));
     assert_eq!(renderer.diagnostics().degradations, Vec::new());
     assert_eq!(renderer.result_cache_stats().entries, 0);
     assert_eq!(quality_invalidations(&renderer), before + 1);
