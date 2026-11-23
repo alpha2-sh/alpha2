@@ -6,7 +6,7 @@ use crate::{
     GraphError, PendingSourceWork, RenderError, RenderGraph, RenderedTexture, Renderer,
     Yuv420pReadback,
 };
-use alpha2_media::YuvEncoding;
+use alpha2_media::{PixelLayout, YuvEncoding};
 
 /// Where one frame's graph construction and submission spent its time.
 ///
@@ -123,7 +123,13 @@ impl Renderer {
         sources: &[&PendingSourceWork],
         encoding: YuvEncoding,
     ) -> Result<Yuv420pReadback, RenderError> {
-        self.render_graph_yuv420p_measured(graph, sources, encoding, None)
+        self.render_graph_readback_measured(
+            graph,
+            sources,
+            encoding,
+            ReadbackKind::PackedYuv420p,
+            None,
+        )
     }
 
     /// [`Renderer::render_graph_yuv420p`] that also writes every span after `graph_build` to
@@ -138,7 +144,39 @@ impl Renderer {
         encoding: YuvEncoding,
         timings: &mut FrameSubmitTimings,
     ) -> Result<Yuv420pReadback, RenderError> {
-        self.render_graph_yuv420p_measured(graph, sources, encoding, Some(timings))
+        self.render_graph_readback_measured(
+            graph,
+            sources,
+            encoding,
+            ReadbackKind::PackedYuv420p,
+            Some(timings),
+        )
+    }
+
+    /// Renders a graph and copies the result out as stored, for
+    /// [`Yuv420pReadback::finish_into_planes`] to pack into `layout`, in one command buffer with
+    /// its sources' pending work.
+    ///
+    /// With `timings`, also writes every span after `graph_build` to them and samples the frame's
+    /// GPU time ([`Renderer::take_frame_gpu_times`]).
+    ///
+    /// # Errors
+    /// As [`Self::render_graph_yuv420p`] and [`Self::begin_layout_readback`].
+    pub fn render_graph_layout_readback(
+        &self,
+        graph: &RenderGraph<'_>,
+        sources: &[&PendingSourceWork],
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        timings: Option<&mut FrameSubmitTimings>,
+    ) -> Result<Yuv420pReadback, RenderError> {
+        self.render_graph_readback_measured(
+            graph,
+            sources,
+            encoding,
+            ReadbackKind::Texels(layout),
+            timings,
+        )
     }
 
     /// [`Renderer::render_graph_yuv420p_timed`] packing into caller-owned NV12 plane textures
@@ -211,19 +249,22 @@ impl Renderer {
         Ok(())
     }
 
-    fn render_graph_yuv420p_measured(
+    fn render_graph_readback_measured(
         &self,
         graph: &RenderGraph<'_>,
         sources: &[&PendingSourceWork],
         encoding: YuvEncoding,
+        readback: ReadbackKind,
         timings: Option<&mut FrameSubmitTimings>,
     ) -> Result<Yuv420pReadback, RenderError> {
         let measure = timings.is_some();
         let mut clock = StageClock::start(measure);
         let mut collected = FrameSubmitTimings::default();
         let frame = self.frame_lock.hold();
-        let mut command_encoder =
-            self.command_encoder("alpha2 render and YUV420P readback encoder");
+        let mut command_encoder = self.command_encoder(match readback {
+            ReadbackKind::PackedYuv420p => "alpha2 render and YUV420P readback encoder",
+            ReadbackKind::Texels(_) => "alpha2 render and texel readback encoder",
+        });
         let source_work = begin_source_work(&frame, sources);
         for work in &source_work {
             work.encode(&mut command_encoder);
@@ -242,8 +283,17 @@ impl Renderer {
         if let Some(sample) = &sample {
             sample.graph_end(&mut command_encoder);
         }
-        let readback_work =
-            self.encode_yuv420p_readback(graph_work.texture(), encoding, &mut command_encoder)?;
+        let readback_work = match readback {
+            ReadbackKind::Texels(layout) => EncodedReadback::Layout(self.encode_layout_readback(
+                graph_work.texture(),
+                encoding,
+                layout,
+                &mut command_encoder,
+            )?),
+            ReadbackKind::PackedYuv420p => EncodedReadback::Yuv420p(Box::new(
+                self.encode_yuv420p_readback(graph_work.texture(), encoding, &mut command_encoder)?,
+            )),
+        };
         if let Some(sample) = &sample {
             sample.pack_end(&mut command_encoder);
         }
@@ -251,7 +301,9 @@ impl Renderer {
         stage_source_submissions(self.gpu.queue(), &source_work)?;
         collected.source_acquire = clock.lap();
         graph_work.flush_uniforms(self.gpu.queue());
-        readback_work.flush_uniforms(self.gpu.queue());
+        if let EncodedReadback::Yuv420p(work) = &readback_work {
+            work.flush_uniforms(self.gpu.queue());
+        }
         let command_buffer = command_encoder.finish();
         // Finishing the encoder and flushing uniforms count as command encoding.
         collected.command_encode = collected.command_encode.saturating_add(clock.lap());
@@ -264,12 +316,20 @@ impl Renderer {
         collected.lease_retire = submitted.lease_retire;
         // The submission timed itself; discard this lap.
         let _ = clock.lap();
-        let readback = self.complete_yuv420p_readback(
-            readback_work,
-            #[cfg(not(target_arch = "wasm32"))]
-            submitted.submission,
-            false,
-        );
+        let readback = match readback_work {
+            EncodedReadback::Yuv420p(work) => self.complete_yuv420p_readback(
+                *work,
+                #[cfg(not(target_arch = "wasm32"))]
+                submitted.submission,
+                false,
+            ),
+            EncodedReadback::Layout(work) => self.complete_layout_readback(
+                work,
+                #[cfg(not(target_arch = "wasm32"))]
+                submitted.submission,
+                false,
+            ),
+        };
         for work in source_work {
             work.complete(self, false);
         }
@@ -281,6 +341,17 @@ impl Renderer {
         }
         Ok(readback)
     }
+}
+
+#[derive(Copy, Clone)]
+enum ReadbackKind {
+    PackedYuv420p,
+    Texels(PixelLayout),
+}
+
+enum EncodedReadback {
+    Yuv420p(Box<crate::readback::EncodedYuv420pReadback>),
+    Layout(crate::readback::EncodedLayoutReadback),
 }
 
 /// Flushes source uniforms and stages external textures' native waits and signals on the

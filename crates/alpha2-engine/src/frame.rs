@@ -286,6 +286,25 @@ pub trait GpuFrameRenderer: FrameRenderer<Image = RenderedTexture> {
         timings: &mut FrameSubmitTimings,
     ) -> Result<FrameYuv420pRender, RenderError>;
 
+    /// Renders one frame and reads it back as stored in the same command buffer, for
+    /// [`Yuv420pReadback::finish_into_planes`] to pack into `layout`.
+    ///
+    /// With `timings`, writes its stage spans to them and samples the frame's GPU time, as
+    /// [`GpuFrameRenderer::render_frame_yuv420p_timed`] does. An incomplete source set submits
+    /// nothing.
+    ///
+    /// # Errors
+    /// Returns [`RenderError`] for an invalid graph or a layout the intermediate cannot hold.
+    fn render_frame_layout_readback(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        timings: Option<&mut FrameSubmitTimings>,
+    ) -> Result<FrameYuv420pRender, RenderError>;
+
     /// Renders one frame and packs it straight into caller-owned NV12 plane
     /// textures, with no readback.
     ///
@@ -392,9 +411,9 @@ impl FrameRenderer for Renderer {
             let mut planes = yuv420p_targets(targets)?;
             return self.render_frame_into_yuv420p(size, frame, frames, encoding, &mut planes);
         }
-        let render = self.render_frame(size, frame, frames)?;
-        if let Some(texture) = render.texture {
-            let readback = self.begin_layout_readback(&texture, encoding, layout)?;
+        let render =
+            self.render_frame_layout_readback(size, frame, frames, encoding, layout, None)?;
+        if let Some(readback) = render.readback {
             // A browser cannot block on a mapping.
             #[cfg(target_arch = "wasm32")]
             {
@@ -490,6 +509,40 @@ impl GpuFrameRenderer for Renderer {
         timings: &mut FrameSubmitTimings,
     ) -> Result<FrameYuv420pRender, RenderError> {
         render_frame_yuv420p_measured(self, size, frame, frames, encoding, Some(timings))
+    }
+
+    fn render_frame_layout_readback(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        timings: Option<&mut FrameSubmitTimings>,
+    ) -> Result<FrameYuv420pRender, RenderError> {
+        let mut clock = StageClock::start(timings.is_some());
+        let mut collected = FrameSubmitTimings::default();
+        let FrameGraph {
+            report,
+            graph,
+            pending,
+        } = self.build_frame_graph(size, frame, frames)?;
+        collected.graph_build = clock.lap();
+        let measure = timings.is_some();
+        let readback = match graph {
+            Some(graph) => Some(self.render_graph_layout_readback(
+                &graph,
+                &pending,
+                encoding,
+                layout,
+                measure.then_some(&mut collected),
+            )?),
+            None => None,
+        };
+        if let Some(timings) = timings {
+            *timings = collected;
+        }
+        Ok(FrameYuv420pRender { report, readback })
     }
 
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]

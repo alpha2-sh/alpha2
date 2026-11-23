@@ -836,3 +836,25 @@ fn a_frame_from_the_pool_is_written_in_place_while_the_encoder_holds_the_last_on
         "frames the encoder released are reused"
     );
 }
+
+#[test]
+fn an_export_without_gpu_time_says_which_frames_it_lacks() {
+    use alpha2_render::FrameGpuTimes;
+    let reason = |times: FrameGpuTimes| crate::metrics::gpu_time_unavailable(&times);
+    assert!(reason(FrameGpuTimes::default()).contains("drew no frame on the GPU"));
+    let timed = FrameGpuTimes {
+        timed_frames: 5,
+        ..FrameGpuTimes::default()
+    };
+    assert!(reason(timed).contains("too few frames"));
+    let unread = FrameGpuTimes {
+        unread_frames: 1,
+        ..timed
+    };
+    assert!(reason(unread).contains("read back before the export ended"));
+    let flat = FrameGpuTimes {
+        flat_frames: 4,
+        ..unread
+    };
+    assert!(reason(flat).contains("did not advance"));
+}

@@ -417,8 +417,9 @@ impl Renderer {
 
     /// GPU time of the export frames sampled since the last call, then resets the totals.
     ///
-    /// Every eighth frame of [`Self::render_graph_nv12_timed`] or
-    /// [`Self::render_graph_yuv420p_timed`] is timed and read back later without waiting.
+    /// Every eighth frame of [`Self::render_graph_nv12_timed`], of
+    /// [`Self::render_graph_yuv420p_timed`] or of a timed [`Self::render_graph_layout_readback`] is
+    /// timed and read back later without waiting.
     ///
     /// # Errors
     /// The device has no timestamp queries.

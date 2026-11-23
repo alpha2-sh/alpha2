@@ -572,18 +572,7 @@ pub fn add_gpu_time_metrics(value: &mut Value, renderer: Option<&alpha2_render::
             times.sampled_frames,
             None,
         ),
-        Ok(times) if times.flat_frames > 0 => (
-            None,
-            None,
-            0,
-            Some("the device's timestamps did not advance across the frame's passes"),
-        ),
-        Ok(_) => (
-            None,
-            None,
-            0,
-            Some("no sampled frame's timestamps were read back before the export ended"),
-        ),
+        Ok(times) => (None, None, 0, Some(gpu_time_unavailable(&times))),
         Err(reason) => (None, None, 0, Some(reason)),
     };
     value["gpuRenderMsPerFrame"] = json!(render);
@@ -599,6 +588,18 @@ pub fn add_gpu_time_metrics(value: &mut Value, renderer: Option<&alpha2_render::
             "maxPredictedMs": stats.max_predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
         })
     });
+}
+
+pub fn gpu_time_unavailable(times: &alpha2_render::FrameGpuTimes) -> &'static str {
+    if times.flat_frames > 0 {
+        "the device's timestamps did not advance across the frame's passes"
+    } else if times.unread_frames > 0 {
+        "no sampled frame's timestamps were read back before the export ended"
+    } else if times.timed_frames > 0 {
+        "the export drew too few frames on the GPU for one to be sampled"
+    } else {
+        "the export drew no frame on the GPU"
+    }
 }
 
 fn milliseconds(duration: Duration) -> Value {

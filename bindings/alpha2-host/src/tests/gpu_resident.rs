@@ -1406,13 +1406,37 @@ fn gpu_time_is_reported_or_says_why_not() {
         .gpu_output_capability()
         .ok()
         .map(|capability| capability.codec);
-    let mut cases = vec![(VideoInputPolicy::CpuReadback, NativeVideoCodec::Mpeg4Part2)];
+    let yuv420p = (
+        alpha2_media::Container::Mp4,
+        alpha2_media::PixelLayout::YUV420P,
+    );
+    let mut cases = vec![
+        (
+            VideoInputPolicy::CpuReadback,
+            NativeVideoCodec::Mpeg4Part2,
+            yuv420p,
+        ),
+        (
+            VideoInputPolicy::CpuReadback,
+            NativeVideoCodec::ProRes,
+            (
+                alpha2_media::Container::Mov,
+                alpha2_media::PixelLayout::from_ffmpeg_name("yuv422p10le").expect("layout"),
+            ),
+        ),
+    ];
     if let Some(codec) = gpu_path {
-        cases.push((VideoInputPolicy::GpuRequired, codec));
+        cases.push((VideoInputPolicy::GpuRequired, codec, yuv420p));
     }
-    for (policy, codec) in cases {
+    for (policy, codec, (container, pixels)) in cases {
         host.input_policy = policy;
-        let output = directory.join(format!("{}.mp4", policy.as_str()));
+        let case = format!("{} {}", policy.as_str(), pixels.ffmpeg_name());
+        let output = directory.join(format!(
+            "{}-{}.{}",
+            policy.as_str(),
+            pixels.ffmpeg_name(),
+            container.extensions()[0]
+        ));
         let result = host
             .export(
                 &project.to_string(),
@@ -1424,10 +1448,10 @@ fn gpu_time_is_reported_or_says_why_not() {
                 RateRequest { num: 30, den: 1 },
                 false,
                 crate::protocol::ResolvedFormat {
-                    container: alpha2_media::Container::Mp4,
+                    container,
                     video: codec,
                     audio: NativeAudioCodec::Aac,
-                    pixels: alpha2_media::PixelLayout::YUV420P,
+                    pixels,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),
@@ -1436,49 +1460,57 @@ fn gpu_time_is_reported_or_says_why_not() {
                 &output,
                 &mut |_| Ok(()),
             )
-            .unwrap_or_else(|error| panic!("{}: {error}", policy.as_str()));
-        let performance = &result["performance"];
-        // Metal does not advance its counter across the empty passes that bracket the graph.
-        let flat = performance["gpuTimeUnavailable"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("did not advance"));
-        if timestamps && !flat {
-            // Thirty frames, every eighth sampled: four, at least the first read back before the end.
-            let sampled = performance["gpuTimeSampledFrames"].as_u64().unwrap_or(0);
-            assert!(
-                (1..=4).contains(&sampled),
-                "{}: {performance}",
-                policy.as_str()
-            );
-            assert!(
-                performance["gpuRenderMsPerFrame"]
-                    .as_f64()
-                    .is_some_and(|ms| ms > 0.0),
-                "{}: {performance}",
-                policy.as_str()
-            );
-            assert!(
-                performance["gpuPackMsPerFrame"].as_f64().is_some(),
-                "{performance}"
-            );
-            assert_eq!(
-                performance["gpuTimeUnavailable"],
-                Value::Null,
-                "{performance}"
-            );
-        } else {
-            assert_eq!(
-                performance["gpuTimeSampledFrames"],
-                json!(0),
-                "{performance}"
-            );
-            assert!(
-                performance["gpuTimeUnavailable"].as_str().is_some(),
-                "{performance}"
-            );
-        }
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert_gpu_time_reported(&case, &result["performance"], timestamps);
     }
     host.input_policy = VideoInputPolicy::Auto;
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode"
+))]
+fn assert_gpu_time_reported(case: &str, performance: &Value, timestamps: bool) {
+    assert!(
+        performance["frameQueueSubmitMs"]
+            .as_f64()
+            .is_some_and(|ms| ms > 0.0),
+        "{case}: {performance}"
+    );
+    // Metal does not advance its counter across the empty passes that bracket the graph.
+    let flat = performance["gpuTimeUnavailable"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("did not advance"));
+    if timestamps && !flat {
+        // Thirty frames, every eighth sampled: four, at least the first read back before the end.
+        let sampled = performance["gpuTimeSampledFrames"].as_u64().unwrap_or(0);
+        assert!((1..=4).contains(&sampled), "{case}: {performance}");
+        assert!(
+            performance["gpuRenderMsPerFrame"]
+                .as_f64()
+                .is_some_and(|ms| ms > 0.0),
+            "{case}: {performance}"
+        );
+        assert!(
+            performance["gpuPackMsPerFrame"].as_f64().is_some(),
+            "{performance}"
+        );
+        assert_eq!(
+            performance["gpuTimeUnavailable"],
+            Value::Null,
+            "{performance}"
+        );
+    } else {
+        assert_eq!(
+            performance["gpuTimeSampledFrames"],
+            json!(0),
+            "{performance}"
+        );
+        assert!(
+            performance["gpuTimeUnavailable"].as_str().is_some(),
+            "{performance}"
+        );
+    }
 }
 
 /// Prints the lowest per-plane PSNR against the source and against three defects (chroma one row

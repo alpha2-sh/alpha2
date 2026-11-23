@@ -27,6 +27,10 @@ pub struct FrameGpuTimes {
     /// Frames whose three timestamps were equal, as on backends that do not advance the counter
     /// across empty passes (Metal). Not counted in `sampled_frames`.
     pub flat_frames: u64,
+    /// Frames drawn in a timed submission, sampled or not.
+    pub timed_frames: u64,
+    /// Sampled frames whose timestamps were not read yet; a later take counts them.
+    pub unread_frames: u64,
 }
 
 impl FrameGpuTimes {
@@ -63,6 +67,7 @@ pub(crate) struct FrameGpuTimer {
     queries: wgpu::QuerySet,
     slots: Vec<Slot>,
     frames: AtomicU64,
+    timed_since_take: AtomicU64,
     /// Nanoseconds per timestamp tick.
     period: f32,
     totals: Mutex<FrameGpuTimes>,
@@ -103,6 +108,7 @@ impl FrameGpuTimer {
             queries,
             slots,
             frames: AtomicU64::new(0),
+            timed_since_take: AtomicU64::new(0),
             period: queue.get_timestamp_period(),
             totals: Mutex::default(),
         }
@@ -158,6 +164,7 @@ impl FrameGpuTimer {
     /// Returns a free slot for every eighth frame, or `None`.
     pub(crate) fn begin(&self) -> Option<FrameSample<'_>> {
         let frame = self.frames.fetch_add(1, Ordering::Relaxed);
+        self.timed_since_take.fetch_add(1, Ordering::Relaxed);
         if !frame.is_multiple_of(SAMPLE_EVERY) {
             return None;
         }
@@ -172,12 +179,20 @@ impl FrameGpuTimer {
     /// Totals of frames sampled since the last take, from completed maps; then resets them.
     pub(crate) fn take(&self) -> FrameGpuTimes {
         self.collect();
-        std::mem::take(
+        let mut times = std::mem::take(
             &mut *self
                 .totals
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
+        );
+        times.timed_frames = self.timed_since_take.swap(0, Ordering::Relaxed);
+        let unread = self
+            .slots
+            .iter()
+            .filter(|slot| slot.pending.load(Ordering::Acquire))
+            .count();
+        times.unread_frames = u64::try_from(unread).unwrap_or(u64::MAX);
+        times
     }
 }
 

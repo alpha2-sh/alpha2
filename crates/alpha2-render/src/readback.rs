@@ -137,6 +137,15 @@ fn plane_rows(
     Ok(region.chunks_exact(pitch).take(rows))
 }
 
+pub(crate) struct EncodedLayoutReadback {
+    buffer: ReadbackBufferLease,
+    size: RenderSize,
+    texels: TexelStaging,
+    copy_bytes: u64,
+    staging_bytes: u64,
+    canary: Canary,
+}
+
 pub(crate) struct EncodedYuv420pReadback {
     buffer: ReadbackBufferLease,
     size: RenderSize,
@@ -437,6 +446,27 @@ impl Renderer {
         encoding: YuvEncoding,
         layout: PixelLayout,
     ) -> Result<Yuv420pReadback, RenderError> {
+        let mut encoder = self.command_encoder("alpha2 texel readback encoder");
+        let readback_work = self.encode_layout_readback(target, encoding, layout, &mut encoder)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let submission = self.submit([encoder.finish()])?;
+        #[cfg(target_arch = "wasm32")]
+        self.submit([encoder.finish()])?;
+        Ok(self.complete_layout_readback(
+            readback_work,
+            #[cfg(not(target_arch = "wasm32"))]
+            submission,
+            true,
+        ))
+    }
+
+    pub(crate) fn encode_layout_readback(
+        &self,
+        target: &RenderedTexture,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<EncodedLayoutReadback, RenderError> {
         self.ensure_gpu_runs_work()?;
         self.validate_size(target.size)?;
         crate::color::check_packable(encoding)?;
@@ -456,7 +486,6 @@ impl Renderer {
         let (pitch, buffer_size) = texel_staging(target.size, texel_bytes)?;
         let image_bytes = buffer_size - CANARY_BYTES;
         let row_bytes = target.size.width * texel_bytes;
-        let mut encoder = self.command_encoder("alpha2 texel readback encoder");
         let buffer =
             self.readback_buffers
                 .acquire(self.gpu.device(), buffer_size, "alpha2 texel readback");
@@ -483,22 +512,48 @@ impl Renderer {
         );
         let canary = self
             .canaries
-            .encode(&self.gpu, &mut encoder, buffer.buffer(), image_bytes)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let submission = self.submit([encoder.finish()])?;
-        #[cfg(target_arch = "wasm32")]
-        self.submit([encoder.finish()])?;
+            .encode(&self.gpu, encoder, buffer.buffer(), image_bytes)?;
+        Ok(EncodedLayoutReadback {
+            buffer,
+            size: target.size,
+            texels: TexelStaging {
+                format: target.format,
+                pitch,
+                bytes: image_bytes,
+                layout,
+                encoding,
+            },
+            copy_bytes: u64::from(row_bytes).saturating_mul(u64::from(target.size.height)),
+            staging_bytes: buffer_size,
+            canary,
+        })
+    }
+
+    pub(crate) fn complete_layout_readback(
+        &self,
+        encoded: EncodedLayoutReadback,
+        #[cfg(not(target_arch = "wasm32"))] submission: crate::submission_clock::ClockedSubmission,
+        standalone_submission: bool,
+    ) -> Yuv420pReadback {
+        let EncodedLayoutReadback {
+            buffer,
+            size,
+            texels,
+            copy_bytes,
+            staging_bytes,
+            canary,
+        } = encoded;
         crate::diagnostics::record_readback_work(
             &self.diagnostics,
             0,
             1,
-            u64::from(row_bytes).saturating_mul(u64::from(target.size.height)),
-            true,
+            copy_bytes,
+            standalone_submission,
         );
-        Ok(Yuv420pReadback {
+        Yuv420pReadback {
             buffer,
             gpu: self.gpu.clone(),
-            size: target.size,
+            size,
             layout: Yuv420StagingLayout {
                 luma_pitch: 0,
                 chroma_pitch: 0,
@@ -506,21 +561,15 @@ impl Renderer {
                 v_offset: 0,
                 bytes: 0,
             },
-            texels: Some(Box::new(TexelStaging {
-                format: target.format,
-                pitch,
-                bytes: image_bytes,
-                layout,
-                encoding,
-            })),
+            texels: Some(Box::new(texels)),
             #[cfg(not(target_arch = "wasm32"))]
             submission,
             #[cfg(not(target_arch = "wasm32"))]
             timeout: self.gpu_wait_timeout,
-            staging_bytes: buffer_size,
+            staging_bytes,
             canary,
             mapping_requested: AtomicBool::new(false),
-        })
+        }
     }
 
     pub(crate) fn encode_yuv420p_readback(

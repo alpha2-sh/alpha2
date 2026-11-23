@@ -43,6 +43,13 @@ All notable changes to this project are documented in this file.
   t ms".
 - GPU exports to layouts other than 8-bit 4:2:0 (10-bit, 4:2:2, 4:4:4, alpha) pack each frame on
   threads kept for the process, one per core, instead of up to eight threads started per frame.
+- **Breaking:** GPU exports to those layouts render a frame and read it back in one submission
+  instead of two, sample its GPU time (`gpuRenderMsPerFrame`, `gpuPackMsPerFrame`, the pack being
+  the copy-out) and report the submit stages (`frameQueueSubmitMs` and the other stage fields).
+  `gpuTimeUnavailable` tells apart an export that drew no frame on the GPU, one that drew too few
+  for one to be sampled, and one whose samples were not read back in time. Rust:
+  `GpuFrameRenderer` gains the required `render_frame_layout_readback`, `Renderer` gains
+  `render_graph_layout_readback`, and `FrameGpuTimes` gains `timed_frames` and `unread_frames`.
 
 ### Fixed
 
