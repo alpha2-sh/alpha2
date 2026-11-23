@@ -337,3 +337,45 @@ fn a_frame_of_more_submissions_than_the_clock_keeps_still_lowers_the_rate() {
         gpu.rate().ms_per_unit_pixel()
     );
 }
+
+#[test]
+fn a_loss_after_a_split_frame_whose_submissions_each_ran_briefly_is_not_reported_hung() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    if gpu.capabilities().backend == "Gl" {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::ExactGpuCompletion,
+            "the GL backend reports a completion before a wait on it blocks"
+        );
+        return;
+    }
+    let (size, frame_ms) = {
+        let renderer = Renderer::new(gpu.clone());
+        let (effect, _) = registered(&renderer, heavy_effect());
+        let (size, _, frame_ms) =
+            with_watchdog(UNSPLIT_WATCHDOG_MS, || busy_size(&renderer, &effect));
+        (size, frame_ms)
+    };
+    let renderer = Renderer::new(gpu);
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let view = flat_source(&renderer, size);
+    with_watchdog(frame_ms, || {
+        let (frame, _) = exported_frame(&renderer, &effect, &view, size);
+        assert!(
+            frame.submissions >= 4,
+            "a frame that keeps the GPU busy for the whole {frame_ms:.1} ms watchdog is drawn in \
+             {} submission(s): {frame:?}",
+            frame.submissions
+        );
+        let longest = renderer.longest_submission().expect("timed submissions");
+        let classified = renderer.classify_loss(RenderError::GpuWorkDropped);
+        assert!(
+            matches!(classified, RenderError::GpuWorkDropped),
+            "a frame of {} submissions that ran {frame_ms:.1} ms unsplit is reported as {} \
+             submission(s) of {:.1} ms: {classified:?}",
+            frame.submissions,
+            longest.submissions,
+            longest.gpu_ms
+        );
+    });
+}

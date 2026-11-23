@@ -30,13 +30,23 @@ All notable changes to this project are documented in this file.
   and moves the content epoch only when that budget changes. The plan no longer depends on
   quality: `RenderPlan::filter_sample_limit` and `RenderGraph::compile_with_quality` are removed,
   and `RenderGraph::compile` is the one way to compile. Graph cache keys change value.
+- **Breaking:** GPU loss reports count submissions whose completions were seen together as one
+  group, whose time is their total. `SubmissionReport` and `RenderError::GpuDeviceHung` gain
+  `submissions`, and a hung group's message reads "n submissions from frame F on completed
+  together in t ms". The host's `failure.diagnostics.gpuSubmission` renames `maxMs` to `gpuMs` and
+  adds `submissions`; the browser's `lossReport` and `GpuLossReport` add `submissions`. Both
+  describe the submission that made a loss hung, else the longest recent one.
+
+### Fixed
+
+- A GPU loss after a heavy frame split into short submissions is reported `GPU_DEVICE_LOST` and
+  retried, where it was reported `GPU_DEVICE_HUNG` and not retried on the GPU. Completions one wait
+  sees together now implicate the export only when their total also ran more than twice its
+  predicted time; a loss that recurs at the same frame still stops as hung.
 - The renderer's submission clock forgets only submissions that completed. A loss again names a
   running submission however many were queued behind it, a browser's calibration and pilot draws
   are read however many submissions the frame behind them makes, and the oldest submission kept
   no longer counts its wait behind a forgotten one as GPU time.
-
-### Fixed
-
 - A GPU-resident export of a clip whose container and coded stream declare different colors no
   longer fails with "a decoded picture is ..., not the output's ...". The YUV transcode is planned
   from the color the stream itself declares (the H.264 or HEVC VUI), and a picture that still

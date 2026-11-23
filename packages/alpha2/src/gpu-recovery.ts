@@ -11,16 +11,19 @@
 /** GPU loss details, read before the lost renderer is freed. */
 export interface GpuLossReport {
   /**
-   * The longest recent submission ran for at least half the GPU watchdog, so the loss was most
-   * likely caused by this work and would recur.
+   * A recent submission ran for at least half the GPU watchdog, or submissions completed together
+   * did and ran more than twice their predicted time, so the loss was most likely caused by this
+   * work and would recur. The other fields describe that submission, else the longest.
    */
   readonly hung: boolean;
-  /** Export frame index of the longest submission, when known. */
+  /** Export frame index of the submission, the first one's for several, when known. */
   readonly frameIndex: number | null;
-  /** Timeline time of the longest submission, when known. */
+  /** Timeline time of that frame, when known. */
   readonly timeTicks: bigint | null;
-  /** GPU time of the longest recent submission. */
+  /** GPU time of the submission, or of all `submissions` together. */
   readonly gpuMs: number | null;
+  /** Submissions whose completions were seen together, so only their total is known. */
+  readonly submissions: number | null;
   /** One-line message for the user. */
   readonly message: string;
 }
@@ -132,7 +135,7 @@ export class GpuRecoveryLadder {
     if (report.hung)
       return this.#take(
         2,
-        `the GPU was lost while this work ran ${report.gpuMs ?? "?"} ms in one submission; the same work on the GPU would stop it again`,
+        `the GPU was lost after ${ranFor(report)}; the same work on the GPU would stop it again`,
       );
     if (recurred)
       return this.#take(2, "the GPU was lost again at the same frame");
@@ -186,6 +189,13 @@ export class GpuRecoveryLadder {
   }
 }
 
+function ranFor(report: Pick<GpuLossReport, "gpuMs" | "submissions">): string {
+  const ms = report.gpuMs ?? "?";
+  return report.submissions !== null && report.submissions > 1
+    ? `${report.submissions} submissions completed together in ${ms} ms`
+    : `one submission ran ${ms} ms`;
+}
+
 /**
  * Parses a wasm renderer's `lossReport` JSON, or returns a plain lost-device report with
  * `fallbackMessage` when there is none.
@@ -200,25 +210,30 @@ export function lossReportFromJson(
       frameIndex: null,
       timeTicks: null,
       gpuMs: null,
+      submissions: null,
       message: fallbackMessage,
     };
   const value = JSON.parse(json) as {
     hung?: boolean;
     gpuMs?: number | null;
+    submissions?: number | null;
     watchdogMs?: number;
     timeTicks?: string | null;
     frameIndex?: number | null;
   };
-  const hung = value.hung === true;
-  const gpuMs = typeof value.gpuMs === "number" ? value.gpuMs : null;
-  return {
-    hung,
+  const report = {
+    hung: value.hung === true,
     frameIndex: typeof value.frameIndex === "number" ? value.frameIndex : null,
     timeTicks:
       typeof value.timeTicks === "string" ? BigInt(value.timeTicks) : null,
-    gpuMs,
-    message: hung
-      ? `the GPU device hung: one submission ran ${gpuMs} ms against a ${value.watchdogMs} ms watchdog`
+    gpuMs: typeof value.gpuMs === "number" ? value.gpuMs : null,
+    submissions:
+      typeof value.submissions === "number" ? value.submissions : null,
+  };
+  return {
+    ...report,
+    message: report.hung
+      ? `the GPU device hung: ${ranFor(report)} against a ${value.watchdogMs} ms watchdog`
       : fallbackMessage,
   };
 }

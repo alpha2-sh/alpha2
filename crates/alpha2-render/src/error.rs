@@ -54,14 +54,20 @@ pub enum RenderError {
     /// work.
     GpuDeviceLost,
     /// The device was lost after a recent submission kept the GPU busy for at least half the OS
-    /// watchdog ([`alpha2_gpu::hung_threshold_ms`]). Rerunning the same work will hang again.
+    /// watchdog ([`alpha2_gpu::hung_threshold_ms`]), or submissions completed together did and
+    /// ran more than [`alpha2_gpu::MARGIN`] times their predicted time. Rerunning the same work
+    /// will hang again.
     GpuDeviceHung {
-        /// The export frame the long submission rendered, when known.
+        /// The export frame the long submission rendered, when known; for several, the first's.
         frame: Option<u64>,
         /// That frame's timeline time, in ticks, when known.
         time_ticks: Option<i64>,
-        /// How long the submission kept the GPU busy, in milliseconds.
+        /// How long the submission, or the submissions together, kept the GPU busy, in
+        /// milliseconds.
         gpu_ms: u32,
+        /// Submissions whose completions were seen together, so only their total is known; 1 for
+        /// one submission.
+        submissions: u32,
         /// The watchdog it was measured against, in milliseconds.
         watchdog_ms: u32,
     },
@@ -132,18 +138,30 @@ impl fmt::Display for RenderError {
             Self::GpuDeviceHung {
                 frame,
                 gpu_ms,
+                submissions,
                 watchdog_ms,
                 ..
             } => {
                 formatter.write_str("GPU device hung: ")?;
-                match frame {
-                    Some(frame) => write!(formatter, "frame {frame}")?,
-                    None => formatter.write_str("a submission")?,
+                match (frame, *submissions) {
+                    (Some(frame), 0 | 1) => {
+                        write!(formatter, "frame {frame} ran {gpu_ms} ms in one submission")?;
+                    }
+                    (None, 0 | 1) => write!(formatter, "a submission ran {gpu_ms} ms")?,
+                    (Some(frame), submissions) => write!(
+                        formatter,
+                        "{submissions} submissions from frame {frame} on completed together in \
+                         {gpu_ms} ms"
+                    )?,
+                    (None, submissions) => write!(
+                        formatter,
+                        "{submissions} submissions completed together in {gpu_ms} ms"
+                    )?,
                 }
                 write!(
                     formatter,
-                    " ran {gpu_ms} ms in one submission against a {watchdog_ms} ms watchdog; this \
-                     work stops the GPU, so it is not retried on the GPU"
+                    " against a {watchdog_ms} ms watchdog; this work stops the GPU, so it is not \
+                     retried on the GPU"
                 )
             }
             Self::UnsupportedHdr => {

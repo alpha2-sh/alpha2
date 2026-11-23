@@ -244,6 +244,12 @@ impl LossClassifier {
     pub fn longest_submission(&self) -> Option<crate::SubmissionReport> {
         self.0.longest()
     }
+
+    /// The recent submission that makes [`Self::classify`] report a loss as hung, if any.
+    #[must_use]
+    pub fn hung_submission(&self) -> Option<crate::SubmissionReport> {
+        self.0.hung()
+    }
 }
 
 struct SubmittedBuffers {
@@ -495,11 +501,18 @@ impl Renderer {
         self.submission_clock.longest()
     }
 
+    /// The recent submission that makes [`Self::classify_loss`] report a loss as hung, if any.
+    #[must_use]
+    pub fn hung_submission(&self) -> Option<crate::SubmissionReport> {
+        self.submission_clock.hung()
+    }
+
     /// Classifies `error` using this renderer's submission times.
     ///
     /// A device loss or timeout becomes [`RenderError::GpuDeviceHung`] when a recent submission
-    /// ran for at least half the GPU watchdog ([`alpha2_gpu::hung_threshold_ms`]). Other errors
-    /// pass through.
+    /// ran for at least half the GPU watchdog ([`alpha2_gpu::hung_threshold_ms`]), or submissions
+    /// completed together did and ran more than [`alpha2_gpu::MARGIN`] times their predicted
+    /// time. Other errors pass through.
     #[must_use]
     pub fn classify_loss(&self, error: RenderError) -> RenderError {
         self.loss_classifier().classify(error)

@@ -107,7 +107,7 @@ fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
     let submission = &error["failure"]["diagnostics"]["gpuSubmission"];
     assert_eq!(submission["watchdogMs"], 1, "{answer}");
     assert!(
-        submission["maxMs"].as_f64().is_some_and(|ms| ms >= 0.0),
+        submission["gpuMs"].as_f64().is_some_and(|ms| ms >= 0.0),
         "{answer}"
     );
     assert!(submission["predictedMs"].as_f64().is_some(), "{answer}");

@@ -1314,11 +1314,15 @@ impl Host {
                 error.code = "GPU_DEVICE_HUNG";
                 error.message = format!("{hung} ({})", error.message);
             }
-            if let Some(longest) = renderer.longest_submission() {
+            let hung = (error.code == "GPU_DEVICE_HUNG")
+                .then(|| renderer.hung_submission())
+                .flatten();
+            if let Some(longest) = hung.or_else(|| renderer.longest_submission()) {
                 facts.insert(
                     "gpuSubmission".to_owned(),
                     json!({
-                        "maxMs": (longest.gpu_ms * 10.0).round() / 10.0,
+                        "gpuMs": (longest.gpu_ms * 10.0).round() / 10.0,
+                        "submissions": longest.submissions,
                         "watchdogMs": alpha2_gpu::watchdog_ms(),
                         "frameIndex": longest.frame.and_then(|frame| frame.frame_index),
                         "effects": longest.effects,

@@ -346,6 +346,7 @@ fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
             frame,
             time_ticks,
             gpu_ms,
+            submissions,
             watchdog_ms,
         } = renderer.classify_loss(lost)
         else {
@@ -354,6 +355,7 @@ fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
         assert_eq!(frame, Some(2));
         assert_eq!(time_ticks, Some(8_000));
         assert!(gpu_ms >= watchdog / 2, "{gpu_ms}");
+        assert_eq!(submissions, 1);
         assert_eq!(watchdog_ms, watchdog);
     }
     assert_eq!(

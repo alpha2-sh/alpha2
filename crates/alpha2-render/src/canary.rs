@@ -234,6 +234,7 @@ pub(crate) fn hung_error(report: &crate::SubmissionReport) -> RenderError {
         // Whole milliseconds; overflowing `u32` would take 49 days.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         gpu_ms: report.gpu_ms.round().clamp(0.0, f64::from(u32::MAX)) as u32,
+        submissions: report.submissions,
         watchdog_ms: alpha2_gpu::watchdog_ms(),
     }
 }

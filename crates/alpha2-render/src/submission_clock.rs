@@ -1,10 +1,11 @@
-//! How long each recent renderer submission kept the GPU busy.
+//! How long recent renderer submissions kept the GPU busy.
 //!
 //! Windows resets a GPU whose submission exceeds its timeout, and a reset device's DX12 fence
 //! reads complete, so the loss looks like dropped work. The submissions' run times tell the two
 //! apart. Each submission's GPU time runs from the later of its submit and the previous
 //! submission's end to its own completion callback, so queueing is excluded. Callback latency
-//! (poll or event loop) is small beside [`alpha2_gpu::hung_threshold_ms`].
+//! (poll or event loop) is small beside [`alpha2_gpu::hung_threshold_ms`]. Completions one poll
+//! delivers together tell only their total, so such submissions are judged as one group.
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -24,39 +25,178 @@ pub struct FrameMark {
     pub frame_index: Option<u64>,
 }
 
-/// The longest recent submission and what it rendered.
+/// The recent submission, or group of submissions completed together, that kept the GPU busy
+/// longest, and what it rendered.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubmissionReport {
-    /// GPU time in milliseconds; for one still running, the time so far.
+    /// GPU time in milliseconds of all `submissions` together; for one still running, the time so
+    /// far.
     pub gpu_ms: f64,
-    /// The frame it rendered, when the caller marked one.
+    /// Submissions whose completions were seen together, so only their total is known; 1 for a
+    /// submission timed on its own.
+    pub submissions: u32,
+    /// The frame the first of them rendered, when the caller marked one.
     pub frame: Option<FrameMark>,
-    /// The effects it ran, as `id@version`.
+    /// The effects they ran, as `id@version`.
     pub effects: Vec<String>,
-    /// Predicted GPU time in milliseconds, when the frame was planned.
+    /// Their predicted GPU time in milliseconds, when their frames were planned.
     pub predicted_ms: Option<f64>,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct Stamp {
+    at: Instant,
+    seen_as_it_happened: bool,
+    recorded_when_seen: u64,
+}
+
+impl Stamp {
+    fn seen_with(&self, other: &Self) -> bool {
+        !self.seen_as_it_happened && self.recorded_when_seen == other.recorded_when_seen
+    }
 }
 
 #[derive(Debug)]
 struct Entry {
     submitted_at: Instant,
-    done_at: Option<Instant>,
+    done: Option<Stamp>,
     frame: Option<FrameMark>,
     effects: Vec<String>,
     predicted_ms: Option<f64>,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+enum Before {
+    #[default]
+    Nothing,
+    Completed(Stamp),
+    Running,
+}
+
+impl Before {
+    fn start_of(self, entry: &Entry) -> Instant {
+        match self {
+            Self::Completed(stamp) => stamp.at.max(entry.submitted_at),
+            Self::Nothing | Self::Running => entry.submitted_at,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct Group {
+    first: usize,
+    len: usize,
+    gpu_ms: f64,
 }
 
 #[derive(Debug, Default)]
 struct ClockState {
     /// Sequence number of `entries[0]`.
     first: u64,
-    last_forgotten_done_at: Option<Instant>,
+    forgotten: Before,
     recorded: u64,
     completed: u64,
     watched: Vec<(u64, PreviousCompletion)>,
     entries: VecDeque<Entry>,
     frame: Option<FrameMark>,
     effects: Vec<String>,
+}
+
+impl ClockState {
+    fn group_at(&self, first: usize) -> Option<(usize, Stamp)> {
+        let mut last = first;
+        let mut end = self.entries.get(first)?.done?;
+        while let Some(next) = self.entries.get(last + 1).and_then(|entry| entry.done)
+            && end.seen_with(&next)
+        {
+            last += 1;
+            end = next;
+        }
+        Some((last, end))
+    }
+
+    fn groups(&self, now: Instant) -> Vec<Group> {
+        let mut groups = Vec::new();
+        let mut before = self.forgotten;
+        let mut first = 0;
+        while let Some(entry) = self.entries.get(first) {
+            let start = before.start_of(entry);
+            let Some((last, end)) = self.group_at(first) else {
+                groups.push(Group {
+                    first,
+                    len: 1,
+                    gpu_ms: milliseconds(now.saturating_duration_since(start)),
+                });
+                break;
+            };
+            groups.push(Group {
+                first,
+                len: last - first + 1,
+                gpu_ms: milliseconds(end.at.saturating_duration_since(start)),
+            });
+            before = Before::Completed(end);
+            first = last + 1;
+        }
+        groups
+    }
+
+    fn members(&self, group: Group) -> impl Iterator<Item = &Entry> {
+        self.entries.range(group.first..group.first + group.len)
+    }
+
+    fn predicted_ms(&self, group: Group) -> Option<f64> {
+        self.members(group)
+            .filter_map(|entry| entry.predicted_ms)
+            .reduce(|a, b| a + b)
+    }
+
+    fn proves_a_hang(&self, group: Group, threshold_ms: f64) -> bool {
+        group.gpu_ms >= threshold_ms
+            && (group.len == 1
+                || group.gpu_ms > alpha2_gpu::MARGIN * self.predicted_ms(group).unwrap_or(0.0))
+    }
+
+    fn report(&self, group: Group) -> SubmissionReport {
+        let mut effects: Vec<String> = Vec::new();
+        for effect in self.members(group).flat_map(|entry| &entry.effects) {
+            if !effects.contains(effect) {
+                effects.push(effect.clone());
+            }
+        }
+        SubmissionReport {
+            gpu_ms: group.gpu_ms,
+            submissions: u32::try_from(group.len).unwrap_or(u32::MAX),
+            frame: self.entries[group.first].frame,
+            effects,
+            predicted_ms: self.predicted_ms(group),
+        }
+    }
+
+    fn forget_front(&mut self, count: usize) {
+        for _ in 0..count {
+            let Some(forgotten) = self.entries.pop_front() else {
+                return;
+            };
+            self.forgotten = forgotten.done.map_or(Before::Running, Before::Completed);
+            self.first += 1;
+        }
+    }
+
+    fn forget(&mut self) {
+        loop {
+            let kept = self.entries.len();
+            if kept > MOST_SUBMISSIONS_KEPT {
+                self.forget_front(kept - MOST_SUBMISSIONS_KEPT);
+                continue;
+            }
+            match self.group_at(0) {
+                Some((last, _)) if kept - (last + 1) >= RECENT_SUBMISSIONS_KEPT => {
+                    self.forget_front(last + 1);
+                }
+                _ => return,
+            }
+        }
+    }
 }
 
 /// The renderer's recent submissions and when each finished.
@@ -108,22 +248,12 @@ impl SubmissionClock {
         let frame = state.frame;
         state.entries.push_back(Entry {
             submitted_at: at,
-            done_at: None,
+            done: None,
             frame,
             effects,
             predicted_ms,
         });
-        while state.entries.len() > MOST_SUBMISSIONS_KEPT
-            || (state.entries.len() > RECENT_SUBMISSIONS_KEPT
-                && state
-                    .entries
-                    .front()
-                    .is_some_and(|entry| entry.done_at.is_some()))
-        {
-            let forgotten = state.entries.pop_front();
-            state.last_forgotten_done_at = forgotten.and_then(|entry| entry.done_at);
-            state.first += 1;
-        }
+        state.forget();
         Recorded {
             sequence: state.recorded - 1,
             queue_idle,
@@ -149,8 +279,14 @@ impl SubmissionClock {
         let Ok(position) = usize::try_from(position) else {
             return;
         };
-        for entry in state.entries.iter_mut().take(position + 1) {
-            entry.done_at.get_or_insert(at);
+        let recorded_when_seen = state.recorded;
+        let last = position.min(state.entries.len().saturating_sub(1));
+        for (index, entry) in state.entries.iter_mut().take(position + 1).enumerate() {
+            entry.done.get_or_insert(Stamp {
+                at,
+                seen_as_it_happened: as_it_happens && index == last,
+                recorded_when_seen,
+            });
         }
     }
 
@@ -158,32 +294,31 @@ impl SubmissionClock {
     /// up to `now`, later unfinished ones not at all.
     fn spans(state: &ClockState, now: Instant) -> Vec<(f64, &Entry)> {
         let mut spans = Vec::new();
-        let mut previous_done = state.last_forgotten_done_at;
+        let mut before = state.forgotten;
         for entry in &state.entries {
-            let start =
-                previous_done.map_or(entry.submitted_at, |done| done.max(entry.submitted_at));
-            let Some(done) = entry.done_at else {
+            let start = before.start_of(entry);
+            let Some(done) = entry.done else {
                 spans.push((milliseconds(now.saturating_duration_since(start)), entry));
                 break;
             };
-            spans.push((milliseconds(done.saturating_duration_since(start)), entry));
-            previous_done = Some(done);
+            spans.push((
+                milliseconds(done.at.saturating_duration_since(start)),
+                entry,
+            ));
+            before = Before::Completed(done);
         }
         spans
     }
 
-    /// The kept submission with the longest GPU time, counting a running one up to `now`.
+    /// The kept submission or group with the longest GPU time, counting a running one up to
+    /// `now`.
     pub(crate) fn longest_at(&self, now: Instant) -> Option<SubmissionReport> {
         let state = self.state();
-        Self::spans(&state, now)
+        state
+            .groups(now)
             .into_iter()
-            .max_by(|(a, _), (b, _)| a.total_cmp(b))
-            .map(|(gpu_ms, entry)| SubmissionReport {
-                gpu_ms,
-                frame: entry.frame,
-                effects: entry.effects.clone(),
-                predicted_ms: entry.predicted_ms,
-            })
+            .max_by(|a, b| a.gpu_ms.total_cmp(&b.gpu_ms))
+            .map(|group| state.report(group))
     }
 
     /// Summed GPU time of `sequences` once all finished and are still kept. Late completions shift
@@ -197,7 +332,7 @@ impl SubmissionClock {
         for (position, (ms, entry)) in spans.into_iter().enumerate() {
             let sequence = first + u64::try_from(position).unwrap_or(u64::MAX);
             if sequences.contains(&sequence) {
-                entry.done_at?;
+                entry.done?;
                 total += ms;
                 counted += 1;
             }
@@ -210,11 +345,19 @@ impl SubmissionClock {
         self.longest_at(Instant::now())
     }
 
-    /// The longest recent submission if it ran at least [`alpha2_gpu::hung_threshold_ms`], which
-    /// implicates this renderer's own work in a loss.
+    fn hung_at(&self, now: Instant, threshold_ms: f64) -> Option<SubmissionReport> {
+        let state = self.state();
+        state
+            .groups(now)
+            .into_iter()
+            .filter(|group| state.proves_a_hang(*group, threshold_ms))
+            .max_by(|a, b| a.gpu_ms.total_cmp(&b.gpu_ms))
+            .map(|group| state.report(group))
+    }
+
+    /// The longest kept submission or group that implicates this renderer's own work in a loss.
     pub(crate) fn hung(&self) -> Option<SubmissionReport> {
-        self.longest()
-            .filter(|report| report.gpu_ms >= f64::from(alpha2_gpu::hung_threshold_ms()))
+        self.hung_at(Instant::now(), f64::from(alpha2_gpu::hung_threshold_ms()))
     }
 }
 
@@ -353,9 +496,9 @@ mod tests {
         let first = clock.record(at(0), None, false).sequence;
         let second = clock.record(at(0), None, false).sequence;
         let third = clock.record(at(0), None, false).sequence;
-        clock.complete(first, at(10), false);
-        clock.complete(second, at(400), false);
-        clock.complete(third, at(405), false);
+        clock.complete(first, at(10), true);
+        clock.complete(second, at(400), true);
+        clock.complete(third, at(405), true);
         let longest = clock.longest_at(at(1_000)).expect("submissions");
         assert!((longest.gpu_ms - 390.0).abs() < 0.5, "{longest:?}");
         // Submitted after the queue went idle, so it starts at its own submit.
@@ -392,16 +535,12 @@ mod tests {
         let first = clock.record(at(10), Some(100.0), false).sequence;
         let second = clock.record(at(10), Some(100.0), false).sequence;
         assert_eq!(clock.gpu_ms(first..second + 1), None, "not finished");
-        // Both seen at 210 ms: the first takes the whole span, and the sum is unchanged.
         clock.complete(second, at(210), false);
         let total = clock.gpu_ms(first..second + 1).expect("finished");
         assert!((total - 200.0).abs() < 0.5, "{total}");
-        assert_eq!(
-            clock
-                .longest_at(at(300))
-                .and_then(|report| report.predicted_ms),
-            Some(100.0)
-        );
+        let report = clock.longest_at(at(300)).expect("kept");
+        assert_eq!(report.submissions, 2, "{report:?}");
+        assert_eq!(report.predicted_ms, Some(200.0));
     }
 
     #[test]
@@ -579,5 +718,106 @@ mod tests {
         let state = clock.state();
         assert_eq!(state.entries.len(), MOST_SUBMISSIONS_KEPT);
         assert_eq!(state.first, 1);
+    }
+
+    #[test]
+    fn submissions_completed_together_are_one_group_judged_against_their_prediction() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let sequences: Vec<u64> = (0..10)
+            .map(|_| clock.record(at(0), Some(100.0), false).sequence)
+            .collect();
+        for sequence in &sequences {
+            clock.complete(*sequence, at(1_000), *sequence == sequences[9]);
+        }
+        let report = clock.longest_at(at(1_001)).expect("kept");
+        assert_eq!(report.submissions, 10, "{report:?}");
+        assert!((report.gpu_ms - 1_000.0).abs() < 0.5, "{report:?}");
+        assert_eq!(report.predicted_ms, Some(1_000.0));
+        assert_eq!(clock.hung_at(at(1_001), 1_000.0), None);
+        let late: Vec<u64> = (0..10)
+            .map(|_| clock.record(at(1_000), Some(100.0), false).sequence)
+            .collect();
+        for sequence in &late {
+            clock.complete(*sequence, at(3_001), false);
+        }
+        let hung = clock
+            .hung_at(at(3_002), 1_000.0)
+            .expect("past twice its prediction");
+        assert_eq!(hung.submissions, 10, "{hung:?}");
+        assert!((hung.gpu_ms - 2_001.0).abs() < 0.5, "{hung:?}");
+    }
+
+    #[test]
+    fn a_submission_timed_on_its_own_is_hung_at_the_threshold_whatever_its_prediction() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let alone = clock.record(at(0), Some(900.0), false).sequence;
+        clock.complete(alone, at(1_000), true);
+        let hung = clock.hung_at(at(1_001), 1_000.0).expect("hung");
+        assert_eq!(hung.submissions, 1, "{hung:?}");
+        assert_eq!(clock.hung_at(at(1_001), 1_001.0), None);
+    }
+
+    #[test]
+    fn submissions_completed_together_without_a_prediction_are_hung_at_the_threshold() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let first = clock.record(at(0), None, false).sequence;
+        let second = clock.record(at(0), None, false).sequence;
+        clock.complete(first, at(1_000), false);
+        clock.complete(second, at(1_000), false);
+        let hung = clock.hung_at(at(1_001), 1_000.0).expect("hung");
+        assert_eq!(hung.submissions, 2, "{hung:?}");
+    }
+
+    #[test]
+    fn completions_seen_after_a_later_submit_or_as_they_happened_are_not_grouped() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let first = clock.record(at(0), Some(1.0), false).sequence;
+        let second = clock.record(at(0), Some(1.0), false).sequence;
+        clock.complete(first, at(400), true);
+        clock.complete(second, at(400), false);
+        let third = clock.record(at(0), Some(1.0), false).sequence;
+        let fourth = clock.record(at(401), Some(1.0), false).sequence;
+        clock.complete(third, at(402), false);
+        let _ = clock.record(at(403), Some(1.0), false);
+        clock.complete(fourth, at(1_402), false);
+        let report = clock.longest_at(at(1_403)).expect("kept");
+        assert_eq!(report.submissions, 1, "{report:?}");
+        assert!((report.gpu_ms - 1_000.0).abs() < 0.5, "{report:?}");
+        assert!(clock.hung_at(at(1_403), 1_000.0).is_some());
+    }
+
+    #[test]
+    fn a_group_of_completions_is_forgotten_whole_once_enough_later_submissions_are_kept() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let together = RECENT_SUBMISSIONS_KEPT + 44;
+        let sequences: Vec<u64> = (0..together)
+            .map(|_| clock.record(at(0), Some(1.0), false).sequence)
+            .collect();
+        for sequence in &sequences {
+            clock.complete(*sequence, at(5_000), false);
+        }
+        for later in 1..RECENT_SUBMISSIONS_KEPT {
+            let sequence = clock.record(at(5_000), None, false).sequence;
+            clock.complete(sequence, at(5_000), true);
+            assert_eq!(clock.state().entries.len(), together + later);
+        }
+        let report = clock.longest_at(at(5_001)).expect("kept");
+        assert_eq!(
+            report.submissions,
+            u32::try_from(together).expect("fits"),
+            "{report:?}"
+        );
+        let _ = clock.record(at(5_000), None, false);
+        assert_eq!(clock.state().entries.len(), RECENT_SUBMISSIONS_KEPT);
     }
 }
