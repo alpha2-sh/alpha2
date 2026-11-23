@@ -464,3 +464,29 @@ fn a_longer_chain_creates_no_more_textures_when_no_target_fits_the_idle_budget()
         "textures a warm frame creates, eight effects against two"
     );
 }
+
+#[test]
+fn a_texture_budget_the_gpu_memory_cap_lowers_is_reported() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let mib = 1024 * 1024;
+    let reduced = |requested: u64, applied: u64| {
+        vec![crate::CapabilityDiagnostic::TextureBudgetReduced { requested, applied }]
+    };
+    assert_eq!(renderer.diagnostics().degradations, Vec::new());
+
+    assert!(renderer.set_gpu_memory_budget(Some(512 * mib)));
+    assert_eq!(
+        renderer.diagnostics().degradations,
+        reduced(256 * mib, 128 * mib),
+        "the default budget, lowered at start-up"
+    );
+    renderer.set_texture_budget_bytes(512 * mib);
+    assert_eq!(
+        renderer.diagnostics().degradations,
+        reduced(512 * mib, 128 * mib),
+        "an export's budget"
+    );
+    renderer.set_texture_budget_bytes(64 * mib);
+    assert_eq!(renderer.diagnostics().degradations, Vec::new());
+}

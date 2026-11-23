@@ -55,6 +55,10 @@ All notable changes to this project are documented in this file.
   beside the least the encoder side needs, they are kept (ProRes 4444 at 3840x2160 under the
   default budget now keeps two frames in flight and no queued frame, where it kept one and one).
   A pinned encode queue depth (`ALPHA2_ENCODE_QUEUE_DEPTH`) still keeps its slots first.
+- When the cap at a quarter of the GPU memory budget lowers a texture budget the caller set (an
+  export's or a preview's, not only the start-up default), `RenderDiagnostics::degradations`
+  reports `CapabilityDiagnostic::TextureBudgetReduced`, and `alpha2-host` prints the requested and
+  applied budgets once per change.
 
 ### Fixed
 

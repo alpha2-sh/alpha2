@@ -17,6 +17,7 @@ pub struct Renderer {
     pub(crate) upload_textures: crate::Shared<crate::pool::UploadTexturePool>,
     /// Device memory budget in bytes, 0 when unknown.
     pub(crate) gpu_memory_budget: std::sync::atomic::AtomicU64,
+    requested_texture_budget: std::sync::atomic::AtomicU64,
     pub(crate) readback_buffers: crate::Shared<crate::pool::ReadbackBufferPool>,
     pub(crate) uniform_buffers: crate::Shared<crate::uniform::UniformBufferPool>,
     pub(crate) retirement: crate::Shared<crate::retire::Retirement>,
@@ -349,18 +350,22 @@ impl Renderer {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             }));
+        let textures = crate::Shared::new(crate::pool::TexturePool::new(crate::Shared::clone(
+            &retirement,
+        )));
+        let requested_texture_budget =
+            std::sync::atomic::AtomicU64::new(textures.stats().budget_bytes);
         Self {
             gpu,
             blend_space: BlendSpace::default(),
             effects: std::sync::RwLock::default(),
             effect_resources: std::sync::RwLock::default(),
-            textures: crate::Shared::new(crate::pool::TexturePool::new(crate::Shared::clone(
-                &retirement,
-            ))),
+            textures,
             upload_textures: crate::Shared::new(crate::pool::UploadTexturePool::new(
                 crate::Shared::clone(&retirement),
             )),
             gpu_memory_budget: std::sync::atomic::AtomicU64::new(0),
+            requested_texture_budget,
             readback_buffers: crate::Shared::new(crate::pool::ReadbackBufferPool::new(
                 crate::Shared::clone(&retirement),
             )),
@@ -982,7 +987,12 @@ impl Renderer {
 
     /// Sets the byte budget for idle intermediate textures beyond what recent frames had in use,
     /// evicting down to it now.
+    ///
+    /// The budget is capped at a quarter of [`Self::gpu_memory_budget`]; a reduction is reported
+    /// as [`crate::CapabilityDiagnostic::TextureBudgetReduced`].
     pub fn set_texture_budget_bytes(&self, budget_bytes: u64) {
+        self.requested_texture_budget
+            .store(budget_bytes, std::sync::atomic::Ordering::Relaxed);
         self.textures
             .set_budget(budget_bytes.min(self.pool_budget_cap()));
     }
@@ -1104,16 +1114,25 @@ impl Renderer {
     }
 
     fn degradations(&self) -> Vec<crate::CapabilityDiagnostic> {
+        let mut degradations = Vec::new();
+        let requested = self
+            .requested_texture_budget
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let applied = self.textures.stats().budget_bytes;
+        if requested > applied {
+            degradations
+                .push(crate::CapabilityDiagnostic::TextureBudgetReduced { requested, applied });
+        }
         let quality = self.quality_state();
         let (requested, applied) = (
             quality.requested_filter_samples,
             quality.applied.max_filter_samples,
         );
         if requested > applied {
-            vec![crate::CapabilityDiagnostic::FilterSamplesReduced { requested, applied }]
-        } else {
-            Vec::new()
+            degradations
+                .push(crate::CapabilityDiagnostic::FilterSamplesReduced { requested, applied });
         }
+        degradations
     }
 
     /// Returns a stable snapshot for telemetry or benchmark output.

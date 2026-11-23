@@ -7,7 +7,8 @@ use alpha2_gpu::{Capabilities, CapabilityTier, IntermediateFormat};
 pub enum CapabilityDiagnostic {
     /// Half-float filtering is unavailable; the renderer uses normalized RGBA8.
     Rgba8Intermediate,
-    /// Caller memory pressure reduced the idle texture budget.
+    /// Caller memory pressure, or the cap at a quarter of the GPU memory budget, reduced the idle
+    /// texture budget.
     TextureBudgetReduced {
         /// Original caller request.
         requested: u64,

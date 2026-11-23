@@ -1025,3 +1025,34 @@ fn a_ten_bit_rgb_source_exports_its_colour_on_both_renderers() {
         }
     }
 }
+
+#[test]
+fn a_texture_budget_the_gpu_memory_cap_lowers_is_reported_once_per_change() {
+    let _lock = gpu_test_lock();
+    let host = create_gpu_test_host(VideoDecodePolicy::Software).expect("GPU host");
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&lines);
+    alpha2_os::set_diagnostic_sink(Some(std::sync::Arc::new(move |line: &str| {
+        if line.contains("texture budget:") {
+            kept.lock().expect("lines").push(line.to_owned());
+        }
+    })));
+    let mib = 1024 * 1024;
+    let renderer = host.gpu_renderer();
+    renderer.set_gpu_memory_budget(Some(1024 * mib));
+    renderer.set_texture_budget_bytes(512 * mib);
+    host.response_metadata(0.0);
+    host.response_metadata(0.0);
+    renderer.set_texture_budget_bytes(64 * mib);
+    host.response_metadata(0.0);
+    renderer.set_texture_budget_bytes(512 * mib);
+    host.response_metadata(0.0);
+    alpha2_os::set_diagnostic_sink(None);
+    let expected = format!(
+        "alpha2-host texture budget: {} bytes requested, held to {}, a quarter of the GPU memory \
+         budget",
+        512 * mib,
+        256 * mib
+    );
+    assert_eq!(*lines.lock().expect("lines"), [expected.clone(), expected]);
+}

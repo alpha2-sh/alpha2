@@ -111,6 +111,7 @@ pub struct HostDevice {
     /// The result-cache budget each rendering request asked for, by its cache scope; the
     /// renderer's budget is their sum.
     cache_budgets: std::sync::Mutex<HashMap<u64, u64>>,
+    reported_texture_budget: std::sync::Mutex<Option<(u64, u64)>>,
     /// Runtime effects and effect resources, held by the requests that use them.
     pub(crate) registrations: crate::registrations::Registrations,
     /// Blocks this device's drop forever when a test asks, as on a device that never goes idle.
@@ -315,6 +316,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -340,6 +342,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -365,6 +368,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -390,6 +394,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -552,6 +557,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -3391,6 +3397,32 @@ impl Host {
         })
     }
 
+    fn report_changed_texture_budget(&self, degradations: &[alpha2_render::CapabilityDiagnostic]) {
+        let reduced = degradations
+            .iter()
+            .find_map(|degradation| match degradation {
+                alpha2_render::CapabilityDiagnostic::TextureBudgetReduced {
+                    requested,
+                    applied,
+                } => Some((*requested, *applied)),
+                _ => None,
+            });
+        let mut reported = self
+            .reported_texture_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *reported == reduced {
+            return;
+        }
+        *reported = reduced;
+        if let Some((requested, applied)) = reduced {
+            alpha2_os::diagnostic!(
+                "alpha2-host texture budget: {requested} bytes requested, held to {applied}, a \
+                 quarter of the GPU memory budget"
+            );
+        }
+    }
+
     pub fn response_metadata(&self, render_ms: f64) -> Value {
         let RendererBackend::Gpu(renderer) = &self.renderer else {
             let adapter = self.renderer.adapter();
@@ -3416,6 +3448,7 @@ impl Host {
             });
         };
         let diagnostics = renderer.diagnostics();
+        self.report_changed_texture_budget(&diagnostics.degradations);
         let ffmpeg = ffmpeg_runtime_identity();
         json!({
             "renderMs": render_ms,
