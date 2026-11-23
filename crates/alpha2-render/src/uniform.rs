@@ -29,13 +29,6 @@ pub(crate) const fn float_uniform_bytes(values: usize) -> u64 {
 const MAX_IDLE_UNIFORM_BUFFERS: usize = 64;
 const MAX_IDLE_UNIFORM_BYTES: u64 = 4 * 1024 * 1024;
 
-pub(crate) fn f32_bytes<const N: usize>(values: [f32; N]) -> Vec<u8> {
-    values
-        .into_iter()
-        .flat_map(f32::to_ne_bytes)
-        .collect::<Vec<_>>()
-}
-
 /// Allocation and retention counters for submission-scoped uniform arenas.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct UniformBufferPoolStats {

@@ -2,11 +2,13 @@ use std::collections::HashSet;
 use web_time::Instant;
 
 use crate::composite::CompositeTarget;
+use crate::frame_gpu_time::FrameSample;
 use crate::graph::{GraphError, RenderCacheKey, RenderGraph, RenderNode, RenderNodeId};
 use crate::graph_cache::{renderer_cache_key, renderer_node_key};
-use crate::prepared_frame::PreparedNode;
+use crate::prepared_frame::{FramePack, PreparedNode};
 use crate::runtime_effect::{EffectPass, PendingEffectTiming};
 use crate::uniform::UniformArenaLease;
+use crate::yuv::SourceWorkTicket;
 use crate::{
     CompositeLayer, EffectId, EffectKind, RenderedTexture, Renderer, ShaderDiagnostics,
     WarmupReport,
@@ -26,12 +28,12 @@ pub(crate) struct EncodedGraph {
 }
 
 impl EncodedGraph {
-    pub(crate) fn texture(&self) -> &RenderedTexture {
-        &self.texture
-    }
-
     pub(crate) fn flush_uniforms(&self, queue: &wgpu::Queue) {
         self.uniforms.flush(queue);
+    }
+
+    pub(crate) fn output_and_uniforms(&mut self) -> (&RenderedTexture, &mut UniformArenaLease) {
+        (&self.texture, &mut self.uniforms)
     }
 }
 
@@ -121,7 +123,8 @@ impl Renderer {
     #[allow(clippy::too_many_lines)]
     pub fn execute_graph(&self, graph: &RenderGraph<'_>) -> Result<RenderedTexture, GraphError> {
         let mut command_encoder = self.command_encoder("alpha2 render graph encoder");
-        let graph_work = self.encode_graph(graph, &mut command_encoder)?;
+        let graph_work =
+            self.encode_graph(graph, &mut command_encoder, &[], FramePack::Nothing, None)?;
         graph_work.flush_uniforms(self.gpu.queue());
         self.submit([command_encoder.finish()])
             .map_err(GraphError::Render)?;
@@ -133,6 +136,9 @@ impl Renderer {
         &self,
         graph: &RenderGraph<'_>,
         encoder: &mut crate::renderer::RenderEncoder,
+        sources: &[SourceWorkTicket<'_>],
+        pack: FramePack,
+        sample: Option<&FrameSample<'_>>,
     ) -> Result<EncodedGraph, GraphError> {
         self.validate_size(graph.size)?;
         let plan = graph.compile()?;
@@ -141,11 +147,16 @@ impl Renderer {
         }
         let format = self.intermediate_format();
         let prepared = self.prepare_frame(graph, &plan.order);
-        let uniform_alignment = u64::from(self.limits.min_uniform_buffer_offset_alignment.max(1));
         let mut uniforms = self.uniform_buffers.acquire(
             self.gpu.device(),
-            prepared.uniform_capacity(&plan.order, uniform_alignment),
+            prepared.uniform_capacity(sources, &plan.order, pack, self.uniform_alignment()),
         );
+        for work in sources {
+            work.encode(self, encoder, &mut uniforms)?;
+        }
+        if let Some(sample) = sample {
+            sample.graph_start(encoder);
+        }
         let mut outputs: Vec<Option<RenderedTexture>> =
             (0..graph.nodes.len()).map(|_| None).collect();
         let blend_space = graph.blend_space.unwrap_or(self.blend_space).shader_value();

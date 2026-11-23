@@ -1,6 +1,7 @@
 use std::time::Duration;
 use web_time::Instant;
 
+use crate::prepared_frame::FramePack;
 use crate::yuv::SourceWorkTicket;
 use crate::{
     GraphError, PendingSourceWork, RenderError, RenderGraph, RenderedTexture, Renderer,
@@ -91,13 +92,16 @@ impl Renderer {
         let frame = self.frame_lock.hold();
         let mut command_encoder = self.command_encoder("alpha2 frame encoder");
         let source_work = begin_source_work(&frame, sources);
-        for work in &source_work {
-            work.encode(&mut command_encoder);
-        }
         let graph_work = self
-            .encode_graph(graph, &mut command_encoder)
+            .encode_graph(
+                graph,
+                &mut command_encoder,
+                &source_work,
+                FramePack::Nothing,
+                None,
+            )
             .map_err(GraphError::into_render_error)?;
-        stage_source_submissions(self.gpu.queue(), &source_work)?;
+        stage_source_submissions(&source_work)?;
         graph_work.flush_uniforms(self.gpu.queue());
         // A rejected submission returns before anything of the frame is kept.
         self.submit([command_encoder.finish()])?;
@@ -199,30 +203,30 @@ impl Renderer {
         let mut command_encoder = self.command_encoder("alpha2 render and NV12 pack encoder");
         self.check_submitted_work()?;
         let source_work = begin_source_work(&frame, sources);
-        for work in &source_work {
-            work.encode(&mut command_encoder);
-        }
         let sample = self
             .frame_gpu_timer()
             .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
-        if let Some(sample) = &sample {
-            sample.graph_start(&mut command_encoder);
-        }
-        let graph_work = self
-            .encode_graph(graph, &mut command_encoder)
+        let mut graph_work = self
+            .encode_graph(
+                graph,
+                &mut command_encoder,
+                &source_work,
+                FramePack::Nv12,
+                sample.as_ref(),
+            )
             .map_err(GraphError::into_render_error)?;
         if let Some(sample) = &sample {
             sample.graph_end(&mut command_encoder);
         }
-        let pack =
-            self.encode_nv12_pack(graph_work.texture(), planes, encoding, &mut command_encoder)?;
+        let (output, uniforms) = graph_work.output_and_uniforms();
+        self.encode_nv12_pack_into(output, planes, encoding, &mut command_encoder, uniforms)?;
         if let Some(sample) = &sample {
             sample.pack_end(&mut command_encoder);
         }
         // No readback, so the canary goes in a buffer of its own.
         let (canary_buffer, canary) = self.canaries.encode_own(&self.gpu, &mut command_encoder)?;
         collected.command_encode = clock.lap();
-        stage_source_submissions(self.gpu.queue(), &source_work)?;
+        stage_source_submissions(&source_work)?;
         collected.source_acquire = clock.lap();
         graph_work.flush_uniforms(self.gpu.queue());
         let command_buffer = command_encoder.finish();
@@ -234,7 +238,6 @@ impl Renderer {
         }
         self.submission_canaries
             .track(&self.gpu, canary_buffer, canary);
-        drop(pack);
         collected.queue_lock_wait = submitted.timings.queue_lock_wait;
         collected.queue_submit = submitted.timings.queue_submit;
         collected.lease_retire = submitted.lease_retire;
@@ -266,44 +269,43 @@ impl Renderer {
             ReadbackKind::Texels(_) => "alpha2 render and texel readback encoder",
         });
         let source_work = begin_source_work(&frame, sources);
-        for work in &source_work {
-            work.encode(&mut command_encoder);
-        }
         // Only an export's timed frames are sampled.
         let sample = measure
             .then(|| self.frame_gpu_timer())
             .flatten()
             .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
-        if let Some(sample) = &sample {
-            sample.graph_start(&mut command_encoder);
-        }
-        let graph_work = self
-            .encode_graph(graph, &mut command_encoder)
+        let mut graph_work = self
+            .encode_graph(
+                graph,
+                &mut command_encoder,
+                &source_work,
+                match readback {
+                    ReadbackKind::PackedYuv420p => FramePack::Yuv420p,
+                    ReadbackKind::Texels(_) => FramePack::Texels,
+                },
+                sample.as_ref(),
+            )
             .map_err(GraphError::into_render_error)?;
         if let Some(sample) = &sample {
             sample.graph_end(&mut command_encoder);
         }
-        let readback_work = match readback {
-            ReadbackKind::Texels(layout) => EncodedReadback::Layout(self.encode_layout_readback(
-                graph_work.texture(),
-                encoding,
-                layout,
-                &mut command_encoder,
-            )?),
-            ReadbackKind::PackedYuv420p => EncodedReadback::Yuv420p(Box::new(
-                self.encode_yuv420p_readback(graph_work.texture(), encoding, &mut command_encoder)?,
-            )),
-        };
+        let (output, uniforms) = graph_work.output_and_uniforms();
+        let readback_work =
+            match readback {
+                ReadbackKind::Texels(layout) => EncodedReadback::Layout(
+                    self.encode_layout_readback(output, encoding, layout, &mut command_encoder)?,
+                ),
+                ReadbackKind::PackedYuv420p => EncodedReadback::Yuv420p(Box::new(
+                    self.encode_yuv420p_readback(output, encoding, &mut command_encoder, uniforms)?,
+                )),
+            };
         if let Some(sample) = &sample {
             sample.pack_end(&mut command_encoder);
         }
         collected.command_encode = clock.lap();
-        stage_source_submissions(self.gpu.queue(), &source_work)?;
+        stage_source_submissions(&source_work)?;
         collected.source_acquire = clock.lap();
         graph_work.flush_uniforms(self.gpu.queue());
-        if let EncodedReadback::Yuv420p(work) = &readback_work {
-            work.flush_uniforms(self.gpu.queue());
-        }
         let command_buffer = command_encoder.finish();
         // Finishing the encoder and flushing uniforms count as command encoding.
         collected.command_encode = collected.command_encode.saturating_add(clock.lap());
@@ -354,13 +356,11 @@ enum EncodedReadback {
     Layout(crate::readback::EncodedLayoutReadback),
 }
 
-/// Flushes source uniforms and stages external textures' native waits and signals on the
-/// submission about to sample them.
+/// Stages external textures' native waits and signals on the submission about to sample them.
 ///
 /// Every graph submission must run this before `queue.submit`, or a decoder surface could be
 /// sampled before it is waited on and transitioned out of its decode layout.
 pub(crate) fn stage_source_submissions(
-    queue: &wgpu::Queue,
     source_work: &[SourceWorkTicket<'_>],
 ) -> Result<(), RenderError> {
     debug_assert!(
@@ -370,7 +370,6 @@ pub(crate) fn stage_source_submissions(
         "a source lease carried a staged native signal into the next frame"
     );
     for work in source_work {
-        work.flush_uniforms(queue);
         if !work.prepare_submission() {
             return Err(RenderError::ExternalTextureSync(None));
         }

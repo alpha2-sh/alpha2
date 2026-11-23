@@ -54,14 +54,17 @@ pub(crate) struct SourceWork {
     /// Whether the pass converts color into the working space (a plane repack does not).
     pub(crate) conversion: bool,
     pub(crate) pipeline: wgpu::RenderPipeline,
-    pub(crate) bind_group: wgpu::BindGroup,
-    pub(crate) uniform_offset: u32,
+    pub(crate) layout: wgpu::BindGroupLayout,
+    pub(crate) textures: arrayvec::ArrayVec<(u32, wgpu::TextureView), SOURCE_TEXTURES>,
+    pub(crate) uniform_binding: u32,
+    pub(crate) uniform: Vec<u8>,
     pub(crate) sampler: Option<wgpu::BindGroup>,
     pub(crate) output_view: wgpu::TextureView,
-    pub(crate) uniforms: UniformArenaLease,
     pub(crate) uploads: Vec<UploadTexture>,
     pub(crate) external_leases: Vec<Arc<dyn ExternalTextureLease>>,
 }
+
+pub(crate) const SOURCE_TEXTURES: usize = 4;
 
 /// Keeps an imported native texture and its decoder surface alive until the submission that
 /// samples it completes.
@@ -198,8 +201,37 @@ impl PendingSourceWork {
 }
 
 impl SourceWorkTicket<'_> {
-    pub(crate) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub(crate) fn uniform_bytes(&self) -> u64 {
         let work = self.work.as_ref().expect("live source work ticket");
+        u64::try_from(work.uniform.len()).unwrap_or(u64::MAX)
+    }
+
+    pub(crate) fn encode(
+        &self,
+        renderer: &Renderer,
+        encoder: &mut wgpu::CommandEncoder,
+        uniforms: &mut UniformArenaLease,
+    ) -> Result<(), RenderError> {
+        let work = self.work.as_ref().expect("live source work ticket");
+        let uniform = uniforms.write(&work.uniform)?;
+        let mut entries = arrayvec::ArrayVec::<_, { SOURCE_TEXTURES + 1 }>::new();
+        entries.extend(
+            work.textures
+                .iter()
+                .map(|(binding, view)| wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: wgpu::BindingResource::TextureView(view),
+                }),
+        );
+        entries.push(wgpu::BindGroupEntry {
+            binding: work.uniform_binding,
+            resource: uniforms.dynamic_binding(uniform.size()),
+        });
+        let bind_group = renderer.bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(work.label),
+            layout: &work.layout,
+            entries: &entries,
+        });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(work.label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -217,19 +249,12 @@ impl SourceWorkTicket<'_> {
             multiview_mask: None,
         });
         pass.set_pipeline(&work.pipeline);
-        pass.set_bind_group(0, &work.bind_group, &[work.uniform_offset]);
+        pass.set_bind_group(0, &bind_group, &[uniform.dynamic_offset()]);
         if let Some(sampler) = &work.sampler {
             pass.set_bind_group(crate::bind_group::SAMPLER_GROUP, sampler, &[]);
         }
         pass.draw(0..3, 0..1);
-    }
-
-    pub(crate) fn flush_uniforms(&self, queue: &wgpu::Queue) {
-        self.work
-            .as_ref()
-            .expect("live source work ticket")
-            .uniforms
-            .flush(queue);
+        Ok(())
     }
 
     pub(crate) fn has_no_staged_signals(&self) -> bool {
@@ -257,7 +282,6 @@ impl SourceWorkTicket<'_> {
     pub(crate) fn complete(mut self, renderer: &Renderer, standalone_submission: bool) {
         let work = self.work.take().expect("live source work ticket");
         let work_conversion = work.conversion;
-        work.uniforms.recycle();
         drop(work.uploads);
         if !work.external_leases.is_empty() {
             let leases = work.external_leases;
@@ -589,25 +613,6 @@ impl Renderer {
             encoding,
             self.presentation_filter_samples(),
         );
-        let mut uniforms = self.uniform_buffers.acquire(
-            self.gpu.device(),
-            u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
-        );
-        let uniform = uniforms.write(&uniform_bytes)?;
-        let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("alpha2 RGBA presentation bind group"),
-            layout: &cached.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: uniforms.dynamic_binding(uniform.size()),
-                },
-            ],
-        });
         let output_view = output.view().clone();
         Ok(PreparedSourceTexture {
             texture: RenderedTexture::pooled(presentation.output_size, output_format, output),
@@ -615,11 +620,12 @@ impl Renderer {
                 label: "alpha2 RGBA presentation pass",
                 conversion: true,
                 pipeline: cached.pipeline.clone(),
-                bind_group,
-                uniform_offset: uniform.dynamic_offset(),
+                layout: cached.bind_group_layout.clone(),
+                textures: [(0, source_view.clone())].into_iter().collect(),
+                uniform_binding: 1,
+                uniform: uniform_bytes,
                 sampler: Some(self.linear_sampler.group.clone()),
                 output_view,
-                uniforms,
                 uploads: inputs,
                 external_leases: Vec::new(),
             })),
@@ -636,14 +642,20 @@ impl Renderer {
             return false;
         };
         let mut encoder = self.command_encoder("alpha2 source presentation encoder");
-        ticket.encode(&mut encoder);
-        ticket.flush_uniforms(self.gpu.queue());
+        let mut uniforms = self
+            .uniform_buffers
+            .acquire(self.gpu.device(), ticket.uniform_bytes());
+        if ticket.encode(self, &mut encoder, &mut uniforms).is_err() {
+            return false;
+        }
+        uniforms.flush(self.gpu.queue());
         if !ticket.prepare_submission() || ticket.flush_submission().is_err() {
             return false;
         }
         if self.submit([encoder.finish()]).is_err() {
             return false;
         }
+        uniforms.recycle();
         ticket.complete(self, true);
         true
     }
@@ -996,49 +1008,28 @@ impl Renderer {
             storage.code_scale(planes.format),
             self.presentation_filter_samples(),
         );
-        let mut uniforms = self.uniform_buffers.acquire(
-            self.gpu.device(),
-            u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
-        );
-        let uniform = uniforms.write(&uniform_bytes)?;
-        let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("alpha2 YUV bind group"),
-            layout: &cached.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(planes.y),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(planes.chroma),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(planes.v.unwrap_or(planes.chroma)),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: uniforms.dynamic_binding(uniform.size()),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    // An opaque format reads no alpha; any plane fills the slot.
-                    resource: wgpu::BindingResource::TextureView(alpha_plane.unwrap_or(planes.y)),
-                },
-            ],
-        });
+        // An opaque format reads no alpha; any plane fills the slot.
+        let textures = [
+            (0, planes.y),
+            (1, planes.chroma),
+            (2, planes.v.unwrap_or(planes.chroma)),
+            (4, alpha_plane.unwrap_or(planes.y)),
+        ]
+        .into_iter()
+        .map(|(binding, view)| (binding, view.clone()))
+        .collect();
         Ok(PreparedSourceTexture {
             texture: RenderedTexture::pooled(presentation.output_size, output_format, output),
             pending: Some(PendingSourceWork::new(SourceWork {
                 label: "alpha2 YUV conversion pass",
                 conversion: true,
                 pipeline: cached.pipeline.clone(),
-                bind_group,
-                uniform_offset: uniform.dynamic_offset(),
+                layout: cached.bind_group_layout.clone(),
+                textures,
+                uniform_binding: 3,
+                uniform: uniform_bytes,
                 sampler: Some(self.linear_sampler.group.clone()),
                 output_view,
-                uniforms,
                 uploads,
                 external_leases,
             })),

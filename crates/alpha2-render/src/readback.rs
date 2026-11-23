@@ -8,7 +8,7 @@ use crate::{
     ReadbackFailure, RenderError, RenderSize, RenderedTexture, Renderer,
     pipeline::{CachedPipeline, CachedYuvReadbackPipeline},
     pool::{ReadbackBufferLease, TextureLease},
-    uniform::{UniformArenaLease, f32_bytes},
+    uniform::UniformArenaLease,
 };
 use alpha2_gpu::GpuContext;
 use alpha2_media::{ChromaLocation, ColorMatrix, PixelLayout, YuvEncoding};
@@ -156,13 +156,6 @@ pub(crate) struct EncodedYuv420pReadback {
     y_texture: TextureLease,
     u_texture: TextureLease,
     v_texture: TextureLease,
-    uniforms: UniformArenaLease,
-}
-
-impl EncodedYuv420pReadback {
-    pub(crate) fn flush_uniforms(&self, queue: &wgpu::Queue) {
-        self.uniforms.flush(queue);
-    }
 }
 
 impl Renderer {
@@ -418,12 +411,17 @@ impl Renderer {
         encoding: YuvEncoding,
     ) -> Result<Yuv420pReadback, RenderError> {
         let mut command_encoder = self.command_encoder("alpha2 YUV420P readback encoder");
-        let readback_work = self.encode_yuv420p_readback(target, encoding, &mut command_encoder)?;
-        readback_work.flush_uniforms(self.gpu.queue());
+        let mut uniforms = self
+            .uniform_buffers
+            .acquire(self.gpu.device(), YUV_PACK_UNIFORM_BYTES);
+        let readback_work =
+            self.encode_yuv420p_readback(target, encoding, &mut command_encoder, &mut uniforms)?;
+        uniforms.flush(self.gpu.queue());
         #[cfg(not(target_arch = "wasm32"))]
         let submission = self.submit([command_encoder.finish()])?;
         #[cfg(target_arch = "wasm32")]
         self.submit([command_encoder.finish()])?;
+        uniforms.recycle();
         Ok(self.complete_yuv420p_readback(
             readback_work,
             #[cfg(not(target_arch = "wasm32"))]
@@ -578,6 +576,7 @@ impl Renderer {
         target: &RenderedTexture,
         encoding: YuvEncoding,
         encoder: &mut wgpu::CommandEncoder,
+        uniforms: &mut UniformArenaLease,
     ) -> Result<EncodedYuv420pReadback, RenderError> {
         self.ensure_gpu_runs_work()?;
         self.validate_size(target.size)?;
@@ -623,17 +622,12 @@ impl Renderer {
             wgpu::TextureFormat::R8Unorm,
             "alpha2 GPU V readback texture",
         );
-        let uniform_bytes = f32_bytes(yuv_uniform(encoding));
-        let mut uniforms = self.uniform_buffers.acquire(
-            self.gpu.device(),
-            u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
-        );
-        let uniform = uniforms.write(&uniform_bytes)?;
+        let uniform = uniforms.write(bytemuck::cast_slice(&yuv_uniform(encoding)))?;
         self.encode_yuv420_pack(
             target,
             [y_texture.view(), u_texture.view(), v_texture.view()],
             encoder,
-            &uniforms,
+            uniforms,
             uniform,
         )?;
         encode_plane_copy(
@@ -673,7 +667,6 @@ impl Renderer {
             y_texture,
             u_texture,
             v_texture,
-            uniforms,
         })
     }
 
@@ -692,9 +685,7 @@ impl Renderer {
             y_texture,
             u_texture,
             v_texture,
-            uniforms,
         } = encoded;
-        uniforms.recycle();
         drop((y_texture, u_texture, v_texture));
         let texture_bytes = yuv420_tight_bytes(size).expect("validated YUV420 dimensions");
         crate::diagnostics::record_readback_work(
@@ -739,9 +730,31 @@ impl Renderer {
         encoding: YuvEncoding,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<EncodedNv12Pack, RenderError> {
+        let encode = self.open_encode();
+        let mut uniforms = self
+            .uniform_buffers
+            .acquire(self.gpu.device(), YUV_PACK_UNIFORM_BYTES);
+        self.encode_nv12_pack_into(target, planes, encoding, encoder, &mut uniforms)?;
+        // `write` fills only the host copy; the shader reads stale data without the flush.
+        uniforms.flush(self.gpu.queue());
+        // Keep the uniforms until the caller submits `encoder`, or the next call could overwrite
+        // them.
+        Ok(EncodedNv12Pack {
+            uniforms: Some(uniforms),
+            _encode: encode,
+        })
+    }
+
+    pub(crate) fn encode_nv12_pack_into(
+        &self,
+        target: &RenderedTexture,
+        planes: Nv12PlaneTargets<'_>,
+        encoding: YuvEncoding,
+        encoder: &mut wgpu::CommandEncoder,
+        uniforms: &mut UniformArenaLease,
+    ) -> Result<(), RenderError> {
         // A pack has no canary of its own; an earlier failed readback canary applies.
         self.ensure_gpu_runs_work()?;
-        let encode = self.open_encode();
         self.validate_size(target.size)?;
         crate::color::check_packable(encoding)?;
         if !matches!(
@@ -755,14 +768,9 @@ impl Renderer {
             ));
         }
         planes.check(target.size)?;
-        let uniform_bytes = f32_bytes(yuv_uniform(encoding));
-        let mut uniforms = self.uniform_buffers.acquire(
-            self.gpu.device(),
-            u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
-        );
-        let uniform = uniforms.write(&uniform_bytes)?;
+        let uniform = uniforms.write(bytemuck::cast_slice(&yuv_uniform(encoding)))?;
         let cached = self.yuv_readback_pipeline()?;
-        let bind_group = self.yuv_pack_bind_group(target, cached, &uniforms, uniform);
+        let bind_group = self.yuv_pack_bind_group(target, cached, uniforms, uniform);
         encode_yuv_render_pass(
             encoder,
             "alpha2 GPU NV12 Y pack pass",
@@ -777,14 +785,7 @@ impl Renderer {
             &bind_group,
             planes.chroma,
         );
-        // `write` fills only the host copy; the shader reads stale data without the flush.
-        uniforms.flush(self.gpu.queue());
-        // Keep the uniforms until the caller submits `encoder`, or the next call could overwrite
-        // them.
-        Ok(EncodedNv12Pack {
-            uniforms: Some(uniforms),
-            _encode: encode,
-        })
+        Ok(())
     }
 
     fn yuv_pack_bind_group(
@@ -1724,7 +1725,12 @@ fn yuv420_tight_bytes(size: RenderSize) -> Result<u64, RenderError> {
 
 /// Pack-shader uniforms for `encoding`: luma weights, range levels and chroma co-siting axes,
 /// from the same definitions import decodes with so a round trip is the identity.
-pub(crate) fn yuv_uniform(encoding: YuvEncoding) -> [f32; 12] {
+const YUV_PACK_UNIFORM_FLOATS: usize = 12;
+
+pub(crate) const YUV_PACK_UNIFORM_BYTES: u64 =
+    crate::uniform::float_uniform_bytes(YUV_PACK_UNIFORM_FLOATS);
+
+pub(crate) fn yuv_uniform(encoding: YuvEncoding) -> [f32; YUV_PACK_UNIFORM_FLOATS] {
     let YuvEncoding { color, chroma } = encoding;
     // Components that are already RGB have no pack: they take BT.709's.
     let (kr, kb) = color

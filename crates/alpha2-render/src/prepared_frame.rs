@@ -7,6 +7,7 @@ use crate::uniform::{
     BATCH_UNIFORM_FLOATS, RUNTIME_UNIFORM_WORDS, aligned_uniform_end, float_uniform_bytes,
     param_uniform_bytes,
 };
+use crate::yuv::SourceWorkTicket;
 use crate::{RenderSize, Renderer, Shared};
 
 pub(crate) struct PreparedFrame {
@@ -44,32 +45,65 @@ impl PreparedFrame {
         }
     }
 
-    pub(crate) fn uniform_capacity(&self, order: &[RenderNodeId], alignment: u64) -> u64 {
-        order.iter().fold(0, |cursor, node| match self.node(*node) {
-            PreparedNode::Nothing => cursor,
-            PreparedNode::Effect(registered) => effect_uniform_end(
-                cursor,
-                registered
-                    .as_ref()
-                    .map_or(0, |registered| registered.definition.params.len()),
-                alignment,
-            ),
-            PreparedNode::Composite(composite) => {
-                (0..composite.batches.len()).fold(cursor, |cursor, _| {
-                    aligned_uniform_end(
-                        cursor,
-                        float_uniform_bytes(BATCH_UNIFORM_FLOATS),
-                        alignment,
-                    )
-                })
+    pub(crate) fn uniform_capacity(
+        &self,
+        sources: &[SourceWorkTicket<'_>],
+        order: &[RenderNodeId],
+        pack: FramePack,
+        alignment: u64,
+    ) -> u64 {
+        let cursor = source_uniform_end(0, sources, alignment);
+        let cursor = order
+            .iter()
+            .fold(cursor, |cursor, node| match self.node(*node) {
+                PreparedNode::Nothing => cursor,
+                PreparedNode::Effect(registered) => effect_uniform_end(
+                    cursor,
+                    registered
+                        .as_ref()
+                        .map_or(0, |registered| registered.definition.params.len()),
+                    alignment,
+                ),
+                PreparedNode::Composite(composite) => {
+                    (0..composite.batches.len()).fold(cursor, |cursor, _| {
+                        aligned_uniform_end(
+                            cursor,
+                            float_uniform_bytes(BATCH_UNIFORM_FLOATS),
+                            alignment,
+                        )
+                    })
+                }
+                PreparedNode::Vector { uniform_slices } => {
+                    (0..*uniform_slices).fold(cursor, |cursor, _| {
+                        aligned_uniform_end(cursor, crate::vector::VECTOR_UNIFORM_BYTES, alignment)
+                    })
+                }
+            });
+        match pack {
+            FramePack::Nothing | FramePack::Texels => cursor,
+            FramePack::Yuv420p | FramePack::Nv12 => {
+                aligned_uniform_end(cursor, crate::readback::YUV_PACK_UNIFORM_BYTES, alignment)
             }
-            PreparedNode::Vector { uniform_slices } => {
-                (0..*uniform_slices).fold(cursor, |cursor, _| {
-                    aligned_uniform_end(cursor, crate::vector::VECTOR_UNIFORM_BYTES, alignment)
-                })
-            }
-        })
+        }
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FramePack {
+    Nothing,
+    Yuv420p,
+    Nv12,
+    Texels,
+}
+
+pub(crate) fn source_uniform_capacity(sources: &[SourceWorkTicket<'_>], alignment: u64) -> u64 {
+    source_uniform_end(0, sources, alignment)
+}
+
+fn source_uniform_end(cursor: u64, sources: &[SourceWorkTicket<'_>], alignment: u64) -> u64 {
+    sources.iter().fold(cursor, |cursor, work| {
+        aligned_uniform_end(cursor, work.uniform_bytes(), alignment)
+    })
 }
 
 impl Renderer {

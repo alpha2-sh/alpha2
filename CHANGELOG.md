@@ -19,6 +19,10 @@ All notable changes to this project are documented in this file.
   Nothing outside tests called them, and the export path never applied either curve: it writes
   the working space's sRGB-coded values and tags them BT.709.
 
+- A GPU frame writes its uniforms (each source's conversion, the graph's passes and the YUV or
+  NV12 pack) into one buffer with one queue write, where each conversion and the pack had a buffer
+  and a write of their own.
+
 ### Removed
 
 - **Breaking:** the motion blur subframe count, which no pass read. Removed from Rust:

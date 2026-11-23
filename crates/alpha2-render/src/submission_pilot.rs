@@ -139,10 +139,9 @@ impl crate::Renderer {
                 .unwrap_or(alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL),
         );
         let band_unit_pixels = unit_pixels_per_row * f64::from(rows);
-        let alignment = u64::from(self.limits.min_uniform_buffer_offset_alignment.max(1));
         let uniform_bytes = crate::prepared_frame::effect_uniform_capacity(
             registered.definition.params.len(),
-            alignment,
+            self.uniform_alignment(),
         );
         #[cfg(not(target_arch = "wasm32"))]
         self.gpu

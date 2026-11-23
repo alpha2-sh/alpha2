@@ -311,6 +311,10 @@ impl QualityState {
 }
 
 impl Renderer {
+    pub(crate) fn uniform_alignment(&self) -> u64 {
+        u64::from(self.limits.min_uniform_buffer_offset_alignment.max(1))
+    }
+
     pub(crate) fn validate_size(&self, size: RenderSize) -> Result<(), RenderError> {
         RenderSize::new(size.width, size.height)?;
         let maximum = self.limits.max_texture_dimension_2d;

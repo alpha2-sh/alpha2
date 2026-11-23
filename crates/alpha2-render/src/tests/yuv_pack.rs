@@ -689,8 +689,17 @@ fn every_yuv_readback_consumer_refuses_a_buffer_the_gpu_did_not_write() {
             .gpu
             .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let mut uniforms = renderer.uniform_buffers.acquire(
+            renderer.gpu.device(),
+            crate::readback::YUV_PACK_UNIFORM_BYTES,
+        );
         let unsubmitted = renderer
-            .encode_yuv420p_readback(&target, centred(ColorMetadata::default()), &mut encoder)
+            .encode_yuv420p_readback(
+                &target,
+                centred(ColorMetadata::default()),
+                &mut encoder,
+                &mut uniforms,
+            )
             .expect("encodes");
         drop(encoder);
         let submission = crate::submission_clock::ClockedSubmission::new(
