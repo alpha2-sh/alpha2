@@ -243,7 +243,7 @@ fn two_players_with_equal_profiles_never_make_each_other_redraw() {
     let project = fade_project(16);
     let mut first = Player::new(QualityProfile::export()).expect("quality");
     let mut second = Player::new(QualityProfile::export()).expect("quality");
-    let mut at = |player: &mut Player| step(player, &project, &renderer, &MissingFrames, 8_000);
+    let at = |player: &mut Player| step(player, &project, &renderer, &MissingFrames, 8_000);
     assert_eq!(at(&mut first), (false, 1));
     assert_eq!(at(&mut second), (false, 1));
     for _ in 0..2 {
