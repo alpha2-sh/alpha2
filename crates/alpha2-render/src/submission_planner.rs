@@ -19,8 +19,6 @@ pub(crate) const PLANNING_THRESHOLD_UNIT_PIXELS: f64 = 64.0 * 1_048_576.0;
 /// The most bands a pass is drawn in.
 pub(crate) const MAX_BANDS: u32 = 64;
 
-/// Per covered pixel of a composite layer: texture read, minification taps and blend.
-pub(crate) const COMPOSITE_LAYER_COST: EffectCost = EffectCost::fixed(4, 0);
 /// Per covered pixel of a vector scene: coverage and paint reads.
 pub(crate) const VECTOR_COST: EffectCost = EffectCost::fixed(2, 0);
 

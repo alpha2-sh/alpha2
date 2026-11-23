@@ -23,7 +23,25 @@ pub(crate) enum PreparedNode {
 
 pub(crate) struct PreparedComposite {
     pub(crate) drawn: Vec<(usize, PixelRect, LayerTier)>,
-    pub(crate) batches: Vec<(std::ops::Range<usize>, PixelRect)>,
+    pub(crate) batches: Vec<PreparedBatch>,
+}
+
+pub(crate) struct PreparedBatch {
+    pub(crate) layers: std::ops::Range<usize>,
+    pub(crate) bounds: PixelRect,
+    pub(crate) region: PixelRect,
+    pub(crate) work: crate::FrameCost,
+}
+
+impl PreparedComposite {
+    pub(crate) fn work(&self) -> crate::FrameCost {
+        self.batches
+            .iter()
+            .fold(crate::FrameCost::default(), |mut total, batch| {
+                total.add_cost(batch.work);
+                total
+            })
+    }
 }
 
 impl PreparedFrame {
@@ -138,7 +156,12 @@ impl Renderer {
                     PreparedNode::Effect(self.effects().get(effect))
                 }
                 RenderNode::Composite { layers, .. } => PreparedNode::Composite(
-                    self.prepare_composite(layers.iter().map(|layer| layer.visual), graph.size),
+                    self.prepare_composite(
+                        layers
+                            .iter()
+                            .map(|layer| (layer.visual, layer_texture_size(graph, layer.source))),
+                        graph.size,
+                    ),
                 ),
                 RenderNode::Vector { scene } => PreparedNode::Vector {
                     uniform_slices: scene
@@ -155,12 +178,48 @@ impl Renderer {
 
     pub(crate) fn prepare_composite(
         &self,
-        visuals: impl Iterator<Item = crate::LayerTransform>,
+        layers: impl Iterator<Item = (crate::LayerTransform, RenderSize)> + Clone,
         size: RenderSize,
     ) -> PreparedComposite {
-        let drawn = self.drawn_layers(visuals, size);
-        let batches = crate::composite::composite_batches(&drawn, self.composite_batch_layers());
+        let drawn = self.drawn_layers(layers.clone().map(|(visual, _)| visual), size);
+        let textures = layers.collect::<Vec<_>>();
+        let max_filter_samples = self.quality_controls().max_filter_samples;
+        let batches = crate::composite::composite_batches(&drawn, self.composite_batch_layers())
+            .into_iter()
+            .map(|(range, bounds)| {
+                let region = crate::composite::batch_region(bounds, size);
+                let mut work =
+                    crate::FrameCost::of(crate::composite::COMPOSITE_PASS_COST, region.area());
+                for (index, layer_bounds, _) in &drawn[range.clone()] {
+                    let (visual, texture) = textures[*index];
+                    let samples =
+                        crate::composite::layer_samples(visual, texture, size, max_filter_samples);
+                    work.add_cost(crate::FrameCost::of(
+                        crate::composite::COMPOSITE_SAMPLE_COST
+                            .times(samples)
+                            .plus(crate::composite::COMPOSITE_BLEND_COST),
+                        layer_bounds.intersection(region).area(),
+                    ));
+                }
+                PreparedBatch {
+                    layers: range,
+                    bounds,
+                    region,
+                    work,
+                }
+            })
+            .collect();
         PreparedComposite { drawn, batches }
+    }
+}
+
+fn layer_texture_size(graph: &RenderGraph<'_>, node: RenderNodeId) -> RenderSize {
+    match &graph.nodes[node.index] {
+        RenderNode::Source(view) => view.wgpu_view().map_or(graph.size, |view| RenderSize {
+            width: view.texture().width(),
+            height: view.texture().height(),
+        }),
+        _ => graph.size,
     }
 }
 

@@ -81,6 +81,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A layer composite is no longer one submission however many layers it draws: each batch of layers
+  is a placed pass, charged for the pixels it draws and the filter samples each layer takes there,
+  and a batch predicted past the submission budget is drawn in scissored bands with the same
+  pixels.
 - A GPU frame's source conversions (charged by the output pixels and the samples their filter
   takes), its YUV or NV12 pack and its texel copy are charged to its plan and count toward the
   planning threshold: a frame that only converts large sources is now planned, and a conversion

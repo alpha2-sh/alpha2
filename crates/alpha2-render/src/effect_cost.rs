@@ -87,7 +87,7 @@ impl EffectCost {
             .saturating_add(self.arithmetic.saturating_mul(ARITHMETIC_UNITS))
     }
 
-    const fn plus(self, other: Self) -> Self {
+    pub(crate) const fn plus(self, other: Self) -> Self {
         Self {
             fetches: self.fetches.saturating_add(other.fetches),
             transcendentals: self.transcendentals.saturating_add(other.transcendentals),

@@ -166,9 +166,11 @@ impl Renderer {
             predicted.add_cost(work.work());
         }
         for node in drawn() {
-            if let Some(cost) = node_cost(&graph.nodes[node.index], prepared.node(*node)) {
-                predicted.add(cost, pixels);
-            }
+            predicted.add_cost(node_work(
+                &graph.nodes[node.index],
+                prepared.node(*node),
+                pixels,
+            ));
         }
         self.plan_submissions(encoder, predicted);
         if encoder.planner().is_planned() {
@@ -362,16 +364,6 @@ impl Renderer {
                     let prepared_composite = prepared
                         .composite(node_id)
                         .ok_or(GraphError::Render(crate::RenderError::InvalidGraph))?;
-                    encoder.place_pass(
-                        crate::FrameCost::of(
-                            crate::submission_planner::COMPOSITE_LAYER_COST
-                                .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
-                            pixels,
-                        ),
-                        false,
-                        None,
-                        None,
-                    );
                     let views = layers
                         .iter()
                         .map(|layer| graph_view(graph, &outputs, layer.source))
@@ -481,20 +473,16 @@ impl Renderer {
     }
 }
 
-fn node_cost(
-    node: &RenderNode<'_>,
-    prepared: &PreparedNode,
-) -> Option<crate::effect_cost::EffectCost> {
+fn node_work(node: &RenderNode<'_>, prepared: &PreparedNode, pixels: u64) -> crate::FrameCost {
     match (node, prepared) {
-        (_, PreparedNode::Effect(registered)) => {
-            registered.as_ref().map(|registered| registered.cost)
+        (_, PreparedNode::Effect(Some(registered))) => {
+            crate::FrameCost::of(registered.cost, pixels)
         }
-        (RenderNode::Composite { layers, .. }, _) => Some(
-            crate::submission_planner::COMPOSITE_LAYER_COST
-                .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
-        ),
-        (RenderNode::Vector { .. }, _) => Some(crate::submission_planner::VECTOR_COST),
-        _ => None,
+        (_, PreparedNode::Composite(composite)) => composite.work(),
+        (RenderNode::Vector { .. }, _) => {
+            crate::FrameCost::of(crate::submission_planner::VECTOR_COST, pixels)
+        }
+        _ => crate::FrameCost::default(),
     }
 }
 

@@ -465,6 +465,29 @@ fn each_submission_of_a_split_frame_names_the_effect_encoded_into_it() {
     assert_eq!(named, expected, "{frame:?}");
 }
 
+fn frame_planned_at(
+    gpu: &GpuContext,
+    renderer: &Renderer,
+    graph: &RenderGraph<'_>,
+    budgets: f64,
+) -> (crate::FrameSubmissions, f64, Vec<u8>) {
+    let draw = || {
+        let result = renderer.execute_graph(graph).expect("the graph renders");
+        let submissions = renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions");
+        (submissions, read_rgba8(renderer, &result))
+    };
+    seeded_at(gpu, draw().0.cost.unit_pixels(), budgets);
+    let _ = renderer.take_gpu_submission_stats();
+    let (submissions, pixels) = draw();
+    let longest = renderer
+        .take_gpu_submission_stats()
+        .max_predicted_ms
+        .expect("a frame over the planning threshold is planned");
+    (submissions, longest, pixels)
+}
+
 fn seeded_at(gpu: &GpuContext, unit_pixels: f64, budgets: f64) {
     let budget = f64::from(alpha2_gpu::submission_budget_ms());
     gpu.rate()
@@ -634,5 +657,118 @@ fn a_frame_cut_after_its_conversions_draws_what_one_submission_draws() {
     assert!(
         whole_picture == cut_picture,
         "the cut frame drew other bytes"
+    );
+}
+
+fn layered_graph<'a>(
+    views: &'a [wgpu::TextureView],
+    layers: &[LayerTransform],
+    size: RenderSize,
+) -> RenderGraph<'a> {
+    let mut graph = RenderGraph::new(size);
+    let sources = views
+        .iter()
+        .map(|view| graph.add_source(SourceView::from_wgpu(view)))
+        .collect::<Vec<_>>();
+    let layers = layers
+        .iter()
+        .enumerate()
+        .map(|(index, visual)| GraphLayer {
+            source: sources[index % sources.len()],
+            visual: *visual,
+            blend_mode: BlendMode::Normal,
+        })
+        .collect();
+    let output = graph.add_composite(layers).expect("sources exist");
+    graph.set_output(output).expect("output exists");
+    graph
+}
+
+fn layer_sources(renderer: &Renderer, size: RenderSize) -> [wgpu::TextureView; 2] {
+    [
+        flat_source(renderer, size),
+        rgba_texture(renderer, [200, 40, 90, 255])
+            .create_view(&wgpu::TextureViewDescriptor::default()),
+    ]
+}
+
+#[test]
+fn a_composite_predicted_past_the_budget_is_cut_into_submissions_under_it() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(512, 288).expect("size");
+    let views = layer_sources(&renderer, size);
+    let graph = layered_graph(&views, &[visual([1.0, 1.0], 0.5); 16], size);
+    let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+    let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, 8.0);
+    assert_within_the_budget(
+        longest,
+        planned,
+        "sixteen whole-frame layers at eight budgets",
+    );
+    assert!(whole == cut, "the cut composite drew other bytes");
+}
+
+#[test]
+fn a_composite_batch_past_the_budget_is_drawn_in_bands_of_the_same_picture() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(1920, 1080).expect("size");
+    let views = layer_sources(&renderer, size);
+    let small = |x: f32, y: f32, turn: f32| LayerTransform {
+        position: [x, y],
+        rotation_degrees: turn,
+        ..visual([0.3, 0.4], 0.7)
+    };
+    let graph = layered_graph(
+        &views,
+        &[
+            small(0.3, 0.3, 10.0),
+            visual([1.0, 1.0], 0.5),
+            small(0.55, 0.6, -20.0),
+            small(0.6, 0.45, 35.0),
+        ],
+        size,
+    );
+    let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+    let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, 12.0);
+    assert!(planned.submissions >= 12, "{planned:?}");
+    assert_within_the_budget(longest, planned, "three batches at twelve budgets");
+    assert!(whole == cut, "the banded batches drew other bytes");
+}
+
+#[test]
+fn a_composite_is_charged_for_the_pixels_and_samples_its_layers_take() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(256, 144).expect("size");
+    let views = layer_sources(&renderer, size);
+    let minified = [rgba_image_texture(
+        &renderer,
+        RenderSize::new(2048, 1152).expect("size"),
+        &vec![128; 2048 * 1152 * 4],
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default())];
+    let cost = |views: &[wgpu::TextureView], layer: LayerTransform| {
+        drop(
+            renderer
+                .execute_graph(&layered_graph(views, &[layer], size))
+                .expect("the composite renders"),
+        );
+        renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions")
+            .cost
+            .unit_pixels()
+    };
+    let whole = cost(&views, visual([1.0, 1.0], 0.5));
+    let quarter = cost(&views, visual([0.5, 0.5], 0.5));
+    let sampled = cost(&minified, visual([1.0, 1.0], 0.5));
+    assert!(
+        quarter < whole && whole < sampled,
+        "a quarter-frame layer is charged {quarter}, a whole-frame one {whole}, a whole-frame one \
+         minified eight times {sampled}"
     );
 }

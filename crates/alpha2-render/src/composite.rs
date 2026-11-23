@@ -1,4 +1,5 @@
 use crate::bind_group::OffsetBindGroup;
+use crate::effect_cost::EffectCost;
 use crate::{
     BlendMode, Color, GraphError, GraphLayer, RenderError, RenderGraph, RenderSize,
     RenderedTexture, Renderer, SourceView,
@@ -92,7 +93,7 @@ impl Renderer {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn encode_layers_pass(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::renderer::RenderEncoder,
         size: RenderSize,
         layers: &[CompositeLayer<'_>],
         prepared: &crate::prepared_frame::PreparedComposite,
@@ -134,17 +135,17 @@ impl Renderer {
         let batches = prepared
             .batches
             .iter()
-            .map(|(range, bounds)| (&drawn[range.clone()], *bounds))
+            .map(|batch| (&drawn[batch.layers.clone()], batch))
             .collect::<Vec<_>>();
         let bounded = |bounds: &PixelRect| under_half(*bounds, size);
-        let ((first, first_bounds), rest) = batches.split_first().expect("a layer is drawn");
+        let ((first, first_batch), rest) = batches.split_first().expect("a layer is drawn");
         let first_program = self.batch_program(first);
         let first = prepare_batch(&preparation, None, first, uniforms)?;
         // The clear writes the stored background, so a small first batch can draw only inside its
         // bounds.
         let first_pass = PassTarget {
             load: wgpu::LoadOp::Clear(stored_color(background)),
-            scissor: bounded(first_bounds).then_some(*first_bounds),
+            scissor: bounded(&first_batch.bounds).then_some(first_batch.bounds),
         };
         if rest.is_empty() {
             self.draw_batch(
@@ -152,8 +153,9 @@ impl Renderer {
                 cached,
                 first_program,
                 &first,
-                output_view,
-                first_pass,
+                first_batch,
+                (output_view, first_pass),
+                None,
             )?;
             return Ok(1);
         }
@@ -167,43 +169,52 @@ impl Renderer {
         let textures = [output, scratch.texture()];
         let views = [output_view, scratch.view()];
         // Each full-frame batch flips the target; start so the last one lands in `output`.
-        let mut current = rest.iter().filter(|(_, bounds)| !bounded(bounds)).count() % 2;
+        let mut current = rest
+            .iter()
+            .filter(|(_, batch)| !bounded(&batch.bounds))
+            .count()
+            % 2;
         self.draw_batch(
             encoder,
             cached,
             first_program,
             &first,
-            views[current],
-            first_pass,
+            first_batch,
+            (views[current], first_pass),
+            None,
         )?;
-        for (batch, bounds) in rest {
+        for (layers, batch) in rest {
             let other = 1 - current;
-            let program = self.batch_program(batch);
-            if bounded(bounds) {
+            let program = self.batch_program(layers);
+            if bounded(&batch.bounds) {
+                let prepared = prepare_batch(&preparation, Some(views[other]), layers, uniforms)?;
                 // A pass cannot read the texture it writes, so copy the backdrop region aside
                 // first.
-                copy_region(encoder, textures[current], textures[other], *bounds);
-                let prepared = prepare_batch(&preparation, Some(views[other]), batch, uniforms)?;
                 self.draw_batch(
                     encoder,
                     cached,
                     program,
                     &prepared,
-                    views[current],
-                    PassTarget {
-                        load: wgpu::LoadOp::Load,
-                        scissor: Some(*bounds),
-                    },
+                    batch,
+                    (
+                        views[current],
+                        PassTarget {
+                            load: wgpu::LoadOp::Load,
+                            scissor: Some(batch.bounds),
+                        },
+                    ),
+                    Some((textures[current], textures[other])),
                 )?;
             } else {
-                let prepared = prepare_batch(&preparation, Some(views[current]), batch, uniforms)?;
+                let prepared = prepare_batch(&preparation, Some(views[current]), layers, uniforms)?;
                 self.draw_batch(
                     encoder,
                     cached,
                     program,
                     &prepared,
-                    views[other],
-                    PassTarget::WHOLE,
+                    batch,
+                    (views[other], PassTarget::WHOLE),
+                    None,
                 )?;
                 current = other;
             }
@@ -224,35 +235,51 @@ impl Renderer {
         (program, tier, batch.len())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_batch(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::renderer::RenderEncoder,
         cached: &CachedCompositePipeline,
         (program, tier, layers): (CompositeProgram, LayerTier, usize),
         bind_group: &OffsetBindGroup<1>,
-        target: &wgpu::TextureView,
-        pass: PassTarget,
+        batch: &crate::prepared_frame::PreparedBatch,
+        (target, pass): (&wgpu::TextureView, PassTarget),
+        backdrop: Option<(&wgpu::Texture, &wgpu::Texture)>,
     ) -> Result<(), RenderError> {
         let pipeline = self.composite_program_pipeline(cached, program)?;
-        #[cfg(test)]
-        {
-            let mut log = self
-                .composite_pipelines
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            log.passes += 1;
-            log.drawn
-                .insert((program, pipeline.clone(), tier, layers > 1));
-        }
         #[cfg(not(test))]
         let _ = (tier, layers);
-        encode_batch(
-            encoder,
-            pipeline,
-            (bind_group, &self.linear_sampler),
-            target,
-            pass,
-        );
+        let placement = encoder.place_pass(batch.work, true, None, None);
+        if let Some((from, to)) = backdrop {
+            copy_region(encoder, from, to, batch.bounds);
+        }
+        encoder.encode_pieces(placement, batch.region, |encoder, piece| {
+            #[cfg(test)]
+            {
+                let mut log = self
+                    .composite_pipelines
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                log.passes += 1;
+                log.drawn
+                    .insert((program, pipeline.clone(), tier, layers > 1));
+            }
+            let piece = PassTarget {
+                load: if piece.first {
+                    pass.load
+                } else {
+                    wgpu::LoadOp::Load
+                },
+                scissor: piece.scissor.or(pass.scissor),
+            };
+            encode_batch(
+                encoder,
+                pipeline,
+                (bind_group, &self.linear_sampler),
+                target,
+                piece,
+            );
+        });
         Ok(())
     }
 
@@ -490,6 +517,53 @@ pub(crate) fn composite_batches<T>(
     batches
 }
 
+pub(crate) const COMPOSITE_PASS_COST: EffectCost = EffectCost::fixed(1, 0);
+pub(crate) const COMPOSITE_SAMPLE_COST: EffectCost = EffectCost::fixed(1, 0);
+pub(crate) const COMPOSITE_BLEND_COST: EffectCost = EffectCost::fixed(0, 6);
+
+pub(crate) fn batch_region(bounds: PixelRect, size: RenderSize) -> PixelRect {
+    if under_half(bounds, size) {
+        bounds
+    } else {
+        PixelRect::whole(size)
+    }
+}
+
+/// Mirrors `filtered_source` in composite.wesl.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(crate) fn layer_samples(
+    visual: LayerTransform,
+    texture: RenderSize,
+    size: RenderSize,
+    max_filter_samples: u32,
+) -> u64 {
+    let (turn_sin, turn_cos) = libm::sincos(f64::from(visual.rotation_degrees).to_radians());
+    let (output_width, output_height) = (f64::from(size.width), f64::from(size.height));
+    let (scale_x, scale_y) = (f64::from(visual.scale[0]), f64::from(visual.scale[1]));
+    let (texture_width, texture_height) = (f64::from(texture.width), f64::from(texture.height));
+    let wanted = |x: f64, y: f64| {
+        (libm::hypot(x * texture_width, y * texture_height) - 0.0001)
+            .ceil()
+            .clamp(1.0, 8.0)
+    };
+    let wanted_x = wanted(
+        turn_cos / output_width / scale_x,
+        -turn_sin / output_height / scale_y,
+    );
+    let wanted_y = wanted(
+        turn_sin / output_width / scale_x,
+        turn_cos / output_height / scale_y,
+    );
+    let budget = f64::from(max_filter_samples).clamp(1.0, 64.0);
+    let columns = wanted_x.min(budget);
+    let rows = wanted_y.min((budget / columns).floor().max(1.0));
+    if (columns * rows).is_finite() {
+        (columns * rows) as u64
+    } else {
+        1
+    }
+}
+
 /// How the intermediate stores a value; the shader rounds to match (`STORED_FORMAT`).
 #[derive(Copy, Clone, Debug)]
 enum StoredValue {
@@ -682,6 +756,9 @@ fn encode_batch(
     bind_group.set(&mut pass, 0);
     sampler.set(&mut pass);
     if let Some(scissor) = scissor {
+        if scissor.area() == 0 {
+            return;
+        }
         pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
     }
     pass.draw(0..3, 0..1);
@@ -743,6 +820,22 @@ impl PixelRect {
 
     pub(crate) fn area(self) -> u64 {
         u64::from(self.width) * u64::from(self.height)
+    }
+
+    pub(crate) fn intersection(self, other: Self) -> Self {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = (self.x + self.width).min(other.x + other.width);
+        let bottom = (self.y + self.height).min(other.y + other.height);
+        if right <= x || bottom <= y {
+            return Self::EMPTY;
+        }
+        Self {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        }
     }
 
     fn union(self, other: Self) -> Self {
