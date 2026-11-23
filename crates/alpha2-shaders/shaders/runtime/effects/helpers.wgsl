@@ -50,7 +50,8 @@ fn builtin_smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 
 fn builtin_interval_coverage(value: f32, width: f32) -> f32 {
     let span = max(width, 0.0000001);
-    return clamp((min(value + span * 0.5, 1.0) - max(value - span * 0.5, 0.0)) / span, 0.0, 1.0);
+    let cut = max(value + span * 0.5 - 1.0, 0.0) + max(span * 0.5 - value, 0.0);
+    return clamp(1.0 - cut / span, 0.0, 1.0);
 }
 
 // PCG (Jarzynski and Olano 2020), as film-grain and wind use it.

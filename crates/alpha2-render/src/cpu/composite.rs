@@ -16,7 +16,7 @@ use crate::{BlendMode, BlendSpace, Color, LayerTransform, RenderError, RenderSiz
 
 /// Alpha from which a normal-mode source pixel counts as nearly opaque.
 ///
-/// Edge coverage subtracts nearly equal `f32` positions as the shader does, so a minified
+/// Edge coverage and the filter's average round in `f32` as the shader does, so a minified
 /// opaque layer can arrive a few 1e-4 short of opaque. From 2^-8 short the backdrop is mixed in
 /// encoded space instead of linear light, which changes results by under 1e-3 (a tenth of an
 /// 8-bit code).
@@ -279,9 +279,9 @@ struct PreparedLayer<'a> {
 #[inline]
 fn coverage(position: f32, footprint: f32) -> f32 {
     let width = footprint.max(0.000_000_1);
-    let lower = (position - width * 0.5).max(0.0);
-    let upper = (position + width * 0.5).min(1.0);
-    ((upper - lower) / width).clamp(0.0, 1.0)
+    let half_width = width * 0.5;
+    let cut = (position + half_width - 1.0).max(0.0) + (half_width - position).max(0.0);
+    (1.0 - cut / width).clamp(0.0, 1.0)
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -572,5 +572,49 @@ impl General {
         }
         let samples = self.grid[0] * self.grid[1];
         Some(color.map(|value| value / samples))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::coverage;
+    use crate::cpu::kernels::builtin_interval_coverage;
+
+    fn clipped_interval(position: f32, footprint: f32) -> f32 {
+        let width = footprint.max(0.000_000_1);
+        let lower = (position - width * 0.5).max(0.0);
+        let upper = (position + width * 0.5).min(1.0);
+        ((upper - lower) / width).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn coverage_is_one_inside_and_the_clipped_interval_at_power_of_two_sizes() {
+        for side in [1_u16, 2, 4, 64, 256, 1024, 4096] {
+            for scale in [0.125_f32, 0.25, 0.5, 1.0, 2.0, 8.0] {
+                let footprint = 1.0 / f32::from(side) / scale;
+                for step in 0..=side * 8 + 128 {
+                    let position = (f32::from(step) - 64.0) / (8.0 * f32::from(side));
+                    let expected = clipped_interval(position, footprint);
+                    for actual in [
+                        coverage(position, footprint),
+                        builtin_interval_coverage(position, footprint),
+                    ] {
+                        assert_eq!(
+                            actual.to_bits(),
+                            expected.to_bits(),
+                            "side {side}, scale {scale}, position {position}"
+                        );
+                    }
+                }
+            }
+        }
+        for side in [5_u16, 90, 160, 1080, 1920] {
+            let footprint = 1.0 / f32::from(side);
+            for pixel in 1..side - 1 {
+                let position = (f32::from(pixel) + 0.5) / f32::from(side);
+                assert_eq!(coverage(position, footprint), 1.0, "{pixel} of {side}");
+                assert_eq!(builtin_interval_coverage(position, footprint), 1.0);
+            }
+        }
     }
 }

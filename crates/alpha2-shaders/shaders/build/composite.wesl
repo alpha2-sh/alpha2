@@ -243,9 +243,9 @@ fn composite(backdrop_encoded: vec4f, source_encoded: vec4f, mode: f32) -> vec4f
 // coverage. The separable footprint is approximate at rotated corners.
 fn rectangle_coverage(uv: vec2f, footprint: vec2f) -> f32 {
     let width = max(footprint, vec2f(0.0000001));
-    let lower = max(uv - width * 0.5, vec2f(0.0));
-    let upper = min(uv + width * 0.5, vec2f(1.0));
-    let coverage = clamp((upper - lower) / width, vec2f(0.0), vec2f(1.0));
+    let half_width = width * 0.5;
+    let cut = max(uv + half_width - 1.0, vec2f(0.0)) + max(half_width - uv, vec2f(0.0));
+    let coverage = clamp(1.0 - cut / width, vec2f(0.0), vec2f(1.0));
     return coverage.x * coverage.y;
 }
 
