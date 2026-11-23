@@ -359,10 +359,11 @@ test(
       ]),
       "tar.gz",
     );
+    const { gid } = await stat(out);
     for (const path of ["top", "top/file"]) {
       const info = await stat(join(out, path));
       assert.equal(info.uid, process.getuid());
-      assert.equal(info.gid, process.getgid());
+      assert.equal(info.gid, gid);
     }
   },
 );
