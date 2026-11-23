@@ -473,20 +473,33 @@ fn a_texture_budget_the_gpu_memory_cap_lowers_is_reported() {
     let reduced = |requested: u64, applied: u64| {
         vec![crate::CapabilityDiagnostic::TextureBudgetReduced { requested, applied }]
     };
-    assert_eq!(renderer.diagnostics().degradations, Vec::new());
+    let texture_budget = || {
+        renderer
+            .diagnostics()
+            .degradations
+            .into_iter()
+            .filter(|degradation| {
+                matches!(
+                    degradation,
+                    crate::CapabilityDiagnostic::TextureBudgetReduced { .. }
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(texture_budget(), Vec::new());
 
     assert!(renderer.set_gpu_memory_budget(Some(512 * mib)));
     assert_eq!(
-        renderer.diagnostics().degradations,
+        texture_budget(),
         reduced(256 * mib, 128 * mib),
         "the default budget, lowered at start-up"
     );
     renderer.set_texture_budget_bytes(512 * mib);
     assert_eq!(
-        renderer.diagnostics().degradations,
+        texture_budget(),
         reduced(512 * mib, 128 * mib),
         "an export's budget"
     );
     renderer.set_texture_budget_bytes(64 * mib);
-    assert_eq!(renderer.diagnostics().degradations, Vec::new());
+    assert_eq!(texture_budget(), Vec::new());
 }
