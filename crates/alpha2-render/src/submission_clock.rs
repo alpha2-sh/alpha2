@@ -376,6 +376,15 @@ impl SubmissionClock {
     }
 
     #[cfg(test)]
+    pub(crate) fn kept_seen_as_they_happened(&self) -> Vec<Option<bool>> {
+        self.state()
+            .entries
+            .iter()
+            .map(|entry| entry.done.map(|stamp| stamp.seen_as_it_happened))
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn kept_effects(&self) -> Vec<Vec<String>> {
         self.state()
             .entries
@@ -475,6 +484,7 @@ pub(crate) struct ClockedSubmission {
     pub(crate) index: wgpu::SubmissionIndex,
     clock: Arc<SubmissionClock>,
     sequence: u64,
+    earlier: Vec<(wgpu::SubmissionIndex, u64)>,
 }
 
 impl ClockedSubmission {
@@ -487,7 +497,13 @@ impl ClockedSubmission {
             index,
             clock,
             sequence,
+            earlier: Vec::new(),
         }
+    }
+
+    pub(crate) fn after(mut self, earlier: Vec<(wgpu::SubmissionIndex, u64)>) -> Self {
+        self.earlier = earlier;
+        self
     }
 
     /// # Errors
@@ -499,16 +515,23 @@ impl ClockedSubmission {
         gpu: &alpha2_gpu::GpuContext,
         timeout: std::time::Duration,
     ) -> Result<(), crate::RenderError> {
+        let deadline = Instant::now() + timeout;
         gpu.device()
             .poll(wgpu::PollType::Poll)
             .map_err(crate::error::poll_error)?;
-        let _waiting = Waiting::on(self.clock.address(), self.sequence);
-        gpu.device()
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(self.index.clone()),
-                timeout: Some(timeout),
-            })
-            .map_err(crate::error::poll_error)?;
+        for (index, sequence) in self
+            .earlier
+            .iter()
+            .chain(std::iter::once(&(self.index.clone(), self.sequence)))
+        {
+            let _waiting = Waiting::on(self.clock.address(), *sequence);
+            gpu.device()
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(index.clone()),
+                    timeout: Some(deadline.saturating_duration_since(Instant::now())),
+                })
+                .map_err(crate::error::poll_error)?;
+        }
         Ok(())
     }
 }

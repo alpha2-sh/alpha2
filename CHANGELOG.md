@@ -85,6 +85,9 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A wait on a split frame's readback waits for each of its submissions in turn under one deadline,
+  so the completions it sees are stamped as they happen and the clock times each submission
+  exactly, where it waited on the last one and saw the others complete together.
 - A GPU frame whose own textures need more than the GPU memory budget the adapter reports fails
   before it draws with the new `RenderError::FrameExceedsGpuMemory`, classed `OUT_OF_MEMORY`,
   instead of evicting idle textures it could not do without; the quarter-of-the-budget cap bounds

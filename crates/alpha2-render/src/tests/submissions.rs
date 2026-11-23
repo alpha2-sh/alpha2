@@ -1008,3 +1008,32 @@ fn a_submission_predicted_over_the_budget_is_counted() {
         Some(f64::from(alpha2_gpu::submission_budget_ms()))
     );
 }
+
+#[test]
+fn a_wait_on_a_split_frame_sees_its_submissions_complete_one_by_one() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    if gpu.capabilities().backend == "Gl" || gpu.capabilities().software_rasterizer {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::ExactGpuCompletion,
+            "the device completes submissions before a wait on them blocks"
+        );
+        return;
+    }
+    let renderer = Renderer::new(gpu);
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let (size, view, frame_ms) =
+        with_watchdog(UNSPLIT_WATCHDOG_MS, || busy_size(&renderer, &effect));
+    let (frame, _) = with_watchdog(frame_ms, || exported_frame(&renderer, &effect, &view, size));
+    let submissions = usize::try_from(frame.submissions).expect("fits");
+    assert!(submissions >= 4, "{frame:?}");
+    let kept = renderer.submission_clock.kept_seen_as_they_happened();
+    let seen = kept[kept.len() - submissions..]
+        .iter()
+        .filter(|seen| **seen == Some(true))
+        .count();
+    assert!(
+        seen * 2 > submissions,
+        "{seen} of the frame's {submissions} completions were seen as they happened"
+    );
+}

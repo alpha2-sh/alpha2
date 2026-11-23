@@ -355,6 +355,7 @@ impl LossClassifier {
 
 struct SubmittedBuffers {
     index: wgpu::SubmissionIndex,
+    earlier: Vec<(wgpu::SubmissionIndex, u64)>,
     timings: SubmitTimings,
     sequences: std::ops::Range<u64>,
     first: (web_time::Instant, crate::submission_clock::Recorded),
@@ -828,6 +829,7 @@ impl Renderer {
         self.note_frame_submissions(&planners, &submitted);
         let SubmittedBuffers {
             index,
+            earlier,
             timings,
             sequences,
             first: (_, first),
@@ -854,7 +856,8 @@ impl Renderer {
                 index,
                 Arc::clone(&self.submission_clock),
                 sequences.end - 1,
-            ),
+            )
+            .after(earlier),
             sequences,
             queue_idle,
             timings,
@@ -910,13 +913,15 @@ impl Renderer {
             );
             return SubmittedBuffers {
                 index,
+                earlier: Vec::new(),
                 timings,
                 sequences: sequence..sequence + 1,
                 first,
             };
         }
         let mut total = SubmitTimings::default();
-        let mut last = None;
+        let mut last: Option<(wgpu::SubmissionIndex, u64)> = None;
+        let mut earlier = Vec::new();
         let mut first = None;
         for (buffer, predicted_ms, effects) in buffers {
             let (index, timings, sequence, started) = submit(
@@ -930,12 +935,13 @@ impl Renderer {
                 .saturating_add(timings.queue_lock_wait);
             total.queue_submit = total.queue_submit.saturating_add(timings.queue_submit);
             first.get_or_insert((sequence, started));
-            last = Some((index, sequence));
+            earlier.extend(last.replace((index, sequence)));
         }
         let (index, last_sequence) = last.expect("at least two buffers");
         let (first_sequence, first) = first.expect("at least two buffers");
         SubmittedBuffers {
             index,
+            earlier,
             timings: total,
             sequences: first_sequence..last_sequence + 1,
             first,
