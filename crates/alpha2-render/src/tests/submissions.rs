@@ -635,7 +635,7 @@ fn a_frame_whose_conversions_pass_the_planning_threshold_is_planned() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let source = RenderSize::new(2048, 2048).expect("size");
-    let output = RenderSize::new(256, 256).expect("size");
+    let output = RenderSize::new(512, 512).expect("size");
     let (planned, _) = converted_frame(&renderer, source, output, true);
     let (unplanned, _) = converted_frame(&renderer, source, output, false);
     assert!(
@@ -650,7 +650,7 @@ fn a_frame_cut_after_its_conversions_draws_what_one_submission_draws() {
     let gpu = own_device();
     let renderer = Renderer::new(gpu.clone());
     let source = RenderSize::new(2048, 2048).expect("size");
-    let output = RenderSize::new(256, 256).expect("size");
+    let output = RenderSize::new(512, 512).expect("size");
     let (whole, _) = with_watchdog(UNSPLIT_WATCHDOG_MS, || {
         converted_frame(&renderer, source, output, true)
     });
