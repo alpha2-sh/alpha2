@@ -184,11 +184,12 @@ impl RenderEncoder {
     pub(crate) fn place_pass(
         &mut self,
         work: crate::FrameCost,
+        region: crate::composite::PixelRect,
         bandable: bool,
         pass: Option<alpha2_gpu::PassKey>,
         effect: Option<&crate::EffectId>,
     ) -> crate::submission_planner::PassPlacement {
-        let placement = self.planner.pass(work, bandable, pass);
+        let placement = self.planner.pass(work, region, bandable, pass);
         self.apply(placement, effect);
         placement
     }
@@ -282,12 +283,12 @@ impl PassEncoder for RenderEncoder {
         region: crate::composite::PixelRect,
         encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
     ) {
-        let placement = self.place_pass(work, true, None, None);
+        let placement = self.place_pass(work, region, true, None, None);
         self.encode_pieces(placement, region, encode);
     }
 
     fn place_whole(&mut self, work: crate::FrameCost) {
-        self.place_pass(work, false, None, None);
+        self.place_pass(work, crate::composite::PixelRect::EMPTY, false, None, None);
     }
 }
 

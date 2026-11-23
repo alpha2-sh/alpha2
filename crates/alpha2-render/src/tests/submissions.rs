@@ -53,17 +53,11 @@ fn banded_submission_renders_the_same_bytes_as_one_submission() {
     let size = RenderSize::new(512, 288).expect("size");
     let (whole, planned) = with_watchdog(UNSPLIT_WATCHDOG_MS, || draw(heavy_effect(), size));
     assert_eq!(planned.submissions, 1, "{planned:?}");
-    // A one-millisecond watchdog leaves no budget: the pass is drawn in the most bands.
     alpha2_gpu::set_watchdog_ms(1);
     let banded = std::panic::catch_unwind(|| draw(heavy_effect(), size));
     alpha2_gpu::set_watchdog_ms(0);
     let (banded, split) = banded.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     assert!(planned.predicted_ms.is_some(), "a heavy frame is planned");
-    assert_eq!(
-        split.submissions,
-        crate::submission_planner::MAX_BANDS,
-        "{split:?}"
-    );
     assert!(split.submissions > planned.submissions, "{planned:?}");
     assert_eq!(split.cost, planned.cost);
     assert!(
@@ -321,10 +315,12 @@ fn a_frame_of_more_submissions_than_the_clock_keeps_still_lowers_the_rate() {
     let gpu = own_device();
     let renderer = Renderer::new(gpu.clone());
     let (effect, _) = registered(&renderer, heavy_effect());
-    let size = RenderSize::new(512, 288).expect("size");
+    let size = RenderSize::new(40, 40).expect("size");
     let view = flat_source(&renderer, size);
-    let bands = usize::try_from(crate::submission_planner::MAX_BANDS).expect("fits");
-    let passes = crate::submission_clock::RECENT_SUBMISSIONS_KEPT / bands + 1;
+    let pieces = (size.height / 2).min(crate::submission_planner::MAX_BANDS)
+        * (size.width / 2).min(crate::submission_planner::MAX_TILE_COLUMNS);
+    let quads = usize::try_from(pieces).expect("fits");
+    let passes = crate::submission_clock::RECENT_SUBMISSIONS_KEPT / quads + 1;
     let mut graph = RenderGraph::new(size);
     let mut node = graph.add_source(SourceView::from_wgpu(&view));
     for _ in 0..passes {
@@ -358,11 +354,11 @@ fn a_frame_of_more_submissions_than_the_clock_keeps_still_lowers_the_rate() {
     let banded = with_watchdog(1.0, polled);
     assert_eq!(
         usize::try_from(banded.submissions).expect("fits"),
-        passes * bands,
+        passes * quads,
         "{banded:?}"
     );
     assert!(
-        passes * bands > crate::submission_clock::RECENT_SUBMISSIONS_KEPT,
+        passes * quads > crate::submission_clock::RECENT_SUBMISSIONS_KEPT,
         "{banded:?}"
     );
     assert!(
@@ -410,7 +406,8 @@ fn a_loss_after_a_split_frame_whose_submissions_each_ran_briefly_is_not_reported
 #[test]
 fn each_submission_of_a_split_frame_names_the_effect_encoded_into_it() {
     let _lock = gpu_test_lock();
-    let renderer = Renderer::new(gpu());
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
     let (first, _) = registered(&renderer, heavy_effect());
     let (second, _) = registered(
         &renderer,
@@ -440,7 +437,7 @@ fn each_submission_of_a_split_frame_names_the_effect_encoded_into_it() {
         )
         .expect("dependency exists");
     graph.set_output(output).expect("output exists");
-    let frame = with_watchdog(1.0, || {
+    let frame = || {
         renderer
             .render_graph_yuv420p(&graph, &[], centred(ColorMetadata::default()))
             .expect("the frame renders")
@@ -449,9 +446,12 @@ fn each_submission_of_a_split_frame_names_the_effect_encoded_into_it() {
         renderer
             .take_frame_submissions()
             .expect("the frame's submissions")
-    });
+    };
+    let bands = crate::submission_planner::MAX_BANDS;
+    seeded_at(&gpu, frame().cost.unit_pixels(), f64::from(bands * 2 - 8));
+    let frame = frame();
     let name = |id: &crate::EffectId| vec![format!("{}@{}", id.as_str(), id.version())];
-    let bands = usize::try_from(crate::submission_planner::MAX_BANDS).expect("fits");
+    let bands = usize::try_from(bands / 2).expect("fits");
     let kept = renderer.submission_clock.kept_effects();
     let named: Vec<Vec<String>> = kept
         [kept.len() - usize::try_from(frame.submissions).expect("fits")..]
@@ -459,10 +459,21 @@ fn each_submission_of_a_split_frame_names_the_effect_encoded_into_it() {
         .filter(|effects| !effects.is_empty())
         .cloned()
         .collect();
-    let expected: Vec<Vec<String>> = std::iter::repeat_n(name(&first), bands)
-        .chain(std::iter::repeat_n(name(&second), bands))
-        .collect();
-    assert_eq!(named, expected, "{frame:?}");
+    let second_from = named
+        .iter()
+        .position(|effects| *effects == name(&second))
+        .unwrap_or(named.len());
+    assert!(
+        second_from >= bands
+            && named.len() - second_from >= bands
+            && named[..second_from]
+                .iter()
+                .all(|effects| *effects == name(&first))
+            && named[second_from..]
+                .iter()
+                .all(|effects| *effects == name(&second)),
+        "{frame:?}: {named:?}"
+    );
 }
 
 fn frame_planned_at(
@@ -896,4 +907,27 @@ fn a_vector_scene_is_charged_for_what_it_draws() {
         "a fill of a sixteenth of the canvas is charged {corner} unit pixels, one of the whole \
          canvas {one}, sixty-four of it {many}"
     );
+}
+
+#[test]
+fn a_pass_past_the_most_bands_is_cut_across_too_and_not_submitted_over_the_budget() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let size = RenderSize::new(512, 288).expect("size");
+    let view = flat_source(&renderer, size);
+    let graph = effect_graph(&view, &effect, size);
+    let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+    let past_the_bands = 8.0 * f64::from(crate::submission_planner::MAX_BANDS);
+    let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, past_the_bands);
+    assert_within_the_budget(
+        longest,
+        planned,
+        &format!(
+            "a pass predicted at {past_the_bands} budgets (watchdog {} ms)",
+            alpha2_gpu::watchdog_ms()
+        ),
+    );
+    assert!(whole == cut, "the tiles drew other bytes than the one pass");
 }

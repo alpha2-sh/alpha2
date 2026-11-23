@@ -726,7 +726,7 @@ impl Renderer {
                         let clear_first = !*parent_cleared;
                         *parent_cleared = true;
                         let region = irect_region(*bounds, size);
-                        let placement = encoder.place_pass(*work, true, None, None);
+                        let placement = encoder.place_pass(*work, region, true, None, None);
                         encoder.encode_pieces(placement, region, |encoder, piece| {
                             let mut pass = begin(encoder, parent, piece.first && clear_first);
                             passes += 1;
@@ -749,7 +749,7 @@ impl Renderer {
                     let target = layers.last().map_or(base, crate::pool::TextureLease::view);
                     let clear_first = !*cleared.last().expect("a target");
                     *cleared.last_mut().expect("a target") = true;
-                    let placement = encoder.planner().pass(fill.work, true, None);
+                    let placement = encoder.planner().pass(fill.work, fill.region, true, None);
                     let whole = !placement.cut_before
                         && placement.pieces.count() <= 1
                         && placement.pilot.is_none();
@@ -797,7 +797,7 @@ impl Renderer {
         if let Some(linear_target) = &linear_target {
             let encode_group = group(linear_target.view());
             let region = prepared.encode_region;
-            let placement = encoder.place_pass(prepared.encode_work, true, None, None);
+            let placement = encoder.place_pass(prepared.encode_work, region, true, None, None);
             encoder.encode_pieces(placement, region, |encoder, piece| {
                 let mut pass = begin(encoder, output, piece.first);
                 passes += 1;

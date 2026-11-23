@@ -81,6 +81,9 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A pass predicted at more than 64 submission budgets is no longer drawn in 64 bands each over the
+  budget: past 64 bands it is cut across as well, into up to 16 tiles a band of at least a 2x2
+  quad, so no submission is predicted over the budget below 1024 budgets a pass.
 - A vector scene is charged for the tiles each fill covers and its paint, the layers it composites
   and its final encode, instead of a fixed charge whatever it draws, and each of its draws is a
   placed pass: a scene of many fills is cut between them (continuing with a load, not a clear) and

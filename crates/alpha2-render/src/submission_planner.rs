@@ -4,7 +4,8 @@
 //! timeout. Each pass's time is predicted from its cost ([`crate::effect_cost`]), covered pixels
 //! and the device rate ([`alpha2_gpu::GpuRate`]); a pass that would push the command buffer past
 //! [`alpha2_gpu::submission_budget_ms`] starts a new submission, and a single pass over budget
-//! is drawn in scissored horizontal bands, one submission each.
+//! is drawn in scissored pieces, one submission each: horizontal bands, then tiles across them
+//! past [`MAX_BANDS`].
 //!
 //! Frames below [`PLANNING_THRESHOLD_UNIT_PIXELS`] stay one command buffer and need no rate.
 //! Splitting never changes pixels, only when the GPU starts each part.
@@ -18,6 +19,9 @@ pub(crate) const PLANNING_THRESHOLD_UNIT_PIXELS: f64 = 64.0 * 1_048_576.0;
 
 /// The most bands a pass is drawn in.
 pub(crate) const MAX_BANDS: u32 = 64;
+
+/// The most tiles a band is cut into past [`MAX_BANDS`].
+pub(crate) const MAX_TILE_COLUMNS: u32 = 16;
 
 /// A frame's predicted cost in unit pixels per kind of work.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -94,6 +98,18 @@ impl Pieces {
         rows: 1,
         columns: 1,
     };
+
+    fn within(budgets: f64, region: PixelRect) -> Self {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let needed = budgets.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
+        let rows = needed.min(MAX_BANDS).min(region.height.div_ceil(2)).max(1);
+        let columns = needed
+            .div_ceil(rows)
+            .min(MAX_TILE_COLUMNS)
+            .min(region.width.div_ceil(2))
+            .max(1);
+        Self { rows, columns }
+    }
 
     pub(crate) const fn count(self) -> u32 {
         self.rows.saturating_mul(self.columns)
@@ -197,6 +213,7 @@ impl SubmissionPlanner {
     pub(crate) fn pass(
         &mut self,
         work: FrameCost,
+        region: PixelRect,
         bandable: bool,
         pass: Option<alpha2_gpu::PassKey>,
     ) -> PassPlacement {
@@ -218,20 +235,12 @@ impl SubmissionPlanner {
         let budget = plan.budget_ms;
         let rate = plan.rate.planning_rate(plan.ms_per_unit_pixel, pass);
         let ms = work.unit_pixels() * rate;
-        self.place(ms, budget, bandable)
+        self.place(ms, budget, bandable.then_some(region))
     }
 
-    fn place(&mut self, ms: f64, budget: f64, bandable: bool) -> PassPlacement {
+    fn place(&mut self, ms: f64, budget: f64, region: Option<PixelRect>) -> PassPlacement {
         if ms > budget {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let pieces = if bandable {
-                Pieces {
-                    rows: ((ms / budget).ceil() as u32).clamp(1, MAX_BANDS),
-                    columns: 1,
-                }
-            } else {
-                Pieces::ONE
-            };
+            let pieces = region.map_or(Pieces::ONE, |region| Pieces::within(ms / budget, region));
             let cut_before = self.current_ms > 0.0;
             if cut_before {
                 self.finish_buffer();
@@ -481,6 +490,13 @@ fn names(name: &str, effect: &crate::EffectId) -> bool {
 mod tests {
     use super::*;
 
+    const REGION: PixelRect = PixelRect {
+        x: 0,
+        y: 0,
+        width: 512,
+        height: 288,
+    };
+
     fn placed(cut_before: bool, rows: u32) -> PassPlacement {
         PassPlacement {
             cut_before,
@@ -498,7 +514,9 @@ mod tests {
             arithmetic: 10,
         };
         assert_eq!(
-            planner.pass(FrameCost::of(pass, 100), true, None).pieces,
+            planner
+                .pass(FrameCost::of(pass, 100), REGION, true, None)
+                .pieces,
             Pieces::ONE
         );
         assert_eq!(planner.buffer_ms(), None);
@@ -506,27 +524,27 @@ mod tests {
         // 1000 ms each: two fit, the third starts a new buffer.
         assert!(
             !planner
-                .pass(FrameCost::of(pass, 100), true, None)
+                .pass(FrameCost::of(pass, 100), REGION, true, None)
                 .cut_before
         );
         assert!(
             !planner
-                .pass(FrameCost::of(pass, 100), true, None)
+                .pass(FrameCost::of(pass, 100), REGION, true, None)
                 .cut_before
         );
         assert!(
             planner
-                .pass(FrameCost::of(pass, 100), true, None)
+                .pass(FrameCost::of(pass, 100), REGION, true, None)
                 .cut_before
         );
         // 10,000 ms: four bands of 2,500 after a cut.
-        let placement = planner.pass(FrameCost::of(pass, 1_000), true, None);
+        let placement = planner.pass(FrameCost::of(pass, 1_000), REGION, true, None);
         assert_eq!(placement, placed(true, 4));
         for _ in 1..placement.pieces.count() {
             planner.next_band();
         }
         assert_eq!(
-            planner.pass(FrameCost::of(pass, 1_000), false, None),
+            planner.pass(FrameCost::of(pass, 1_000), REGION, false, None),
             placed(true, 1)
         );
         assert_eq!(
@@ -549,11 +567,11 @@ mod tests {
             arithmetic: 10,
         };
         let blur = crate::EffectId::from_static("blur", 2);
-        let _ = planner.pass(FrameCost::of(pass, 100), false, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, false, None);
         planner.name_placed(Some(&blur));
-        let _ = planner.pass(FrameCost::of(pass, 100), false, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, false, None);
         planner.name_placed(Some(&blur));
-        let _ = planner.pass(FrameCost::of(pass, 10_000), false, None);
+        let _ = planner.pass(FrameCost::of(pass, 10_000), REGION, false, None);
         planner.name_placed(Some(&blur));
         let buffers = planner.buffer_effects();
         assert!(buffers.len() > 1, "{buffers:?}");
@@ -573,17 +591,17 @@ mod tests {
         };
         let blur = crate::EffectId::from_static("blur", 2);
         let grain = crate::EffectId::from_static("grain", 1);
-        let _ = planner.pass(FrameCost::of(pass, 100), true, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, true, None);
         planner.name_placed(Some(&blur));
-        let _ = planner.pass(FrameCost::of(pass, 100), false, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, false, None);
         planner.name_placed(None);
-        let placement = planner.pass(FrameCost::of(pass, 1_000), true, None);
+        let placement = planner.pass(FrameCost::of(pass, 1_000), REGION, true, None);
         assert_eq!(placement, placed(true, 4));
         planner.name_placed(Some(&grain));
         for _ in 1..placement.pieces.count() {
             planner.next_band();
         }
-        let _ = planner.pass(FrameCost::of(pass, 100), true, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, true, None);
         planner.name_placed(Some(&blur));
         let names = |names: &[&str]| -> Vec<String> {
             names.iter().map(|name| (*name).to_owned()).collect()
@@ -615,11 +633,11 @@ mod tests {
             arithmetic: 10,
         };
         assert_eq!(
-            planner.pass(FrameCost::of(pass, 100), true, None),
+            planner.pass(FrameCost::of(pass, 100), REGION, true, None),
             placed(false, 1)
         );
         assert_eq!(
-            planner.pass(FrameCost::of(pass, 100), true, Some(scattered)),
+            planner.pass(FrameCost::of(pass, 100), REGION, true, Some(scattered)),
             placed(true, 4)
         );
     }
@@ -630,7 +648,7 @@ mod tests {
         planner.mark_pilot(6);
         let pass = EffectCost::fixed(1, 0);
         assert_eq!(
-            planner.pass(FrameCost::of(pass, 100), true, None),
+            planner.pass(FrameCost::of(pass, 100), REGION, true, None),
             PassPlacement {
                 cut_before: false,
                 pieces: Pieces::ONE,
@@ -638,10 +656,43 @@ mod tests {
             }
         );
         assert_eq!(
-            planner.pass(FrameCost::of(pass, 100), false, None),
+            planner.pass(FrameCost::of(pass, 100), REGION, false, None),
             placed(false, 1)
         );
         assert_eq!(planner.buffer_ms(), None);
+    }
+
+    #[test]
+    fn a_pass_past_the_most_bands_is_cut_into_tiles_no_smaller_than_a_quad() {
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(std::sync::Arc::default(), 1.0, 100.0);
+        let pass = EffectCost::fixed(0, 0).plus(EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 1,
+        });
+        let placement = planner.pass(FrameCost::of(pass, 200 * 100), REGION, true, None);
+        assert_eq!(
+            placement.pieces,
+            Pieces {
+                rows: 64,
+                columns: 4
+            }
+        );
+        let tiny = PixelRect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 4,
+        };
+        let placement = planner.pass(FrameCost::of(pass, 1_000 * 100), tiny, true, None);
+        assert_eq!(
+            placement.pieces,
+            Pieces {
+                rows: 2,
+                columns: 3
+            }
+        );
     }
 
     #[test]

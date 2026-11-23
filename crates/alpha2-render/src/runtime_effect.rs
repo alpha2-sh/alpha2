@@ -199,6 +199,7 @@ impl Renderer {
         let pixels = u64::from(size.width) * u64::from(size.height);
         let placement = encoder.place_pass(
             crate::FrameCost::of(registered.cost, pixels),
+            crate::composite::PixelRect::whole(size),
             true,
             Some(alpha2_gpu::PassKey::new(registered.pass_id, pixels)),
             Some(id),

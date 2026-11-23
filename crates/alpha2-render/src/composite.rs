@@ -249,7 +249,7 @@ impl Renderer {
         let pipeline = self.composite_program_pipeline(cached, program)?;
         #[cfg(not(test))]
         let _ = (tier, layers);
-        let placement = encoder.place_pass(batch.work, true, None, None);
+        let placement = encoder.place_pass(batch.work, batch.region, true, None, None);
         if let Some((from, to)) = backdrop {
             copy_region(encoder, from, to, batch.bounds);
         }
