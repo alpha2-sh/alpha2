@@ -379,3 +379,61 @@ fn a_loss_after_a_split_frame_whose_submissions_each_ran_briefly_is_not_reported
         );
     });
 }
+
+#[test]
+fn each_submission_of_a_split_frame_names_the_effect_encoded_into_it() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let (first, _) = registered(&renderer, heavy_effect());
+    let (second, _) = registered(
+        &renderer,
+        EffectDef {
+            id: "test.heavy.second".into(),
+            ..heavy_effect()
+        },
+    );
+    let size = RenderSize::new(256, 144).expect("size");
+    let view = flat_source(&renderer, size);
+    let mut graph = RenderGraph::new(size);
+    let input = graph.add_source(SourceView::from_wgpu(&view));
+    let middle = graph
+        .add_effect(
+            first.clone(),
+            input,
+            EffectParams::new(),
+            EffectRuntime::default(),
+        )
+        .expect("dependency exists");
+    let output = graph
+        .add_effect(
+            second.clone(),
+            middle,
+            EffectParams::new(),
+            EffectRuntime::default(),
+        )
+        .expect("dependency exists");
+    graph.set_output(output).expect("output exists");
+    let frame = with_watchdog(1.0, || {
+        renderer
+            .render_graph_yuv420p(&graph, &[], centred(ColorMetadata::default()))
+            .expect("the frame renders")
+            .wait_ready()
+            .expect("the readback maps");
+        renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions")
+    });
+    let name = |id: &crate::EffectId| vec![format!("{}@{}", id.as_str(), id.version())];
+    let bands = usize::try_from(crate::submission_planner::MAX_BANDS).expect("fits");
+    let kept = renderer.submission_clock.kept_effects();
+    let named: Vec<Vec<String>> = kept
+        [kept.len() - usize::try_from(frame.submissions).expect("fits")..]
+        .iter()
+        .filter(|effects| !effects.is_empty())
+        .cloned()
+        .collect();
+    let expected: Vec<Vec<String>> = std::iter::repeat_n(name(&first), bands)
+        .chain(std::iter::repeat_n(name(&second), bands))
+        .collect();
+    assert_eq!(named, expected, "{frame:?}");
+}

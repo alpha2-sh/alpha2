@@ -355,6 +355,7 @@ export class Alpha2Player {
       frameIndex: null,
       timeTicks: null,
       gpuMs: null,
+      measured: false,
       submissions: null,
       message: "the GPU device was lost",
     };

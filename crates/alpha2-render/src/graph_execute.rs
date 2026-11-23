@@ -189,13 +189,6 @@ impl Renderer {
                 release_inputs(graph, &plan.last_use, &mut outputs, node_id, position);
                 continue;
             }
-            // Recorded for the report of a loss this submission causes.
-            if let RenderNode::Effect { effect, .. }
-            | RenderNode::Transition { effect, .. }
-            | RenderNode::Generator { effect, .. } = &graph.nodes[node_id.index]
-            {
-                self.submission_clock.note_effect(effect);
-            }
             let output = match &graph.nodes[node_id.index] {
                 RenderNode::Source(_) => None,
                 RenderNode::Effect {
@@ -328,7 +321,13 @@ impl Renderer {
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
                 RenderNode::Vector { scene } => {
-                    encoder.place_pass(crate::submission_planner::VECTOR_COST, pixels, false, None);
+                    encoder.place_pass(
+                        crate::submission_planner::VECTOR_COST,
+                        pixels,
+                        false,
+                        None,
+                        None,
+                    );
                     let target = self.textures.acquire(
                         self.gpu.device(),
                         graph.size,
@@ -352,6 +351,7 @@ impl Renderer {
                             .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
                         pixels,
                         false,
+                        None,
                         None,
                     );
                     let views = layers

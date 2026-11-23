@@ -85,7 +85,7 @@ impl Renderer {
         uniforms: &mut UniformArenaLease,
     ) -> Result<Option<PendingEffectTiming>, RenderError> {
         let EffectPass {
-            id: _,
+            id,
             kind,
             source_a,
             source_b,
@@ -202,6 +202,7 @@ impl Renderer {
             pixels,
             true,
             Some(alpha2_gpu::PassKey::new(registered.pass_id, pixels)),
+            Some(id),
         );
         if let Some(rows) = placement.pilot {
             encode_pass(

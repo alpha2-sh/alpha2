@@ -20,8 +20,13 @@ export interface GpuLossReport {
   readonly frameIndex: number | null;
   /** Timeline time of that frame, when known. */
   readonly timeTicks: bigint | null;
-  /** GPU time of the submission, or of all `submissions` together. */
+  /**
+   * GPU time of the submission, or of all `submissions` together; an upper bound unless
+   * `measured`.
+   */
   readonly gpuMs: number | null;
+  /** Whether `gpuMs` was measured: its start and its end were each seen as they happened. */
+  readonly measured: boolean;
   /** Submissions whose completions were seen together, so only their total is known. */
   readonly submissions: number | null;
   /** One-line message for the user. */
@@ -189,11 +194,13 @@ export class GpuRecoveryLadder {
   }
 }
 
-function ranFor(report: Pick<GpuLossReport, "gpuMs" | "submissions">): string {
+function ranFor(
+  report: Pick<GpuLossReport, "gpuMs" | "measured" | "submissions">,
+): string {
   const ms = report.gpuMs ?? "?";
   return report.submissions !== null && report.submissions > 1
-    ? `${report.submissions} submissions completed together in ${ms} ms`
-    : `one submission ran ${ms} ms`;
+    ? `${report.submissions} submissions completed together ${report.measured ? "in" : "within"} ${ms} ms`
+    : `one submission ran ${report.measured ? "" : "up to "}${ms} ms`;
 }
 
 /**
@@ -210,12 +217,14 @@ export function lossReportFromJson(
       frameIndex: null,
       timeTicks: null,
       gpuMs: null,
+      measured: false,
       submissions: null,
       message: fallbackMessage,
     };
   const value = JSON.parse(json) as {
     hung?: boolean;
     gpuMs?: number | null;
+    measured?: boolean;
     submissions?: number | null;
     watchdogMs?: number;
     timeTicks?: string | null;
@@ -227,6 +236,7 @@ export function lossReportFromJson(
     timeTicks:
       typeof value.timeTicks === "string" ? BigInt(value.timeTicks) : null,
     gpuMs: typeof value.gpuMs === "number" ? value.gpuMs : null,
+    measured: value.measured === true,
     submissions:
       typeof value.submissions === "number" ? value.submissions : null,
   };

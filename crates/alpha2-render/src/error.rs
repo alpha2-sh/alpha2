@@ -68,6 +68,9 @@ pub enum RenderError {
         /// Submissions whose completions were seen together, so only their total is known; 1 for
         /// one submission.
         submissions: u32,
+        /// Whether `gpu_ms` is measured; otherwise a completion was seen late and it is an upper
+        /// bound.
+        measured: bool,
         /// The watchdog it was measured against, in milliseconds.
         watchdog_ms: u32,
     },
@@ -139,23 +142,26 @@ impl fmt::Display for RenderError {
                 frame,
                 gpu_ms,
                 submissions,
+                measured,
                 watchdog_ms,
                 ..
             } => {
                 formatter.write_str("GPU device hung: ")?;
+                let ran = if *measured { "ran" } else { "ran up to" };
+                let within = if *measured { "in" } else { "within" };
                 match (frame, *submissions) {
                     (Some(frame), 0 | 1) => {
-                        write!(formatter, "frame {frame} ran {gpu_ms} ms in one submission")?;
+                        write!(formatter, "frame {frame} {ran} {gpu_ms} ms in one submission")?;
                     }
-                    (None, 0 | 1) => write!(formatter, "a submission ran {gpu_ms} ms")?,
+                    (None, 0 | 1) => write!(formatter, "a submission {ran} {gpu_ms} ms")?,
                     (Some(frame), submissions) => write!(
                         formatter,
-                        "{submissions} submissions from frame {frame} on completed together in \
-                         {gpu_ms} ms"
+                        "{submissions} submissions from frame {frame} on completed together \
+                         {within} {gpu_ms} ms"
                     )?,
                     (None, submissions) => write!(
                         formatter,
-                        "{submissions} submissions completed together in {gpu_ms} ms"
+                        "{submissions} submissions completed together {within} {gpu_ms} ms"
                     )?,
                 }
                 write!(

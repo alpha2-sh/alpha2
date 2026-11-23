@@ -178,9 +178,9 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
   /** Browser-reported adapter name; may be empty. */
   readonly adapter?: string;
   /**
-   * After a loss, JSON `{ hung, gpuMs, submissions, watchdogMs, timeTicks, frameIndex, effects,
-   * predictedMs }` with `timeTicks` as a decimal string; `undefined` before any loss and on the CPU
-   * renderer.
+   * After a loss, JSON `{ hung, gpuMs, measured, submissions, watchdogMs, timeTicks, frameIndex,
+   * effects, predictedMs }` with `timeTicks` as a decimal string; `undefined` before any loss and
+   * on the CPU renderer.
    */
   readonly lossReport?: string;
   /** A lost renderer rejects export readbacks and must be recreated. Never set on the CPU. */

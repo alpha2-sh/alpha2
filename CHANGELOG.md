@@ -36,9 +36,16 @@ All notable changes to this project are documented in this file.
   together in t ms". The host's `failure.diagnostics.gpuSubmission` renames `maxMs` to `gpuMs` and
   adds `submissions`; the browser's `lossReport` and `GpuLossReport` add `submissions`. Both
   describe the submission that made a loss hung, else the longest recent one.
+- **Breaking:** Loss reports say whether a time was measured: `SubmissionReport` and
+  `RenderError::GpuDeviceHung` gain `measured`, as do the host's `gpuSubmission`, the browser's
+  `lossReport` and `GpuLossReport`. A time that ends at a completion seen late is an upper bound,
+  and the hung message then says "ran up to t ms in one submission" or "completed together within
+  t ms".
 
 ### Fixed
 
+- Each submission of a split frame names the effects encoded into its own command buffers in loss
+  reports; the frame's first submission named every effect of the frame and the others none.
 - A GPU loss after a heavy frame split into short submissions is reported `GPU_DEVICE_LOST` and
   retried, where it was reported `GPU_DEVICE_HUNG` and not retried on the GPU. Completions one wait
   sees together now implicate the export only when their total also ran more than twice its

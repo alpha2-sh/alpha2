@@ -329,7 +329,7 @@ fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
     }));
     let long = renderer
         .submission_clock
-        .record(start, None, false)
+        .record(start, None, Vec::new(), false)
         .sequence;
     renderer.submission_clock.complete(
         long,
@@ -347,6 +347,7 @@ fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
             time_ticks,
             gpu_ms,
             submissions,
+            measured,
             watchdog_ms,
         } = renderer.classify_loss(lost)
         else {
@@ -356,6 +357,7 @@ fn classify_loss_marks_a_loss_after_a_submission_near_the_watchdog_as_hung() {
         assert_eq!(time_ticks, Some(8_000));
         assert!(gpu_ms >= watchdog / 2, "{gpu_ms}");
         assert_eq!(submissions, 1);
+        assert!(!measured, "its completion was not seen as it happened");
         assert_eq!(watchdog_ms, watchdog);
     }
     assert_eq!(

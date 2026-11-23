@@ -1323,6 +1323,7 @@ impl Host {
                     json!({
                         "gpuMs": (longest.gpu_ms * 10.0).round() / 10.0,
                         "submissions": longest.submissions,
+                        "measured": longest.measured,
                         "watchdogMs": alpha2_gpu::watchdog_ms(),
                         "frameIndex": longest.frame.and_then(|frame| frame.frame_index),
                         "effects": longest.effects,

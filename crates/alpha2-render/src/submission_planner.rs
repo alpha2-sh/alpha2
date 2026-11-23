@@ -87,6 +87,9 @@ pub(crate) struct SubmissionPlanner {
     current_ms: f64,
     /// Predicted milliseconds of each command buffer finished before it.
     finished_ms: Vec<f64>,
+    current_effects: Vec<String>,
+    finished_effects: Vec<Vec<String>>,
+    placed_effect: Option<String>,
     /// Time of each remaining band of a banded pass.
     band_ms: f64,
     cost: FrameCost,
@@ -159,7 +162,7 @@ impl SubmissionPlanner {
             };
             let cut_before = self.current_ms > 0.0;
             if cut_before {
-                self.finished_ms.push(self.current_ms);
+                self.finish_buffer();
             }
             self.band_ms = ms / f64::from(bands);
             self.current_ms = self.band_ms;
@@ -171,7 +174,7 @@ impl SubmissionPlanner {
         }
         let cut_before = self.current_ms > 0.0 && self.current_ms + ms > budget;
         if cut_before {
-            self.finished_ms.push(self.current_ms);
+            self.finish_buffer();
             self.current_ms = 0.0;
         }
         self.current_ms += ms;
@@ -183,8 +186,35 @@ impl SubmissionPlanner {
     }
 
     pub(crate) fn next_band(&mut self) {
-        self.finished_ms.push(self.current_ms);
+        self.finish_buffer();
         self.current_ms = self.band_ms;
+        self.name_current_buffer();
+    }
+
+    fn finish_buffer(&mut self) {
+        self.finished_ms.push(self.current_ms);
+        self.finished_effects
+            .push(std::mem::take(&mut self.current_effects));
+    }
+
+    pub(crate) fn name_placed(&mut self, effect: Option<&crate::EffectId>) {
+        self.placed_effect =
+            effect.map(|effect| format!("{}@{}", effect.as_str(), effect.version()));
+        self.name_current_buffer();
+    }
+
+    fn name_current_buffer(&mut self) {
+        if let Some(effect) = &self.placed_effect
+            && !self.current_effects.contains(effect)
+        {
+            self.current_effects.push(effect.clone());
+        }
+    }
+
+    pub(crate) fn buffer_effects(&self) -> Vec<Vec<String>> {
+        let mut buffers = self.finished_effects.clone();
+        buffers.push(self.current_effects.clone());
+        buffers
     }
 
     pub(crate) const fn is_planned(&self) -> bool {
@@ -418,6 +448,45 @@ mod tests {
         );
         assert!((planner.cost().unit_pixels() - 24_000.0).abs() < 1e-9);
         assert_eq!(planner.planned_at(), Some((1.0, 2_500.0)));
+    }
+
+    #[test]
+    fn effect_names_follow_the_command_buffer_their_pass_is_encoded_into() {
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(std::sync::Arc::default(), 1.0, 2_500.0);
+        let pass = EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 10,
+        };
+        let blur = crate::EffectId::from_static("blur", 2);
+        let grain = crate::EffectId::from_static("grain", 1);
+        let _ = planner.pass(pass, 100, true, None);
+        planner.name_placed(Some(&blur));
+        let _ = planner.pass(pass, 100, false, None);
+        planner.name_placed(None);
+        let placement = planner.pass(pass, 1_000, true, None);
+        assert_eq!(placement, placed(true, 4));
+        planner.name_placed(Some(&grain));
+        for _ in 1..placement.bands {
+            planner.next_band();
+        }
+        let _ = planner.pass(pass, 100, true, None);
+        planner.name_placed(Some(&blur));
+        let names = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        assert_eq!(
+            planner.buffer_effects(),
+            vec![
+                names(&["blur@2"]),
+                names(&["grain@1"]),
+                names(&["grain@1"]),
+                names(&["grain@1"]),
+                names(&["grain@1"]),
+                names(&["blur@2"]),
+            ]
+        );
     }
 
     #[test]

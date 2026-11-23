@@ -178,18 +178,20 @@ impl RenderEncoder {
     }
 
     /// Charges a pass to the plan and places it, finishing the command buffer first when the plan
-    /// says so.
+    /// says so; `effect` names the pass in each command buffer it is encoded into.
     pub(crate) fn place_pass(
         &mut self,
         cost: crate::effect_cost::EffectCost,
         pixels: u64,
         bandable: bool,
         pass: Option<alpha2_gpu::PassKey>,
+        effect: Option<&crate::EffectId>,
     ) -> crate::submission_planner::PassPlacement {
         let placement = self.planner.pass(cost, pixels, bandable, pass);
         if placement.cut_before {
             self.cut();
         }
+        self.planner.name_placed(effect);
         placement
     }
 
@@ -673,12 +675,22 @@ impl Renderer {
         let mut frames = Vec::new();
         let mut planners = Vec::new();
         for commands in commands {
-            command_buffers.extend(commands.buffers.into_iter().map(|buffer| (buffer, None)));
+            command_buffers.extend(
+                commands
+                    .buffers
+                    .into_iter()
+                    .map(|buffer| (buffer, None, Vec::new())),
+            );
             if let Some(buffer_ms) = commands.planner.buffer_ms() {
                 let first = command_buffers.len() - buffer_ms.len();
                 for (slot, ms) in command_buffers[first..].iter_mut().zip(buffer_ms) {
                     slot.1 = Some(ms);
                 }
+            }
+            let buffer_effects = commands.planner.buffer_effects();
+            let first = command_buffers.len() - buffer_effects.len();
+            for (slot, effects) in command_buffers[first..].iter_mut().zip(buffer_effects) {
+                slot.2 = effects;
             }
             planners.push(commands.planner);
             errors.push(commands.errors);
@@ -730,37 +742,46 @@ impl Renderer {
     /// can be preempted between them. Every submission is timed for loss classification.
     fn submit_buffers(
         &self,
-        buffers: Vec<(wgpu::CommandBuffer, Option<f64>)>,
+        buffers: Vec<(wgpu::CommandBuffer, Option<f64>, Vec<String>)>,
         measure: bool,
         watch_previous: bool,
     ) -> SubmittedBuffers {
-        let submit =
-            |buffers: Vec<wgpu::CommandBuffer>, predicted_ms: Option<f64>, watch_previous: bool| {
-                let (index, timings) = if measure {
-                    self.gpu.submit_timed(buffers)
-                } else {
-                    (self.gpu.submit(buffers), SubmitTimings::default())
-                };
-                let at = web_time::Instant::now();
-                let recorded = self
-                    .submission_clock
-                    .record(at, predicted_ms, watch_previous);
-                let sequence = recorded.sequence;
-                let clock = Arc::clone(&self.submission_clock);
-                self.gpu.on_submitted_work_done(move || {
-                    let as_it_happens = clock.sees_as_it_happens(sequence);
-                    clock.complete(sequence, web_time::Instant::now(), as_it_happens);
-                });
-                (index, timings, sequence, (at, recorded))
+        let submit = |buffers: Vec<wgpu::CommandBuffer>,
+                      predicted_ms: Option<f64>,
+                      effects: Vec<String>,
+                      watch_previous: bool| {
+            let (index, timings) = if measure {
+                self.gpu.submit_timed(buffers)
+            } else {
+                (self.gpu.submit(buffers), SubmitTimings::default())
             };
-        if buffers.len() <= 1 || buffers.iter().all(|(_, ms)| ms.is_none()) {
+            let at = web_time::Instant::now();
+            let recorded = self
+                .submission_clock
+                .record(at, predicted_ms, effects, watch_previous);
+            let sequence = recorded.sequence;
+            let clock = Arc::clone(&self.submission_clock);
+            self.gpu.on_submitted_work_done(move || {
+                let as_it_happens = clock.sees_as_it_happens(sequence);
+                clock.complete(sequence, web_time::Instant::now(), as_it_happens);
+            });
+            (index, timings, sequence, (at, recorded))
+        };
+        if buffers.len() <= 1 || buffers.iter().all(|(_, ms, _)| ms.is_none()) {
             let predicted_ms = buffers
                 .iter()
-                .filter_map(|(_, ms)| *ms)
+                .filter_map(|(_, ms, _)| *ms)
                 .reduce(|a, b| a + b);
+            let mut effects: Vec<String> = Vec::new();
+            for effect in buffers.iter().flat_map(|(_, _, effects)| effects) {
+                if !effects.contains(effect) {
+                    effects.push(effect.clone());
+                }
+            }
             let (index, timings, sequence, first) = submit(
-                buffers.into_iter().map(|(buffer, _)| buffer).collect(),
+                buffers.into_iter().map(|(buffer, _, _)| buffer).collect(),
                 predicted_ms,
+                effects,
                 watch_previous,
             );
             return SubmittedBuffers {
@@ -773,10 +794,11 @@ impl Renderer {
         let mut total = SubmitTimings::default();
         let mut last = None;
         let mut first = None;
-        for (buffer, predicted_ms) in buffers {
+        for (buffer, predicted_ms, effects) in buffers {
             let (index, timings, sequence, started) = submit(
                 vec![buffer],
                 predicted_ms,
+                effects,
                 watch_previous && first.is_none(),
             );
             total.queue_lock_wait = total

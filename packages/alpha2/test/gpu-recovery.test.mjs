@@ -18,6 +18,7 @@ const external = (timeTicks = null) => ({
   frameIndex: null,
   timeTicks,
   gpuMs: 12,
+  measured: true,
   submissions: 1,
   message: "the GPU device was lost",
 });
@@ -38,6 +39,11 @@ test("a hung loss goes to the cpu at once", () => {
     webgpu,
   );
   assert.match(together.reason, /40 submissions completed together in 2600 ms/);
+  const bound = new GpuRecoveryLadder({ losses: losses() }).onLoss(
+    { ...external(4_000n), hung: true, gpuMs: 1900, measured: false },
+    webgpu,
+  );
+  assert.match(bound.reason, /one submission ran up to 1900 ms/);
 });
 
 test("a first external loss retries the gpu on the same webgpu surface", () => {
@@ -119,6 +125,7 @@ test("a wasm loss report becomes a typed report", () => {
     JSON.stringify({
       hung: true,
       gpuMs: 1450.5,
+      measured: true,
       watchdogMs: 2000,
       timeTicks: "36000",
       frameIndex: 9,
@@ -130,6 +137,7 @@ test("a wasm loss report becomes a typed report", () => {
     frameIndex: 9,
     timeTicks: 36_000n,
     gpuMs: 1450.5,
+    measured: true,
     submissions: null,
     message:
       "the GPU device hung: one submission ran 1450.5 ms against a 2000 ms watchdog",
@@ -139,6 +147,7 @@ test("a wasm loss report becomes a typed report", () => {
       JSON.stringify({
         hung: true,
         gpuMs: 2619.3,
+        measured: false,
         submissions: 40,
         watchdogMs: 2000,
         timeTicks: "4000",
@@ -146,13 +155,14 @@ test("a wasm loss report becomes a typed report", () => {
         effects: [],
       }),
     ).message,
-    "the GPU device hung: 40 submissions completed together in 2619.3 ms against a 2000 ms watchdog",
+    "the GPU device hung: 40 submissions completed together within 2619.3 ms against a 2000 ms watchdog",
   );
   assert.deepEqual(lossReportFromJson(undefined, "lost"), {
     hung: false,
     frameIndex: null,
     timeTicks: null,
     gpuMs: null,
+    measured: false,
     submissions: null,
     message: "lost",
   });

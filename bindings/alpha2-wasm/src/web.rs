@@ -1944,11 +1944,12 @@ impl WebEffectRegistry {
     }
 
     /// After a loss ([`Self::device_lost`]), what the renderer's submission times say about it,
-    /// as JSON `{ hung, gpuMs, submissions, watchdogMs, timeTicks, frameIndex, effects,
-    /// predictedMs }`. `hung` means a recent submission ran at least half the GPU watchdog, or
-    /// `submissions` completed together did and ran more than twice their predicted time, so the
-    /// loss was most likely this work's and rerunning it would stop the GPU again; the other
-    /// fields describe that submission, else the longest. `undefined` before any loss.
+    /// as JSON `{ hung, gpuMs, measured, submissions, watchdogMs, timeTicks, frameIndex, effects,
+    /// predictedMs }`; `gpuMs` is an upper bound unless `measured`. `hung` means a recent
+    /// submission ran at least half the GPU watchdog, or `submissions` completed together did and
+    /// ran more than twice their predicted time, so the loss was most likely this work's and
+    /// rerunning it would stop the GPU again; the other fields describe that submission, else the
+    /// longest. `undefined` before any loss.
     #[wasm_bindgen(getter, js_name = lossReport)]
     pub fn loss_report(&self) -> Option<String> {
         if !self.device_lost() {
@@ -1962,6 +1963,7 @@ impl WebEffectRegistry {
             serde_json::json!({
                 "hung": is_hung,
                 "gpuMs": longest.as_ref().map(|report| (report.gpu_ms * 10.0).round() / 10.0),
+                "measured": longest.as_ref().is_some_and(|report| report.measured),
                 "submissions": longest.as_ref().map(|report| report.submissions),
                 "watchdogMs": alpha2_gpu::watchdog_ms(),
                 "timeTicks": frame.map(|frame| frame.time_ticks.to_string()),
