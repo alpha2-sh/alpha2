@@ -233,10 +233,9 @@ impl LossClassifier {
             RenderError::GpuWorkDropped
             | RenderError::GpuDeviceLost
             | RenderError::GpuTimeout
-            | RenderError::ExternalTextureSync(Some(alpha2_media::GpuFault::DeviceLost)) => self
-                .0
-                .hung()
-                .map_or(error, |report| crate::canary::hung_error(&report)),
+            | RenderError::ExternalTextureSync(Some(alpha2_media::GpuFault::DeviceLost)) => {
+                self.0.hung().map_or(error, |report| report.hung_error())
+            }
             error => error,
         }
     }

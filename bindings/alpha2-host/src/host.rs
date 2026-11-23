@@ -1306,17 +1306,15 @@ impl Host {
         let mut facts = self.failure.facts();
         let mut error = error;
         if let RendererBackend::Gpu(renderer) = &self.renderer {
+            let hung = renderer.hung_submission();
             // A loss the renderer's own long submission explains is hung, whichever step met it.
             if matches!(error.code, "GPU_DEVICE_LOST" | "GPU_TIMEOUT")
-                && let hung @ alpha2_render::RenderError::GpuDeviceHung { .. } =
-                    renderer.classify_loss(alpha2_render::RenderError::GpuDeviceLost)
+                && let Some(report) = &hung
             {
                 error.code = "GPU_DEVICE_HUNG";
-                error.message = format!("{hung} ({})", error.message);
+                error.message = format!("{} ({})", report.hung_error(), error.message);
             }
-            let hung = (error.code == "GPU_DEVICE_HUNG")
-                .then(|| renderer.hung_submission())
-                .flatten();
+            let hung = hung.filter(|_| error.code == "GPU_DEVICE_HUNG");
             if let Some(longest) = hung.or_else(|| renderer.longest_submission()) {
                 facts.insert(
                     "gpuSubmission".to_owned(),

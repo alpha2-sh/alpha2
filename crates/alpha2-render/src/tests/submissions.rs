@@ -323,12 +323,46 @@ fn a_frame_of_more_submissions_than_the_clock_keeps_still_lowers_the_rate() {
     let (effect, _) = registered(&renderer, heavy_effect());
     let size = RenderSize::new(512, 288).expect("size");
     let view = flat_source(&renderer, size);
-    let _ = polled_frame(&renderer, &effect, &view, size);
+    let bands = usize::try_from(crate::submission_planner::MAX_BANDS).expect("fits");
+    let passes = crate::submission_clock::RECENT_SUBMISSIONS_KEPT / bands + 1;
+    let mut graph = RenderGraph::new(size);
+    let mut node = graph.add_source(SourceView::from_wgpu(&view));
+    for _ in 0..passes {
+        node = graph
+            .add_effect(
+                effect.clone(),
+                node,
+                EffectParams::new(),
+                EffectRuntime::default(),
+            )
+            .expect("dependency exists");
+    }
+    graph.set_output(node).expect("output exists");
+    let polled = || {
+        let result = renderer.execute_graph(&graph).expect("the graph renders");
+        renderer
+            .gpu
+            .device()
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(renderer.gpu_wait_timeout()),
+            })
+            .expect("the device polls");
+        drop(result);
+        renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions")
+    };
+    let _ = polled();
     gpu.rate().seed(1.0);
-    let banded = with_watchdog(1.0, || polled_frame(&renderer, &effect, &view, size));
+    let banded = with_watchdog(1.0, polled);
     assert_eq!(
-        banded.submissions,
-        crate::submission_planner::MAX_BANDS,
+        usize::try_from(banded.submissions).expect("fits"),
+        passes * bands,
+        "{banded:?}"
+    );
+    assert!(
+        passes * bands > crate::submission_clock::RECENT_SUBMISSIONS_KEPT,
         "{banded:?}"
     );
     assert!(
@@ -342,13 +376,6 @@ fn a_frame_of_more_submissions_than_the_clock_keeps_still_lowers_the_rate() {
 fn a_loss_after_a_split_frame_whose_submissions_each_ran_briefly_is_not_reported_hung() {
     let _lock = gpu_test_lock();
     let gpu = own_device();
-    if gpu.capabilities().backend == "Gl" {
-        alpha2_test_support::skip!(
-            alpha2_test_support::Capability::ExactGpuCompletion,
-            "the GL backend reports a completion before a wait on it blocks"
-        );
-        return;
-    }
     let (size, frame_ms) = {
         let renderer = Renderer::new(gpu.clone());
         let (effect, _) = registered(&renderer, heavy_effect());

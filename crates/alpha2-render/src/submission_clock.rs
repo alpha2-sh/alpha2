@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use web_time::Instant;
 
-const RECENT_SUBMISSIONS_KEPT: usize = 256;
+pub(crate) const RECENT_SUBMISSIONS_KEPT: usize = 256;
 const MOST_SUBMISSIONS_KEPT: usize = 65_536;
 
 /// The frame a submission belongs to, as its caller knows it.
@@ -44,6 +44,26 @@ pub struct SubmissionReport {
     pub effects: Vec<String>,
     /// Their predicted GPU time in milliseconds, when their frames were planned.
     pub predicted_ms: Option<f64>,
+}
+
+impl SubmissionReport {
+    /// The [`crate::RenderError::GpuDeviceHung`] this report makes of a device loss.
+    #[must_use]
+    pub fn hung_error(&self) -> crate::RenderError {
+        crate::RenderError::GpuDeviceHung {
+            frame: self.frame.and_then(|frame| frame.frame_index),
+            time_ticks: self.frame.map(|frame| frame.time_ticks),
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "clamped to whole milliseconds in u32"
+            )]
+            gpu_ms: self.gpu_ms.round().clamp(0.0, f64::from(u32::MAX)) as u32,
+            submissions: self.submissions,
+            measured: self.measured,
+            watchdog_ms: alpha2_gpu::watchdog_ms(),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -407,6 +427,13 @@ impl PreviousCompletion {
 }
 
 thread_local! {
+    #[cfg_attr(
+        target_os = "android",
+        expect(
+            clippy::missing_const_for_thread_local,
+            reason = "clippy misreads the const initializer on Android's thread-local expansion"
+        )
+    )]
     static WAITING: Cell<Option<(usize, u64)>> = const { Cell::new(None) };
 }
 

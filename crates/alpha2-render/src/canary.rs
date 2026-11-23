@@ -208,7 +208,7 @@ impl LostState {
             *self
                 .hung
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hung_error(&report));
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(report.hung_error());
         }
     }
 
@@ -224,19 +224,6 @@ impl LostState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .unwrap_or(lost),
         )
-    }
-}
-
-pub(crate) fn hung_error(report: &crate::SubmissionReport) -> RenderError {
-    RenderError::GpuDeviceHung {
-        frame: report.frame.and_then(|frame| frame.frame_index),
-        time_ticks: report.frame.map(|frame| frame.time_ticks),
-        // Whole milliseconds; overflowing `u32` would take 49 days.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        gpu_ms: report.gpu_ms.round().clamp(0.0, f64::from(u32::MAX)) as u32,
-        submissions: report.submissions,
-        measured: report.measured,
-        watchdog_ms: alpha2_gpu::watchdog_ms(),
     }
 }
 
