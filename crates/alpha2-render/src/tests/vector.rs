@@ -103,14 +103,14 @@ fn stroke(paint: Paint, width: f64) -> EvaluatedItem {
     }
 }
 
-fn group(items: Vec<EvaluatedItem>, transform: EvaluatedTransform) -> EvaluatedItem {
+pub(super) fn group(items: Vec<EvaluatedItem>, transform: EvaluatedTransform) -> EvaluatedItem {
     EvaluatedItem::Group {
         items: Arc::from(items),
         transform,
     }
 }
 
-fn gradient(kind: u32, a: [f32; 2], b: [f32; 2], spread: Spread) -> Paint {
+pub(super) fn gradient(kind: u32, a: [f32; 2], b: [f32; 2], spread: Spread) -> Paint {
     let stops = super::generator::SPECTRUM
         .iter()
         .map(|(offset, color)| GradientStop {

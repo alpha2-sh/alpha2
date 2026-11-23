@@ -19,9 +19,6 @@ pub(crate) const PLANNING_THRESHOLD_UNIT_PIXELS: f64 = 64.0 * 1_048_576.0;
 /// The most bands a pass is drawn in.
 pub(crate) const MAX_BANDS: u32 = 64;
 
-/// Per covered pixel of a vector scene: coverage and paint reads.
-pub(crate) const VECTOR_COST: EffectCost = EffectCost::fixed(2, 0);
-
 /// A frame's predicted cost in unit pixels per kind of work.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct FrameCost {

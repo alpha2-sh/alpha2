@@ -18,7 +18,10 @@ pub(crate) enum PreparedNode {
     Nothing,
     Effect(Option<Shared<RegisteredEffect>>),
     Composite(PreparedComposite),
-    Vector { uniform_slices: usize },
+    Vector {
+        uniform_slices: usize,
+        scene: Option<Result<Box<crate::vector::PreparedVector>, crate::RenderError>>,
+    },
 }
 
 pub(crate) struct PreparedComposite {
@@ -53,6 +56,40 @@ impl PreparedFrame {
         match self.node(node) {
             PreparedNode::Effect(registered) => registered.as_ref(),
             _ => None,
+        }
+    }
+
+    pub(crate) fn vector(
+        &self,
+        node: RenderNodeId,
+    ) -> Option<&Result<Box<crate::vector::PreparedVector>, crate::RenderError>> {
+        match self.node(node) {
+            PreparedNode::Vector { scene, .. } => scene.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn prepare_vectors<'a>(
+        &mut self,
+        renderer: &Renderer,
+        graph: &RenderGraph<'_>,
+        drawn: impl Iterator<Item = &'a RenderNodeId>,
+    ) {
+        let blend_space = graph.blend_space.unwrap_or(renderer.blend_space);
+        for node in drawn {
+            if let (
+                RenderNode::Vector { scene },
+                PreparedNode::Vector {
+                    scene: prepared, ..
+                },
+            ) = (&graph.nodes[node.index], &mut self.nodes[node.index])
+            {
+                *prepared = Some(
+                    renderer
+                        .prepare_vector(scene, graph.size, blend_space)
+                        .map(Box::new),
+                );
+            }
         }
     }
 
@@ -91,7 +128,7 @@ impl PreparedFrame {
                         )
                     })
                 }
-                PreparedNode::Vector { uniform_slices } => {
+                PreparedNode::Vector { uniform_slices, .. } => {
                     (0..*uniform_slices).fold(cursor, |cursor, _| {
                         aligned_uniform_end(cursor, crate::vector::VECTOR_UNIFORM_BYTES, alignment)
                     })
@@ -170,6 +207,7 @@ impl Renderer {
                         .filter(|op| !matches!(op, alpha2_geometry::VectorOp::PushLayer { .. }))
                         .count()
                         + 1,
+                    scene: None,
                 },
             };
         }

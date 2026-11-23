@@ -146,7 +146,7 @@ impl Renderer {
             return Err(GraphError::SourceOutput);
         }
         let format = self.intermediate_format();
-        let prepared = self.prepare_frame(graph, &plan.order);
+        let mut prepared = self.prepare_frame(graph, &plan.order);
         let mut uniforms = self.uniform_buffers.acquire(
             self.gpu.device(),
             prepared.uniform_capacity(sources, &plan.order, pack, self.uniform_alignment()),
@@ -161,6 +161,7 @@ impl Renderer {
                 .iter()
                 .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
         };
+        prepared.prepare_vectors(self, graph, drawn());
         let mut predicted = pack.work(graph.size);
         for work in sources {
             predicted.add_cost(work.work());
@@ -336,13 +337,12 @@ impl Renderer {
                     encoded_render_passes = encoded_render_passes.saturating_add(1);
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
-                RenderNode::Vector { scene } => {
-                    encoder.place_pass(
-                        crate::FrameCost::of(crate::submission_planner::VECTOR_COST, pixels),
-                        false,
-                        None,
-                        None,
-                    );
+                RenderNode::Vector { .. } => {
+                    let scene = prepared
+                        .vector(node_id)
+                        .ok_or(GraphError::Render(crate::RenderError::InvalidGraph))?
+                        .as_ref()
+                        .map_err(|error| GraphError::Render(*error))?;
                     let target = self.textures.acquire(
                         self.gpu.device(),
                         graph.size,
@@ -354,7 +354,6 @@ impl Renderer {
                             encoder,
                             scene,
                             graph.size,
-                            graph.blend_space.unwrap_or(self.blend_space),
                             target.view(),
                             &mut uniforms,
                         )?);
@@ -479,9 +478,13 @@ fn node_work(node: &RenderNode<'_>, prepared: &PreparedNode, pixels: u64) -> cra
             crate::FrameCost::of(registered.cost, pixels)
         }
         (_, PreparedNode::Composite(composite)) => composite.work(),
-        (RenderNode::Vector { .. }, _) => {
-            crate::FrameCost::of(crate::submission_planner::VECTOR_COST, pixels)
-        }
+        (
+            _,
+            PreparedNode::Vector {
+                scene: Some(Ok(scene)),
+                ..
+            },
+        ) => scene.work(),
         _ => crate::FrameCost::default(),
     }
 }

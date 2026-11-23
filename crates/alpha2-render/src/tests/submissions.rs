@@ -772,3 +772,128 @@ fn a_composite_is_charged_for_the_pixels_and_samples_its_layers_take() {
          minified eight times {sampled}"
     );
 }
+
+fn vector_graph(
+    items: &[alpha2_geometry::EvaluatedItem],
+    size: RenderSize,
+) -> RenderGraph<'static> {
+    let scene = alpha2_geometry::build_scene(
+        items,
+        alpha2_geometry::CanvasSize::new(size.width, size.height),
+    );
+    let mut graph = RenderGraph::new(size);
+    let node = graph.add_vector(Arc::new(scene));
+    graph.set_output(node).expect("output exists");
+    graph
+}
+
+fn whole_canvas_fills(fills: u8) -> Vec<alpha2_geometry::EvaluatedItem> {
+    (0..fills)
+        .flat_map(|index| {
+            [
+                super::vector::rectangle(0.5, 0.5, 1.0, 1.0),
+                super::vector::fill(super::vector::solid(
+                    f32::from(index) / f32::from(fills),
+                    0.5,
+                    0.25,
+                    0.5,
+                )),
+            ]
+        })
+        .collect()
+}
+
+#[test]
+fn a_vector_scene_predicted_past_the_budget_is_cut_into_submissions_under_it() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(3840, 2160).expect("size");
+    let graph = vector_graph(&whole_canvas_fills(4), size);
+    let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+    let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, 8.0);
+    assert_within_the_budget(longest, planned, "a vector scene at eight budgets");
+    assert!(whole == cut, "the cut scene drew other bytes");
+}
+
+#[test]
+fn a_vector_scene_cut_between_and_inside_its_draws_draws_the_same_picture() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(1920, 1080).expect("size");
+    let ellipse = |x: f64, turn: f64| {
+        alpha2_geometry::EvaluatedItem::Geometry(alpha2_geometry::EvaluatedGeometry::Ellipse {
+            center: alpha2_geometry::kurbo::Point::new(x, 0.5),
+            size: alpha2_geometry::kurbo::Vec2::new(0.6, 0.35),
+            rotation_degrees: turn,
+        })
+    };
+    let faded = |items| {
+        super::vector::group(
+            items,
+            alpha2_geometry::EvaluatedTransform {
+                opacity: 0.6,
+                ..alpha2_geometry::EvaluatedTransform::default()
+            },
+        )
+    };
+    let mut items = whole_canvas_fills(3);
+    items.push(faded(vec![
+        ellipse(0.4, 20.0),
+        super::vector::fill(super::vector::gradient(
+            2,
+            [0.1, 0.2],
+            [0.9, 0.7],
+            alpha2_model::Spread::Pad,
+        )),
+        faded(vec![
+            ellipse(0.6, -35.0),
+            super::vector::fill(super::vector::solid(0.2, 0.7, 0.9, 0.8)),
+        ]),
+    ]));
+    items.push(ellipse(0.5, 60.0));
+    items.push(super::vector::fill(super::vector::gradient(
+        3,
+        [0.5, 0.5],
+        [0.4, 0.0],
+        alpha2_model::Spread::Reflect,
+    )));
+    for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {
+        let mut graph = vector_graph(&items, size);
+        graph.set_blend_space(space);
+        let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+        let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, 24.0);
+        assert!(planned.submissions >= 24, "{space:?}: {planned:?}");
+        assert_within_the_budget(longest, planned, "a scene of groups at twenty-four budgets");
+        assert!(whole == cut, "{space:?}: the cut scene drew other bytes");
+    }
+}
+
+#[test]
+fn a_vector_scene_is_charged_for_what_it_draws() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 64).expect("size");
+    let cost = |items: &[alpha2_geometry::EvaluatedItem]| {
+        let mut graph = vector_graph(items, size);
+        graph.set_blend_space(BlendSpace::SrgbEncoded);
+        drop(renderer.execute_graph(&graph).expect("the scene renders"));
+        renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions")
+            .cost
+            .unit_pixels()
+    };
+    let one = cost(&whole_canvas_fills(1));
+    let many = cost(&whole_canvas_fills(64));
+    let corner = cost(&[
+        super::vector::rectangle(0.125, 0.125, 0.25, 0.25),
+        super::vector::fill(super::vector::solid(0.5, 0.5, 0.25, 0.5)),
+    ]);
+    assert!(
+        corner < one && one < many,
+        "a fill of a sixteenth of the canvas is charged {corner} unit pixels, one of the whole \
+         canvas {one}, sixty-four of it {many}"
+    );
+}

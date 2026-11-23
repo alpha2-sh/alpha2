@@ -802,7 +802,7 @@ pub(crate) struct PixelRect {
 
 impl PixelRect {
     /// No pixels; the bounds of a layer that misses the target.
-    const EMPTY: Self = Self {
+    pub(crate) const EMPTY: Self = Self {
         x: 0,
         y: 0,
         width: 0,

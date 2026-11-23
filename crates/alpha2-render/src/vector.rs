@@ -16,6 +16,7 @@ use alpha2_geometry::raster::{RasterScratch, TILE, TILE_BYTES, TileCoverage, Til
 use alpha2_geometry::{IRect, PaintKind, ScenePaint, VectorOp, VectorScene};
 use wgpu::util::DeviceExt;
 
+use crate::composite::PixelRect;
 use crate::uniform::UniformArenaLease;
 use crate::{RenderError, RenderSize, Renderer};
 
@@ -42,6 +43,32 @@ const _: () = assert!(
 const INSTANCE_BYTES: u64 = 8;
 
 const _: () = assert!(TILE == 16, "the shader draws 16-pixel tiles");
+
+const TILE_PIXELS: u64 = 16 * 16;
+
+const VECTOR_LAYER_COST: crate::effect_cost::EffectCost =
+    crate::effect_cost::EffectCost::fixed(2, 0);
+const VECTOR_ENCODE_COST: crate::effect_cost::EffectCost =
+    crate::effect_cost::EffectCost::fixed(1, 3);
+const VECTOR_FILL_READS: u64 = 2;
+const STORE_TRANSCENDENTALS: u64 = 3;
+const STOP_ARITHMETIC: u64 = 8;
+
+fn fill_cost(paint: &ScenePaint, encoded: bool) -> crate::effect_cost::EffectCost {
+    let paint_transcendentals = match paint.kind {
+        PaintKind::Solid | PaintKind::Linear => 0,
+        PaintKind::Radial | PaintKind::Conic => 1,
+    };
+    let store = if encoded { STORE_TRANSCENDENTALS } else { 0 };
+    let stops = u64::try_from(paint.stops.len()).unwrap_or(u64::MAX);
+    crate::effect_cost::EffectCost::fixed(VECTOR_FILL_READS, paint_transcendentals + store).plus(
+        crate::effect_cost::EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: STOP_ARITHMETIC.saturating_mul(stops),
+        },
+    )
+}
 
 pub(crate) fn vector_wgsl() -> String {
     format!(
@@ -215,13 +242,49 @@ impl Atlas {
 struct FillDraw {
     /// Instance ranges by page. A full tile joins the preceding range, whose atlas it ignores.
     ranges: Vec<(usize, std::ops::Range<u32>)>,
-    uniform: u64,
+    uniform: [u32; VECTOR_UNIFORM_WORDS],
+    region: PixelRect,
+    work: crate::FrameCost,
 }
 
 enum Step {
     Fill(FillDraw),
     Push,
-    Pop { bounds: IRect, uniform: u64 },
+    Pop {
+        bounds: IRect,
+        uniform: [u32; VECTOR_UNIFORM_WORDS],
+        work: crate::FrameCost,
+    },
+}
+
+pub(crate) struct PreparedVector {
+    linear: bool,
+    fills: usize,
+    pages: Vec<Vec<u8>>,
+    page_rows: u32,
+    instances: Vec<u8>,
+    steps: Vec<Step>,
+    encode_uniform: [u32; VECTOR_UNIFORM_WORDS],
+    encode_region: PixelRect,
+    encode_work: crate::FrameCost,
+}
+
+impl PreparedVector {
+    pub(crate) fn work(&self) -> crate::FrameCost {
+        let mut total = if self.linear {
+            self.encode_work
+        } else {
+            crate::FrameCost::default()
+        };
+        for step in &self.steps {
+            match step {
+                Step::Fill(fill) => total.add_cost(fill.work),
+                Step::Pop { work, .. } => total.add_cost(*work),
+                Step::Push => {}
+            }
+        }
+        total
+    }
 }
 
 impl Renderer {
@@ -406,27 +469,40 @@ impl Renderer {
             .collect()
     }
 
-    /// Encodes `scene` into `output` and returns the render passes encoded.
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn encode_vector(
+    pub(crate) fn prepare_vector(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
         scene: &VectorScene,
         size: RenderSize,
         blend_space: crate::BlendSpace,
-        output: &wgpu::TextureView,
-        uniforms: &mut UniformArenaLease,
-    ) -> Result<u64, RenderError> {
-        let device = self.gpu.device();
+    ) -> Result<PreparedVector, RenderError> {
         let linear = self.vector_linear(blend_space);
-        let format = if linear {
-            wgpu::TextureFormat::Rgba16Float
-        } else {
-            self.intermediate_format()
+        // Pages no taller than wide, nor than the device's largest texture.
+        let page_rows = (self.limits.max_texture_dimension_2d.min(ATLAS_WIDTH) / 16).max(1);
+        #[cfg(test)]
+        let page_rows = match self
+            .vector_page_rows
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => page_rows,
+            rows => rows,
         };
-        if scene.fill_count() == 0 {
-            clear(encoder, output);
-            return Ok(1);
+        // Canvas edges are at most 16384, exact in `f32`.
+        #[allow(clippy::cast_precision_loss)]
+        let canvas = [size.width as f32, size.height as f32];
+        let encode_region = irect_region(scene.bounds, size);
+        let mut prepared = PreparedVector {
+            linear,
+            fills: scene.fill_count(),
+            pages: Vec::new(),
+            page_rows,
+            instances: Vec::new(),
+            steps: Vec::new(),
+            encode_uniform: op_uniform_plain(canvas, 1.0),
+            encode_region,
+            encode_work: crate::FrameCost::of(VECTOR_ENCODE_COST, encode_region.area()),
+        };
+        if prepared.fills == 0 {
+            return Ok(prepared);
         }
         let raster_started = self
             .pass_timing_epoch()
@@ -441,76 +517,83 @@ impl Renderer {
                 crate::TimingSource::CpuEncoding,
             );
         }
-        let pipelines = self.vector_pipelines(format)?;
-        let cached = self.vector_pipeline()?;
-        // Pages no taller than wide, nor than the device's largest texture.
-        let max_rows = (self.limits.max_texture_dimension_2d.min(ATLAS_WIDTH) / 16).max(1);
-        #[cfg(test)]
-        let max_rows = match self
-            .vector_page_rows
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            0 => max_rows,
-            rows => rows,
-        };
-        let mut atlas = Atlas::new(max_rows * SLOTS_PER_ROW);
-        let mut instances: Vec<u8> = Vec::new();
-        let mut steps = Vec::with_capacity(scene.ops.len());
-        // Canvas edges are at most 16384, exact in `f32`.
-        #[allow(clippy::cast_precision_loss)]
-        let canvas = [size.width as f32, size.height as f32];
+        let mut atlas = Atlas::new(page_rows * SLOTS_PER_ROW);
+        prepared.steps.reserve(scene.ops.len());
         let mut open: Vec<(IRect, f32)> = Vec::new();
         for (op, coverage) in scene.ops.iter().zip(&coverage) {
             match op {
                 VectorOp::PushLayer { bounds, opacity } => {
                     open.push((*bounds, *opacity));
-                    steps.push(Step::Push);
+                    prepared.steps.push(Step::Push);
                 }
                 VectorOp::PopLayer => {
                     let (bounds, opacity) = open.pop().ok_or(RenderError::InvalidGraph)?;
-                    let uniform = uniforms
-                        .write(bytemuck::cast_slice(&op_uniform_plain(canvas, opacity)))?
-                        .offset();
-                    steps.push(Step::Pop { bounds, uniform });
+                    prepared.steps.push(Step::Pop {
+                        bounds,
+                        uniform: op_uniform_plain(canvas, opacity),
+                        work: crate::FrameCost::of(
+                            VECTOR_LAYER_COST,
+                            irect_region(bounds, size).area(),
+                        ),
+                    });
                 }
                 VectorOp::Fill { paint, opacity, .. } => {
                     let coverage = coverage.as_ref().ok_or(RenderError::InvalidGraph)?;
-                    let mut ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::new();
-                    let (tiles_x, _) = coverage.size;
-                    for (index, tile) in coverage.tiles.iter().enumerate() {
-                        let index = u32::try_from(index).unwrap_or(u32::MAX);
-                        let x = coverage.origin.0 + i32::try_from(index % tiles_x).unwrap_or(0);
-                        let y = coverage.origin.1 + i32::try_from(index / tiles_x).unwrap_or(0);
-                        match tile {
-                            TileState::Empty => {}
-                            TileState::Full => {
-                                // Full tiles read no atlas, so any page's binding works.
-                                let page = ranges.last().map_or(0, |(page, _)| *page);
-                                push_instance(&mut ranges, &mut instances, page, (x, y), FULL_SLOT);
-                            }
-                            TileState::Partial(partial) => {
-                                let (page, slot) = atlas.push(&coverage.partial[*partial as usize]);
-                                push_instance(&mut ranges, &mut instances, page, (x, y), slot);
-                            }
-                        }
-                    }
-                    let uniform = uniforms
-                        .write(bytemuck::cast_slice(&op_uniform(
-                            paint, canvas, *opacity, !linear,
-                        )))?
-                        .offset();
-                    steps.push(Step::Fill(FillDraw { ranges, uniform }));
+                    let (ranges, tiles, region) =
+                        lay_out_tiles(coverage, &mut atlas, &mut prepared.instances, size);
+                    prepared.steps.push(Step::Fill(FillDraw {
+                        ranges,
+                        uniform: op_uniform(paint, canvas, *opacity, !linear),
+                        region,
+                        work: crate::FrameCost::of(fill_cost(paint, !linear), tiles * TILE_PIXELS),
+                    }));
                 }
             }
         }
+        prepared.pages = atlas.pages;
+        Ok(prepared)
+    }
+
+    /// Encodes `scene` into `output` and returns the render passes encoded.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn encode_vector(
+        &self,
+        encoder: &mut crate::renderer::RenderEncoder,
+        prepared: &PreparedVector,
+        size: RenderSize,
+        output: &wgpu::TextureView,
+        uniforms: &mut UniformArenaLease,
+    ) -> Result<u64, RenderError> {
+        let device = self.gpu.device();
+        let linear = prepared.linear;
+        let format = if linear {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            self.intermediate_format()
+        };
+        if prepared.fills == 0 {
+            clear(encoder, output);
+            return Ok(1);
+        }
+        let pipelines = self.vector_pipelines(format)?;
+        let cached = self.vector_pipeline()?;
+        let mut offsets = Vec::with_capacity(prepared.steps.len());
+        for step in &prepared.steps {
+            offsets.push(match step {
+                Step::Fill(FillDraw { uniform, .. }) | Step::Pop { uniform, .. } => {
+                    uniforms.write(bytemuck::cast_slice(uniform))?.offset()
+                }
+                Step::Push => 0,
+            });
+        }
         let encode_uniform = uniforms
-            .write(bytemuck::cast_slice(&op_uniform_plain(canvas, 1.0)))?
+            .write(bytemuck::cast_slice(&prepared.encode_uniform))?
             .offset();
 
         let mut transient = crate::retire::TransientBuffers::new(&self.retirement);
         // Upload pages in encoder order so a page reused later in the frame still holds these
         // tiles.
-        let page_textures: Vec<crate::pool::TextureLease> = atlas
+        let page_textures: Vec<crate::pool::TextureLease> = prepared
             .pages
             .iter()
             .map(|bytes| {
@@ -518,7 +601,10 @@ impl Renderer {
                     .unwrap_or(16)
                     .max(16);
                 // Power-of-two heights so pages pool across frames.
-                let height = rows.next_power_of_two().min(max_rows * 16).max(rows);
+                let height = rows
+                    .next_power_of_two()
+                    .min(prepared.page_rows * 16)
+                    .max(rows);
                 let texture = self.textures.acquire(
                     device,
                     RenderSize::new(ATLAS_WIDTH, height).expect("a non-empty atlas page"),
@@ -559,10 +645,10 @@ impl Renderer {
         let instance_buffer = transient.keep(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("alpha2 vector tiles"),
-                contents: if instances.is_empty() {
+                contents: if prepared.instances.is_empty() {
                     &[0; 8]
                 } else {
-                    &instances
+                    &prepared.instances
                 },
                 usage: wgpu::BufferUsages::VERTEX,
             },
@@ -593,6 +679,16 @@ impl Renderer {
                 .map(|page| group(page.view()))
                 .collect()
         };
+        let draw_fill = |pass: &mut wgpu::RenderPass<'_>, fill: &FillDraw, offset: u64| {
+            for (page, range) in &fill.ranges {
+                pass.set_bind_group(
+                    0,
+                    &page_groups[(*page).min(page_groups.len() - 1)],
+                    &[dynamic_offset(offset)],
+                );
+                pass.draw(0..6, range.clone());
+            }
+        };
 
         let linear_target = linear.then(|| {
             self.textures.acquire(
@@ -608,75 +704,150 @@ impl Renderer {
         let mut passes = 0_u64;
         let mut layers: Vec<crate::pool::TextureLease> = Vec::new();
         let mut cleared = vec![false];
-        let mut index = 0;
-        while index < steps.len() {
-            let target = layers.last().map_or(base, crate::pool::TextureLease::view);
-            match &steps[index] {
+        let mut fills_pass: Option<wgpu::RenderPass<'static>> = None;
+        for (step, offset) in prepared.steps.iter().zip(&offsets) {
+            match step {
                 Step::Push => {
+                    drop(fills_pass.take());
                     layers.push(
                         self.textures
                             .acquire(device, size, format, "alpha2 vector layer"),
                     );
                     cleared.push(false);
-                    index += 1;
                 }
-                Step::Pop { bounds, uniform } => {
+                Step::Pop { bounds, work, .. } => {
+                    drop(fills_pass.take());
                     let layer = layers.pop().ok_or(RenderError::InvalidGraph)?;
                     let layer_cleared = cleared.pop().unwrap_or(true);
                     let parent = layers.last().map_or(base, crate::pool::TextureLease::view);
                     let parent_cleared = cleared.last_mut().expect("the base is on the stack");
                     if layer_cleared {
                         let layer_group = group(layer.view());
-                        let mut pass = begin(encoder, parent, !*parent_cleared);
+                        let clear_first = !*parent_cleared;
                         *parent_cleared = true;
-                        passes += 1;
-                        if let Some((x, y, w, h)) = scissor(*bounds, size) {
-                            pass.set_scissor_rect(x, y, w, h);
-                            pass.set_pipeline(&pipelines.layer);
-                            pass.set_bind_group(0, &layer_group, &[dynamic_offset(*uniform)]);
-                            pass.draw(0..3, 0..1);
-                        }
+                        let region = irect_region(*bounds, size);
+                        let placement = encoder.place_pass(*work, true, None, None);
+                        encoder.encode_pieces(placement, region, |encoder, piece| {
+                            let mut pass = begin(encoder, parent, piece.first && clear_first);
+                            passes += 1;
+                            let scissor = piece.scissor.unwrap_or(region);
+                            if scissor.area() > 0 {
+                                pass.set_scissor_rect(
+                                    scissor.x,
+                                    scissor.y,
+                                    scissor.width,
+                                    scissor.height,
+                                );
+                                pass.set_pipeline(&pipelines.layer);
+                                pass.set_bind_group(0, &layer_group, &[dynamic_offset(*offset)]);
+                                pass.draw(0..3, 0..1);
+                            }
+                        });
                     }
-                    index += 1;
                 }
-                Step::Fill(_) => {
+                Step::Fill(fill) => {
+                    let target = layers.last().map_or(base, crate::pool::TextureLease::view);
                     let clear_first = !*cleared.last().expect("a target");
                     *cleared.last_mut().expect("a target") = true;
-                    let mut pass = begin(encoder, target, clear_first);
-                    passes += 1;
-                    pass.set_pipeline(&pipelines.tile);
-                    pass.set_vertex_buffer(0, instance_buffer.slice(..));
-                    while let Some(Step::Fill(fill)) = steps.get(index) {
-                        for (page, range) in &fill.ranges {
-                            pass.set_bind_group(
-                                0,
-                                &page_groups[(*page).min(page_groups.len() - 1)],
-                                &[dynamic_offset(fill.uniform)],
-                            );
-                            pass.draw(0..6, range.clone());
-                        }
-                        index += 1;
+                    let placement = encoder.planner().pass(fill.work, true, None);
+                    let whole = !placement.cut_before
+                        && placement.pieces.count() <= 1
+                        && placement.pilot.is_none();
+                    if !whole {
+                        drop(fills_pass.take());
+                    }
+                    encoder.apply(placement, None);
+                    if whole {
+                        let pass = fills_pass.get_or_insert_with(|| {
+                            passes += 1;
+                            let mut pass = begin(encoder, target, clear_first).forget_lifetime();
+                            pass.set_pipeline(&pipelines.tile);
+                            pass.set_vertex_buffer(0, instance_buffer.slice(..));
+                            pass
+                        });
+                        draw_fill(pass, fill, *offset);
+                    } else {
+                        encoder.encode_pieces(placement, fill.region, |encoder, piece| {
+                            let mut pass = begin(encoder, target, piece.first && clear_first);
+                            passes += 1;
+                            if let Some(scissor) = piece.scissor {
+                                if scissor.area() == 0 {
+                                    return;
+                                }
+                                pass.set_scissor_rect(
+                                    scissor.x,
+                                    scissor.y,
+                                    scissor.width,
+                                    scissor.height,
+                                );
+                            }
+                            pass.set_pipeline(&pipelines.tile);
+                            pass.set_vertex_buffer(0, instance_buffer.slice(..));
+                            draw_fill(&mut pass, fill, *offset);
+                        });
                     }
                 }
             }
         }
+        drop(fills_pass);
         if !cleared[0] {
             clear(encoder, base);
             passes += 1;
         }
         if let Some(linear_target) = &linear_target {
             let encode_group = group(linear_target.view());
-            let mut pass = begin(encoder, output, true);
-            passes += 1;
-            if let Some((x, y, w, h)) = scissor(scene.bounds, size) {
-                pass.set_scissor_rect(x, y, w, h);
-                pass.set_pipeline(&pipelines.encode);
-                pass.set_bind_group(0, &encode_group, &[dynamic_offset(encode_uniform)]);
-                pass.draw(0..3, 0..1);
-            }
+            let region = prepared.encode_region;
+            let placement = encoder.place_pass(prepared.encode_work, true, None, None);
+            encoder.encode_pieces(placement, region, |encoder, piece| {
+                let mut pass = begin(encoder, output, piece.first);
+                passes += 1;
+                let scissor = piece.scissor.unwrap_or(region);
+                if scissor.area() > 0 {
+                    pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+                    pass.set_pipeline(&pipelines.encode);
+                    pass.set_bind_group(0, &encode_group, &[dynamic_offset(encode_uniform)]);
+                    pass.draw(0..3, 0..1);
+                }
+            });
         }
         Ok(passes)
     }
+}
+
+fn lay_out_tiles(
+    coverage: &TileCoverage,
+    atlas: &mut Atlas,
+    instances: &mut Vec<u8>,
+    size: RenderSize,
+) -> (Vec<(usize, std::ops::Range<u32>)>, u64, PixelRect) {
+    let mut ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::new();
+    let (tiles_x, _) = coverage.size;
+    let mut tiles = 0_u64;
+    let mut reach: Option<(i32, i32, i32, i32)> = None;
+    for (index, tile) in coverage.tiles.iter().enumerate() {
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        let x = coverage.origin.0 + i32::try_from(index % tiles_x).unwrap_or(0);
+        let y = coverage.origin.1 + i32::try_from(index / tiles_x).unwrap_or(0);
+        let (page, slot) = match tile {
+            TileState::Empty => continue,
+            // Full tiles read no atlas, so any page's binding works.
+            TileState::Full => (ranges.last().map_or(0, |(page, _)| *page), FULL_SLOT),
+            TileState::Partial(partial) => atlas.push(&coverage.partial[*partial as usize]),
+        };
+        push_instance(&mut ranges, instances, page, (x, y), slot);
+        tiles += 1;
+        reach = Some(reach.map_or((x, y, x, y), |(x0, y0, x1, y1)| {
+            (x0.min(x), y0.min(y), x1.max(x), y1.max(y))
+        }));
+    }
+    let tile = i32::try_from(TILE).unwrap_or(16);
+    let region = reach.map_or(PixelRect::EMPTY, |(x0, y0, x1, y1)| {
+        irect_region(
+            IRect::new(x0 * tile, y0 * tile, (x1 + 1) * tile, (y1 + 1) * tile),
+            size,
+        )
+    });
+    (ranges, tiles, region)
 }
 
 /// Appends a tile instance to the last range for `page`, or starts a new one.
@@ -735,8 +906,7 @@ fn begin<'e>(
     })
 }
 
-/// `bounds` clipped to `size` as a scissor rectangle, or `None` when empty.
-fn scissor(bounds: IRect, size: RenderSize) -> Option<(u32, u32, u32, u32)> {
+fn irect_region(bounds: IRect, size: RenderSize) -> PixelRect {
     let canvas = IRect::new(
         0,
         0,
@@ -745,14 +915,14 @@ fn scissor(bounds: IRect, size: RenderSize) -> Option<(u32, u32, u32, u32)> {
     );
     let inside = bounds.intersect(canvas);
     if inside.is_empty() {
-        return None;
+        return PixelRect::EMPTY;
     }
-    Some((
-        u32::try_from(inside.x0).unwrap_or(0),
-        u32::try_from(inside.y0).unwrap_or(0),
-        inside.width(),
-        inside.height(),
-    ))
+    PixelRect {
+        x: u32::try_from(inside.x0).unwrap_or(0),
+        y: u32::try_from(inside.y0).unwrap_or(0),
+        width: inside.width(),
+        height: inside.height(),
+    }
 }
 
 /// A fill op's uniform: inverse paint transform, canvas, opacity and the sRGB-store flag.

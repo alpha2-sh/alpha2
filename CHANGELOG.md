@@ -81,6 +81,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A vector scene is charged for the tiles each fill covers and its paint, the layers it composites
+  and its final encode, instead of a fixed charge whatever it draws, and each of its draws is a
+  placed pass: a scene of many fills is cut between them (continuing with a load, not a clear) and
+  a fill predicted past the submission budget is drawn in scissored bands with the same pixels.
 - A layer composite is no longer one submission however many layers it draws: each batch of layers
   is a placed pass, charged for the pixels it draws and the filter samples each layer takes there,
   and a batch predicted past the submission budget is drawn in scissored bands with the same
