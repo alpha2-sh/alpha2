@@ -4,21 +4,6 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
-### Fixed
-
-- A GPU-resident export of a clip whose container and coded stream declare different colors no
-  longer fails with "a decoded picture is ..., not the output's ...". The YUV transcode is planned
-  from the color the stream itself declares (the H.264 or HEVC VUI), and a picture that still
-  differs from the output is rendered instead of failing the export.
-- A packet copy (`strategy` `prefer-copy` or `require-copy`) also compares the color the H.264 or
-  HEVC stream itself declares with the output's, and no longer copies a stream whose VUI contradicts
-  its container's `colr` box: such a copy kept the stream's own tags under a BT.709 container.
-- Exports through the readback path carry their color in the coded stream as well as in the
-  container: H.264, HEVC and AV1 packets pass through FFmpeg's metadata bitstream filter, as on the
-  GPU-resident path, so encoders that write no color description (Media Foundation's H.264 on
-  Windows) are tagged too, and frames reach the encoders tagged, so ProRes frame headers say BT.709
-  instead of unspecified.
-
 ### Changed
 
 - **Breaking:** every YUV pack in `alpha2-render` (the GPU readbacks, the NV12 pack and the CPU
@@ -45,6 +30,25 @@ All notable changes to this project are documented in this file.
   and moves the content epoch only when that budget changes. The plan no longer depends on
   quality: `RenderPlan::filter_sample_limit` and `RenderGraph::compile_with_quality` are removed,
   and `RenderGraph::compile` is the one way to compile. Graph cache keys change value.
+- The renderer's submission clock forgets only submissions that completed. A loss again names a
+  running submission however many were queued behind it, a browser's calibration and pilot draws
+  are read however many submissions the frame behind them makes, and the oldest submission kept
+  no longer counts its wait behind a forgotten one as GPU time.
+
+### Fixed
+
+- A GPU-resident export of a clip whose container and coded stream declare different colors no
+  longer fails with "a decoded picture is ..., not the output's ...". The YUV transcode is planned
+  from the color the stream itself declares (the H.264 or HEVC VUI), and a picture that still
+  differs from the output is rendered instead of failing the export.
+- A packet copy (`strategy` `prefer-copy` or `require-copy`) also compares the color the H.264 or
+  HEVC stream itself declares with the output's, and no longer copies a stream whose VUI contradicts
+  its container's `colr` box: such a copy kept the stream's own tags under a BT.709 container.
+- Exports through the readback path carry their color in the coded stream as well as in the
+  container: H.264, HEVC and AV1 packets pass through FFmpeg's metadata bitstream filter, as on the
+  GPU-resident path, so encoders that write no color description (Media Foundation's H.264 on
+  Windows) are tagged too, and frames reach the encoders tagged, so ProRes frame headers say BT.709
+  instead of unspecified.
 
 ## [0.6.1] - 2026-11-18
 

@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use web_time::Instant;
 
-/// Submissions kept; enough to cover the last frames' submissions.
-const KEPT: usize = 4 * crate::submission_planner::MAX_BANDS as usize;
+const RECENT_SUBMISSIONS_KEPT: usize = 256;
+const MOST_SUBMISSIONS_KEPT: usize = 65_536;
 
 /// The frame a submission belongs to, as its caller knows it.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -50,6 +50,7 @@ struct Entry {
 struct ClockState {
     /// Sequence number of `entries[0]`.
     first: u64,
+    last_forgotten_done_at: Option<Instant>,
     recorded: u64,
     completed: u64,
     watched: Vec<(u64, PreviousCompletion)>,
@@ -112,8 +113,15 @@ impl SubmissionClock {
             effects,
             predicted_ms,
         });
-        if state.entries.len() > KEPT {
-            state.entries.pop_front();
+        while state.entries.len() > MOST_SUBMISSIONS_KEPT
+            || (state.entries.len() > RECENT_SUBMISSIONS_KEPT
+                && state
+                    .entries
+                    .front()
+                    .is_some_and(|entry| entry.done_at.is_some()))
+        {
+            let forgotten = state.entries.pop_front();
+            state.last_forgotten_done_at = forgotten.and_then(|entry| entry.done_at);
             state.first += 1;
         }
         Recorded {
@@ -150,7 +158,7 @@ impl SubmissionClock {
     /// up to `now`, later unfinished ones not at all.
     fn spans(state: &ClockState, now: Instant) -> Vec<(f64, &Entry)> {
         let mut spans = Vec::new();
-        let mut previous_done: Option<Instant> = None;
+        let mut previous_done = state.last_forgotten_done_at;
         for entry in &state.entries {
             let start =
                 previous_done.map_or(entry.submitted_at, |done| done.max(entry.submitted_at));
@@ -461,5 +469,115 @@ mod tests {
         assert_eq!(late.started(at(2)), None, "seen late");
         clock.complete(late.sequence, at(35), true);
         assert!(clock.record(at(40), None, true).previous.is_none());
+    }
+
+    #[test]
+    fn the_oldest_kept_submission_does_not_count_its_wait_behind_a_forgotten_one() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let submitted = u64::try_from(RECENT_SUBMISSIONS_KEPT).expect("fits") + 9;
+        let sequences: Vec<u64> = (0..submitted)
+            .map(|_| clock.record(at(0), None, false).sequence)
+            .collect();
+        for (finished, sequence) in (1..).zip(&sequences) {
+            clock.complete(*sequence, at(10 * finished), true);
+        }
+        let longest = clock.longest_at(at(10 * submitted + 1)).expect("kept");
+        assert!(
+            (longest.gpu_ms - 10.0).abs() < 0.5,
+            "every submission ran 10 ms: {longest:?}"
+        );
+    }
+
+    #[test]
+    fn a_submission_kept_after_forgotten_ones_starts_where_the_last_forgotten_one_completed() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let submitted = u64::try_from(RECENT_SUBMISSIONS_KEPT).expect("fits") + 9;
+        let mut previous = None;
+        for finished in 1..=submitted {
+            let sequence = clock.record(at(0), None, false).sequence;
+            if let Some(previous) = previous.replace(sequence) {
+                clock.complete(previous, at(10 * (finished - 1)), true);
+            }
+        }
+        clock.complete(previous.expect("recorded"), at(10 * submitted), true);
+        let longest = clock.longest_at(at(10 * submitted + 1)).expect("kept");
+        assert!(
+            (longest.gpu_ms - 10.0).abs() < 0.5,
+            "every submission ran 10 ms: {longest:?}"
+        );
+        assert_eq!(clock.state().entries.len(), RECENT_SUBMISSIONS_KEPT);
+    }
+
+    #[test]
+    fn a_running_submission_is_still_named_however_many_were_submitted_behind_it() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        clock.mark_frame(Some(FrameMark {
+            time_ticks: 28_000,
+            frame_index: Some(7),
+        }));
+        clock.note_effect(&crate::EffectId::from_static("blur", 2));
+        let long = clock.record(at(0), Some(100.0), false).sequence;
+        clock.mark_frame(Some(FrameMark {
+            time_ticks: 32_000,
+            frame_index: Some(8),
+        }));
+        let mut last = long;
+        for _ in 0..RECENT_SUBMISSIONS_KEPT {
+            last = clock.record(at(1), Some(100.0), false).sequence;
+        }
+        let running = clock.longest_at(at(3_000)).expect("kept");
+        assert_eq!(
+            running.frame.and_then(|frame| frame.frame_index),
+            Some(7),
+            "{running:?}"
+        );
+        for sequence in long..=last {
+            clock.complete(sequence, at(3_000), false);
+        }
+        let report = clock.longest_at(at(3_001)).expect("kept");
+        assert_eq!(
+            report.frame.and_then(|frame| frame.frame_index),
+            Some(7),
+            "{report:?}"
+        );
+        assert_eq!(report.effects, ["blur@2"]);
+        assert!((report.gpu_ms - 3_000.0).abs() < 0.5, "{report:?}");
+    }
+
+    #[test]
+    fn draws_read_after_the_frame_behind_them_are_kept_however_many_submissions_it_makes() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let first = clock.record(at(0), None, false).sequence;
+        let second = clock.record(at(0), None, false).sequence;
+        for _ in 0..RECENT_SUBMISSIONS_KEPT {
+            let _ = clock.record(at(1), Some(1.0), false);
+        }
+        clock.complete(first, at(5), false);
+        clock.complete(second, at(10), false);
+        let total = clock.gpu_ms(first..second + 1);
+        assert!(
+            total.is_some_and(|ms| (ms - 10.0).abs() < 0.5),
+            "the draws ran 10 ms: {total:?}"
+        );
+    }
+
+    #[test]
+    fn past_the_memory_cap_the_oldest_submission_is_forgotten_even_while_it_runs() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        for _ in 0..=MOST_SUBMISSIONS_KEPT {
+            let _ = clock.record(start, None, false);
+        }
+        let state = clock.state();
+        assert_eq!(state.entries.len(), MOST_SUBMISSIONS_KEPT);
+        assert_eq!(state.first, 1);
     }
 }
