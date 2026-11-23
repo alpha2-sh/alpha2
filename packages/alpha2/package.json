@@ -1,6 +1,6 @@
 {
   "name": "alpha2",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "license": "MIT",
   "description": "JavaScript bindings for the standalone alpha2 media engine.",
   "repository": {
