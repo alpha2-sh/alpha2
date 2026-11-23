@@ -43,20 +43,17 @@ pub(crate) struct CachedPipeline {
 pub(crate) struct CachedYuvPipeline {
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     pub(crate) pipeline: wgpu::RenderPipeline,
-    pub(crate) sampler: wgpu::Sampler,
 }
 
 #[derive(Debug)]
 pub(crate) struct CachedSampledPipeline {
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     pub(crate) pipeline: wgpu::RenderPipeline,
-    pub(crate) sampler: wgpu::Sampler,
 }
 
 #[derive(Debug)]
 pub(crate) struct CachedCompositePipeline {
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
-    pub(crate) sampler: wgpu::Sampler,
     pub(crate) shader: wgpu::ShaderModule,
     /// One pipeline per composite program (loop, then one-layer), built on first use.
     pub(crate) programs: [std::sync::OnceLock<wgpu::RenderPipeline>; 2],

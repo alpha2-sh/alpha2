@@ -21,6 +21,7 @@ pub struct Renderer {
     pub(crate) readback_buffers: crate::Shared<crate::pool::ReadbackBufferPool>,
     pub(crate) uniform_buffers: crate::Shared<crate::uniform::UniformBufferPool>,
     pub(crate) retirement: crate::Shared<crate::retire::Retirement>,
+    pub(crate) linear_sampler: crate::bind_group::LinearSampler,
     pub(crate) pipelines: crate::pipeline::PipelineCache,
     pub(crate) diagnostics: crate::diagnostics::SharedDiagnostics,
     pub(crate) quality: Mutex<QualityState>,
@@ -351,6 +352,8 @@ impl Renderer {
                 view_formats: &[],
             }));
         retirement.bind_groups.adopt_texture(empty_input.texture());
+        let linear_sampler =
+            crate::bind_group::LinearSampler::new(gpu.device(), &retirement.bind_groups);
         let textures = crate::Shared::new(crate::pool::TexturePool::new(crate::Shared::clone(
             &retirement,
         )));
@@ -375,6 +378,7 @@ impl Renderer {
                 crate::Shared::clone(&retirement),
             )),
             retirement,
+            linear_sampler,
             pipelines: crate::pipeline::PipelineCache::default(),
             diagnostics: Arc::new(Mutex::new(crate::diagnostics::DiagnosticsState::default())),
             quality: Mutex::new(QualityState::new(filter_sample_limit)),

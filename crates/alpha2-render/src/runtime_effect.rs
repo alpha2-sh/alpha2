@@ -146,25 +146,21 @@ impl Renderer {
                 resource: wgpu::BindingResource::TextureView(source_b),
             },
             wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&drawn.sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
+                binding: crate::registry::PARAMS_BINDING,
                 resource: uniforms.dynamic_binding(parameter_uniform.size()),
             },
             wgpu::BindGroupEntry {
-                binding: 4,
+                binding: crate::registry::RUNTIME_BINDING,
                 resource: uniforms.dynamic_binding(runtime_uniform.size()),
             },
         ];
         for (index, resource) in bound.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
-                binding: u32::try_from(index).unwrap_or(0) * 2 + 5,
+                binding: crate::registry::resource_binding(index),
                 resource: wgpu::BindingResource::TextureView(&resource.view),
             });
             entries.push(wgpu::BindGroupEntry {
-                binding: u32::try_from(index).unwrap_or(0) * 2 + 6,
+                binding: crate::registry::resource_binding(index) + 1,
                 resource: resource.metadata.as_entire_binding(),
             });
         }
@@ -212,6 +208,7 @@ impl Renderer {
                 encoder,
                 &drawn.pipeline,
                 &bind_group,
+                &self.linear_sampler,
                 output,
                 None,
                 Some((0, 0, size.width, rows)),
@@ -232,6 +229,7 @@ impl Renderer {
                         encoder,
                         &drawn.pipeline,
                         &bind_group,
+                        &self.linear_sampler,
                         output,
                         None,
                         Some((band, top, size.width, rows)),
@@ -255,6 +253,7 @@ impl Renderer {
             encoder,
             &drawn.pipeline,
             &bind_group,
+            &self.linear_sampler,
             output,
             probe.map(|(_, probe)| &probe.queries),
             None,
@@ -478,6 +477,7 @@ fn encode_pass(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
     bind_group: &crate::bind_group::OffsetBindGroup<2>,
+    sampler: &crate::bind_group::LinearSampler,
     output: &wgpu::TextureView,
     timestamp_queries: Option<&wgpu::QuerySet>,
     band: Option<(u32, u32, u32, u32)>,
@@ -508,6 +508,7 @@ fn encode_pass(
     });
     pass.set_pipeline(pipeline);
     bind_group.set(&mut pass, 0);
+    sampler.set(&mut pass);
     if let Some((_, top, width, rows)) = band {
         pass.set_scissor_rect(0, top, width, rows);
     }

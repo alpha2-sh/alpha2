@@ -162,6 +162,7 @@ impl Renderer {
                 pipeline: pipeline.clone(),
                 bind_group,
                 uniform_offset: slice.dynamic_offset(),
+                sampler: None,
                 output_view: crate::pool::default_view(target),
                 uniforms,
                 uploads,

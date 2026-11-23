@@ -18,10 +18,10 @@ struct PresentationParams {
 var source_texture: texture_2d<f32>;
 
 @group(0) @binding(1)
-var source_sampler: sampler;
-
-@group(0) @binding(2)
 var<uniform> params: PresentationParams;
+
+@group(1) @binding(0)
+var source_sampler: sampler;
 
 @vertex
 fn vs(@builtin(vertex_index) index: u32) -> VertexOutput {

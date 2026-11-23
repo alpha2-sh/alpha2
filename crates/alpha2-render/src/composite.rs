@@ -124,7 +124,6 @@ impl Renderer {
         let preparation = BatchPreparationContext {
             renderer: self,
             layout: &cached.bind_group_layout,
-            sampler: &cached.sampler,
             no_backdrop: &self.empty_input,
             blend_space,
             max_filter_samples: self.quality_controls().max_filter_samples,
@@ -245,7 +244,13 @@ impl Renderer {
         }
         #[cfg(not(test))]
         let _ = (tier, layers);
-        encode_batch(encoder, pipeline, bind_group, target, pass);
+        encode_batch(
+            encoder,
+            pipeline,
+            (bind_group, &self.linear_sampler),
+            target,
+            pass,
+        );
         Ok(())
     }
 
@@ -301,7 +306,7 @@ impl Renderer {
         }
     }
 
-    /// Shader, layout and sampler shared by both composite pipelines, created on first use.
+    /// Shader and layout shared by both composite pipelines, created on first use.
     pub(crate) fn composite_pipeline(&self) -> Result<&CachedCompositePipeline, RenderError> {
         let device = self.gpu.device();
         crate::gpu_errors::checked_cell(&self.pipelines.composite, device, || {
@@ -310,17 +315,8 @@ impl Renderer {
                 label: Some("alpha2 layer composite shader"),
                 source: wgpu::ShaderSource::Wgsl(COMPOSITE_WGSL.into()),
             });
-            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("alpha2 layer sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
             CachedCompositePipeline {
                 bind_group_layout,
-                sampler,
                 shader,
                 programs: Default::default(),
             }
@@ -355,7 +351,7 @@ impl Renderer {
                 crate::gpu_errors::create_checked(self.gpu.device(), || {
                     composite_pipeline(
                         self.gpu.device(),
-                        &cached.bind_group_layout,
+                        [&cached.bind_group_layout, &self.linear_sampler.layout],
                         &cached.shader,
                         self.intermediate_format(),
                         entry,
@@ -534,7 +530,6 @@ impl StoredValue {
 struct BatchPreparationContext<'a> {
     renderer: &'a crate::Renderer,
     layout: &'a wgpu::BindGroupLayout,
-    sampler: &'a wgpu::Sampler,
     /// Bound as the first pass's backdrop, which composites over `background` and reads nothing.
     no_backdrop: &'a wgpu::TextureView,
     blend_space: crate::BlendSpace,
@@ -606,10 +601,6 @@ fn prepare_batch(
         })
         .collect::<Vec<_>>();
     entries.push(wgpu::BindGroupEntry {
-        binding: SAMPLER_BINDING,
-        resource: wgpu::BindingResource::Sampler(context.sampler),
-    });
-    entries.push(wgpu::BindGroupEntry {
         binding: BACKDROP_BINDING,
         resource: wgpu::BindingResource::TextureView(backdrop.unwrap_or(context.no_backdrop)),
     });
@@ -674,7 +665,7 @@ fn stored_color(stored: [f32; 4]) -> wgpu::Color {
 fn encode_batch(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
-    bind_group: &OffsetBindGroup<1>,
+    (bind_group, sampler): (&OffsetBindGroup<1>, &crate::bind_group::LinearSampler),
     target: &wgpu::TextureView,
     PassTarget { load, scissor }: PassTarget,
 ) {
@@ -696,6 +687,7 @@ fn encode_batch(
     });
     pass.set_pipeline(pipeline);
     bind_group.set(&mut pass, 0);
+    sampler.set(&mut pass);
     if let Some(scissor) = scissor {
         pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
     }
@@ -858,21 +850,14 @@ pub(crate) fn stored_background(
     ]
 }
 
-const SAMPLER_BINDING: u32 = 8;
-const BACKDROP_BINDING: u32 = 9;
-const UNIFORM_BINDING: u32 = 10;
+const BACKDROP_BINDING: u32 = 8;
+const UNIFORM_BINDING: u32 = 9;
 
-/// Composite pass layout: a texture per layer slot, sampler, backdrop and batch uniform.
+/// Composite pass layout: a texture per layer slot, backdrop and batch uniform.
 fn batch_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     let mut entries = (0..COMPOSITE_BATCH_LAYERS)
         .map(|slot| texture_entry(u32::try_from(slot).expect("few layer slots"), true))
         .collect::<Vec<_>>();
-    entries.push(wgpu::BindGroupLayoutEntry {
-        binding: SAMPLER_BINDING,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    });
     entries.push(texture_entry(BACKDROP_BINDING, false));
     entries.push(wgpu::BindGroupLayoutEntry {
         binding: UNIFORM_BINDING,
@@ -911,7 +896,7 @@ fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
 
 fn composite_pipeline(
     device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
+    [layout, sampler_layout]: [&wgpu::BindGroupLayout; 2],
     shader: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
     fragment_entry: &str,
@@ -920,7 +905,7 @@ fn composite_pipeline(
     let label = Some(label);
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label,
-        bind_group_layouts: &[Some(layout)],
+        bind_group_layouts: &[Some(layout), Some(sampler_layout)],
         immediate_size: 0,
     });
     let constants = [("STORED_FORMAT", StoredValue::of(format).shader_value())];

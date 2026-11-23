@@ -56,6 +56,7 @@ pub(crate) struct SourceWork {
     pub(crate) pipeline: wgpu::RenderPipeline,
     pub(crate) bind_group: wgpu::BindGroup,
     pub(crate) uniform_offset: u32,
+    pub(crate) sampler: Option<wgpu::BindGroup>,
     pub(crate) output_view: wgpu::TextureView,
     pub(crate) uniforms: UniformArenaLease,
     pub(crate) uploads: Vec<UploadTexture>,
@@ -217,6 +218,9 @@ impl SourceWorkTicket<'_> {
         });
         pass.set_pipeline(&work.pipeline);
         pass.set_bind_group(0, &work.bind_group, &[work.uniform_offset]);
+        if let Some(sampler) = &work.sampler {
+            pass.set_bind_group(crate::bind_group::SAMPLER_GROUP, sampler, &[]);
+        }
         pass.draw(0..3, 0..1);
     }
 
@@ -600,10 +604,6 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&cached.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
                     resource: uniforms.dynamic_binding(uniform.size()),
                 },
             ],
@@ -617,6 +617,7 @@ impl Renderer {
                 pipeline: cached.pipeline.clone(),
                 bind_group,
                 uniform_offset: uniform.dynamic_offset(),
+                sampler: Some(self.linear_sampler.group.clone()),
                 output_view,
                 uniforms,
                 uploads: inputs,
@@ -686,12 +687,6 @@ impl Renderer {
                             wgpu::BindGroupLayoutEntry {
                                 binding: 1,
                                 visibility: wgpu::ShaderStages::FRAGMENT,
-                                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                                count: None,
-                            },
-                            wgpu::BindGroupLayoutEntry {
-                                binding: 2,
-                                visibility: wgpu::ShaderStages::FRAGMENT,
                                 ty: wgpu::BindingType::Buffer {
                                     ty: wgpu::BufferBindingType::Uniform,
                                     has_dynamic_offset: true,
@@ -701,14 +696,6 @@ impl Renderer {
                             },
                         ],
                     });
-            let sampler = self.gpu.device().create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("alpha2 RGBA presentation sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
             let shader = self
                 .gpu
                 .device()
@@ -721,7 +708,10 @@ impl Renderer {
                     .device()
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("alpha2 RGBA presentation pipeline layout"),
-                        bind_group_layouts: &[Some(&bind_group_layout)],
+                        bind_group_layouts: &[
+                            Some(&bind_group_layout),
+                            Some(&self.linear_sampler.layout),
+                        ],
                         immediate_size: 0,
                     });
             let pipeline =
@@ -751,7 +741,6 @@ impl Renderer {
             CachedSampledPipeline {
                 bind_group_layout,
                 pipeline,
-                sampler,
             }
         })
     }
@@ -1030,14 +1019,10 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&cached.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
                     resource: uniforms.dynamic_binding(uniform.size()),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 5,
+                    binding: 4,
                     // An opaque format reads no alpha; any plane fills the slot.
                     resource: wgpu::BindingResource::TextureView(alpha_plane.unwrap_or(planes.y)),
                 },
@@ -1051,6 +1036,7 @@ impl Renderer {
                 pipeline: cached.pipeline.clone(),
                 bind_group,
                 uniform_offset: uniform.dynamic_offset(),
+                sampler: Some(self.linear_sampler.group.clone()),
                 output_view,
                 uniforms,
                 uploads,
@@ -1128,7 +1114,7 @@ impl Renderer {
         self.quality_controls().max_filter_samples as f32
     }
 
-    /// Bindings: Y, U or UV, V and alpha planes of `sample_type`, the sampler, and the uniform.
+    /// Bindings: Y, U or UV, V planes of `sample_type`, the uniform, and the alpha plane.
     fn yuv_bind_group_layout(&self, sample_type: wgpu::TextureSampleType) -> wgpu::BindGroupLayout {
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -1151,12 +1137,6 @@ impl Renderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: true,
@@ -1164,7 +1144,7 @@ impl Renderer {
                         },
                         count: None,
                     },
-                    texture(5),
+                    texture(4),
                 ],
             })
     }
@@ -1194,7 +1174,10 @@ impl Renderer {
                     .device()
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("alpha2 YUV pipeline layout"),
-                        bind_group_layouts: &[Some(&bind_group_layout)],
+                        bind_group_layouts: &[
+                            Some(&bind_group_layout),
+                            Some(&self.linear_sampler.layout),
+                        ],
                         immediate_size: 0,
                     });
             let pipeline =
@@ -1221,18 +1204,9 @@ impl Renderer {
                         multiview_mask: None,
                         cache: None,
                     });
-            let sampler = self.gpu.device().create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("alpha2 YUV sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
             CachedYuvPipeline {
                 bind_group_layout,
                 pipeline,
-                sampler,
             }
         })
     }

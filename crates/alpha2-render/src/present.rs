@@ -6,33 +6,27 @@ pub struct SurfacePresenter {
     bind_groups: crate::bind_group::BindGroups,
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
-    sampler: wgpu::Sampler,
+    sampler: crate::bind_group::LinearSampler,
 }
 
 impl SurfacePresenter {
     /// A presenter drawing into surfaces of `format`.
     #[must_use]
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let bind_groups = crate::bind_group::BindGroups::default();
+        let sampler = crate::bind_group::LinearSampler::new(device, &bind_groups);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("alpha2 surface presenter layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
+                count: None,
+            }],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("alpha2 surface presenter shader"),
@@ -40,7 +34,7 @@ impl SurfacePresenter {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("alpha2 surface presenter pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(&layout), Some(&sampler.layout)],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -68,14 +62,8 @@ impl SurfacePresenter {
             multiview_mask: None,
             cache: None,
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("alpha2 surface presenter sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
         Self {
-            bind_groups: crate::bind_group::BindGroups::default(),
+            bind_groups,
             layout,
             pipeline,
             sampler,
@@ -95,16 +83,10 @@ impl SurfacePresenter {
             &wgpu::BindGroupDescriptor {
                 label: Some("alpha2 surface presenter bind group"),
                 layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source),
+                }],
             },
             0,
         );
@@ -133,6 +115,7 @@ impl SurfacePresenter {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
+            self.sampler.set(&mut pass);
             pass.draw(0..3, 0..1);
         }
         gpu.submit([encoder.finish()]);

@@ -65,6 +65,12 @@ All notable changes to this project are documented in this file.
   graph creates no bind group. `RenderDiagnostics::bind_groups` (`BindGroupStats`) counts created,
   reused and kept bind groups; the browser and host diagnostics report them as `bindGroups`, and
   export metrics as `bindGroupsCreated` and `bindGroupsReused`.
+- Every sampling pass binds one bilinear, edge-clamped sampler in a bind group of its own
+  (`@group(1) @binding(0)`), made once per renderer and per `SurfacePresenter`, so the bind groups
+  made per pass hold no sampler (wgpu's D3D12 backend creates a buffer for each group that does).
+  The WGSL the runtime effect wrapper generates declares `source_sampler` there and renumbers group
+  0: parameters at 2, the runtime block at 3, resources from 4, named inputs from 20. Effect bodies
+  name these, not numbers, and are unaffected.
 
 ### Fixed
 

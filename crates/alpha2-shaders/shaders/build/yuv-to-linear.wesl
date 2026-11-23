@@ -41,13 +41,13 @@ struct YuvUniforms {
 @group(0) @binding(0) @if(!u16_planes) var y_plane: texture_2d<f32>;
 @group(0) @binding(1) @if(!u16_planes) var u_plane: texture_2d<f32>;
 @group(0) @binding(2) @if(!u16_planes) var v_plane: texture_2d<f32>;
-@group(0) @binding(5) @if(!u16_planes) var alpha_plane: texture_2d<f32>;
+@group(0) @binding(4) @if(!u16_planes) var alpha_plane: texture_2d<f32>;
 @group(0) @binding(0) @if(u16_planes) var y_plane: texture_2d<u32>;
 @group(0) @binding(1) @if(u16_planes) var u_plane: texture_2d<u32>;
 @group(0) @binding(2) @if(u16_planes) var v_plane: texture_2d<u32>;
-@group(0) @binding(5) @if(u16_planes) var alpha_plane: texture_2d<u32>;
-@group(0) @binding(3) var plane_sampler: sampler;
-@group(0) @binding(4) var<uniform> params: YuvUniforms;
+@group(0) @binding(4) @if(u16_planes) var alpha_plane: texture_2d<u32>;
+@group(0) @binding(3) var<uniform> params: YuvUniforms;
+@group(1) @binding(0) var plane_sampler: sampler;
 
 // The planes at a normalized position, bilinear with clamped edges like `plane_sampler`; 16-bit
 // values read as `value / 65535`, like R16Unorm.

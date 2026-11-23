@@ -30,6 +30,53 @@ impl<const N: usize> OffsetBindGroup<N> {
     }
 }
 
+pub(crate) const SAMPLER_GROUP: u32 = 1;
+
+#[derive(Debug)]
+pub(crate) struct LinearSampler {
+    pub(crate) layout: wgpu::BindGroupLayout,
+    pub(crate) group: wgpu::BindGroup,
+}
+
+impl LinearSampler {
+    pub(crate) fn new(device: &wgpu::Device, bind_groups: &BindGroups) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("alpha2 linear sampler layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            }],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("alpha2 linear sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let group = bind_groups.create(
+            device,
+            &wgpu::BindGroupDescriptor {
+                label: Some("alpha2 linear sampler group"),
+                layout: &layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                }],
+            },
+            0,
+        );
+        Self { layout, group }
+    }
+
+    pub(crate) fn set(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_bind_group(SAMPLER_GROUP, &self.group, &[]);
+    }
+}
+
 const UNUSED_FRAMES_KEPT: u64 = 64;
 
 #[derive(Debug, Default)]
@@ -196,6 +243,7 @@ impl State {
             };
             key.push(bound);
         }
-        true
+        key.iter()
+            .any(|bound| matches!(bound, Bound::View(..) | Bound::Buffer(..)))
     }
 }

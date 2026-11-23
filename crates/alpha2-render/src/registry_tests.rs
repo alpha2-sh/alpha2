@@ -728,9 +728,9 @@ fn an_effect_without_named_inputs_generates_the_same_module() {
     assert!(declarations.starts_with('\n'));
     assert!(module.contains(&declarations));
     assert_eq!(module.replacen(&declarations, "", 1), plain);
-    assert!(!plain.contains("@binding(21)"));
-    assert!(declarations.contains("@binding(21) var input_glow"));
-    assert!(declarations.contains("@binding(22) var input_map"));
+    assert!(!plain.contains("@binding(20)"));
+    assert!(declarations.contains("@binding(20) var input_glow"));
+    assert!(declarations.contains("@binding(21) var input_map"));
 }
 
 #[test]

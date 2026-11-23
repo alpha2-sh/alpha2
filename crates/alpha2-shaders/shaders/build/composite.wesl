@@ -24,9 +24,9 @@ var source_6: texture_2d<f32>;
 @group(0) @binding(7)
 var source_7: texture_2d<f32>;
 @group(0) @binding(8)
-var source_sampler: sampler;
-@group(0) @binding(9)
 var backdrop_texture: texture_2d<f32>;
+@group(1) @binding(0)
+var source_sampler: sampler;
 
 struct LayerParams {
     position_anchor: vec4f,
@@ -46,7 +46,7 @@ struct BatchParams {
     background: vec4f,
     layers: array<LayerParams, BATCH_LAYERS>,
 };
-@group(0) @binding(10)
+@group(0) @binding(9)
 var<uniform> batch: BatchParams;
 
 // Both curves map 1 to 1 exactly. `pow` near 1 is inexact on some GPUs, and white a step short
