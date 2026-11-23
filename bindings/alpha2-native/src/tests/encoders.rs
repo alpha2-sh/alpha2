@@ -659,6 +659,132 @@ fn a_constant_rate_opens_on_every_advertised_encoder() {
     }
 }
 
+fn coded_color(path: &Path, format: &str) -> Option<[String; 4]> {
+    let tool = |name: &str| std::env::var_os(name).map(PathBuf::from);
+    let (Some(ffmpeg), Some(ffprobe)) = (tool("ALPHA2_FFMPEG"), tool("ALPHA2_FFPROBE")) else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::FfmpegTools,
+            "ALPHA2_FFMPEG and ALPHA2_FFPROBE are not set"
+        );
+        return None;
+    };
+    let _child = child_process_lock();
+    let stream = path.with_extension(format);
+    let copied = std::process::Command::new(ffmpeg)
+        .args(["-v", "error", "-y", "-i"])
+        .arg(path)
+        .args(["-map", "0:v", "-c", "copy", "-f", format])
+        .arg(&stream)
+        .status()
+        .expect("ffmpeg runs");
+    assert!(copied.success(), "{}: no {format} stream", path.display());
+    let probed = std::process::Command::new(ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=color_range,color_space,color_transfer,color_primaries",
+            "-of",
+            "default=noprint_wrappers=1",
+        ])
+        .arg(&stream)
+        .output()
+        .expect("ffprobe runs");
+    let _ = fs::remove_file(&stream);
+    let text = String::from_utf8_lossy(&probed.stdout).into_owned();
+    let field = |key: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+            .unwrap_or("unknown")
+            .to_owned()
+    };
+    Some([
+        field("color_range"),
+        field("color_space"),
+        field("color_transfer"),
+        field("color_primaries"),
+    ])
+}
+
+#[test]
+fn every_encoder_writes_the_output_colour_into_its_coded_stream() {
+    let bt709 = || "bt709".to_owned();
+    for capability in codec_capabilities().video {
+        let name = &capability.encoder_name;
+        let (container, format, expected) = match capability.codec {
+            NativeVideoCodec::H264 => ("mp4", "h264", Some([bt709(), bt709(), bt709()])),
+            NativeVideoCodec::Hevc => ("mp4", "hevc", Some([bt709(), bt709(), bt709()])),
+            NativeVideoCodec::Av1 => ("mp4", "obu", Some([bt709(), bt709(), bt709()])),
+            // A VP9 frame header names a matrix and a range, not primaries or a transfer.
+            NativeVideoCodec::Vp9 => ("mp4", "ivf", None),
+            NativeVideoCodec::ProRes => ("mov", "", None),
+            // MPEG-4 Part 2 has no colour description `FFmpeg`'s encoder writes.
+            NativeVideoCodec::Mpeg4Part2 => continue,
+        };
+        let path = output_path(&format!("coded-colour-{name}.{container}"));
+        let _ = fs::remove_file(&path);
+        let container = if container == "mov" {
+            alpha2_media::Container::Mov
+        } else {
+            alpha2_media::Container::Mp4
+        };
+        let pixels = alpha2_media::resolve_pixels(
+            capability.codec.model(),
+            container,
+            alpha2_media::OutputPixels::default(),
+        )
+        .expect("the codec's default pixels");
+        let encoded = (|| {
+            let mut sink = NativeVideoEncodeSink::create_with_encoder(
+                &path,
+                VideoEncodeConfig {
+                    width: 256,
+                    height: 144,
+                    frame_rate: FrameRate::new(30, 1).expect("rate"),
+                    color: ColorMetadata::EXPORT,
+                    rate_control: VideoRateControl::bitrate(500_000, BitrateMode::Variable)
+                        .expect("rate"),
+                    codec: capability.codec,
+                    display: crate::VideoDisplay::default(),
+                    container,
+                    pixels,
+                },
+                name,
+            )?;
+            let mut frame = alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(
+                256,
+                144,
+                crate::convert::pixel_format(pixels)?,
+            )
+            .map_err(|error| EncodeError::Adapter(error.to_string()))?;
+            sink.write_prepared_video(&mut frame, MediaTime::ZERO)?;
+            sink.finish(&CancelToken::default())
+        })();
+        if let Err(error) = encoded {
+            let Some(needs) = super::encoder_capability(name) else {
+                panic!("the software encoder {name} does not encode: {error:?}");
+            };
+            alpha2_test_support::skip!(needs, "{name} does not encode here: {error:?}");
+            continue;
+        }
+        if capability.codec == NativeVideoCodec::ProRes {
+            let file = fs::read(&path).expect("output");
+            let header = file
+                .windows(4)
+                .position(|window| window == b"icpf")
+                .expect("a ProRes frame");
+            // Apple ProRes frame header: primaries, transfer and matrix follow 14 bytes in.
+            assert_eq!(file[header + 18..header + 21], [1, 1, 1], "{name}");
+        } else if let Some(coded) = coded_color(&path, format) {
+            assert_eq!(coded[..2], ["tv".to_owned(), bt709()], "{name}: {coded:?}");
+            if let Some(expected) = expected {
+                assert_eq!(coded[1..], expected, "{name}: {coded:?}");
+            }
+        }
+        let _ = fs::remove_file(&path);
+    }
+}
+
 #[test]
 fn probe_reports_every_rate_control_mechanism_per_encoder() {
     // The probe opens `FFmpeg`'s Vulkan devices for its hardware encoders.

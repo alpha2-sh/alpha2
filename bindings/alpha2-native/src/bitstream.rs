@@ -1,21 +1,15 @@
-//! The bitstream filter chain between a hardware encoder and the muxer.
+//! The bitstream filter chain between a video encoder and the muxer.
 //!
-//! Some hardware encoders (`FFmpeg` 8.1's D3D12 Video ones) put parameter sets in-band on every
-//! IDR, leave the extradata empty and write no colour description. Every encoder goes through:
-//! - `h264_metadata`, `hevc_metadata` or `av1_metadata` writes colour into every sequence header;
-//! - `extract_extradata` with `remove=1` moves the parameter sets out of the packets into
-//!   `AV_PKT_DATA_NEW_EXTRADATA`, so they end up only in the stream header (`hvc1` requires it).
+//! Some encoders (`FFmpeg` 8.1's D3D12 Video and Media Foundation ones) write no colour
+//! description into the coded stream. H.264, HEVC and AV1 go through
+//! `h264_metadata`, `hevc_metadata` or `av1_metadata`, which writes the colour into every sequence
+//! header and into the extradata.
 //!
-//! [`crate::mux::Muxer::open_deferred`] holds the header back until the first filtered packet.
-
-// Used by the D3D12VA and Vulkan HEVC backends (Windows and Linux only) and the tests.
-#![cfg_attr(
-    not(any(
-        test,
-        all(feature = "hwencode", any(target_os = "windows", target_os = "linux"))
-    )),
-    allow(dead_code)
-)]
+//! Encoders that put parameter sets in-band on every IDR and leave the extradata empty
+//! ([`EncodedVideoFilter::in_band`]) also go through `extract_extradata` with `remove=1`, which
+//! moves the parameter sets into `AV_PKT_DATA_NEW_EXTRADATA` so they end up only in the stream
+//! header (`hvc1` requires it); [`crate::mux::Muxer::open_deferred`] holds the header back until
+//! the first filtered packet.
 
 use std::ffi::CString;
 
@@ -27,7 +21,8 @@ use rsmpeg::ffi;
 
 use crate::convert::encode_adapter_error_at;
 
-/// Rewrites colour into every sequence header and moves parameter sets into side data.
+/// Rewrites colour into every sequence header, and for in-band encoders moves parameter sets into
+/// side data.
 pub(crate) struct EncodedVideoFilter {
     chain: AVBSFContext,
     /// The encoder's own extradata after the colour rewrite. The first packet carries it as new
@@ -36,25 +31,30 @@ pub(crate) struct EncodedVideoFilter {
 }
 
 impl EncodedVideoFilter {
-    /// Opens the chain for `parameters` (an encoder's `extract_codecpar`), tagged `color`, with
-    /// packets timed in `time_base`.
+    /// Opens the chain for an encoder that writes its parameter sets in-band: `parameters` (its
+    /// `extract_codecpar`), tagged `color`, with packets timed in `time_base`.
     ///
     /// # Errors
     /// Fails for a codec other than H.264, HEVC or AV1, or when a filter is
     /// missing or refuses the stream.
-    pub(crate) fn new(
+    // Used by the D3D12VA and Vulkan HEVC backends (Windows and Linux only) and the tests.
+    #[cfg_attr(
+        not(any(
+            test,
+            all(feature = "hwencode", any(target_os = "windows", target_os = "linux"))
+        )),
+        allow(dead_code)
+    )]
+    pub(crate) fn in_band(
         parameters: &AVCodecParameters,
         color: ColorMetadata,
         time_base: AVRational,
     ) -> Result<Self, EncodeError> {
-        let spec = chain_spec(parameters.codec_id, color)?;
-        let chain = alpha2_ffmpeg_bridge::bitstream_filter_list(&spec, parameters, time_base)
-            .map_err(|error| {
-                encode_adapter_error_at(
-                    &format!("opening the bitstream filters {}", spec.to_string_lossy()),
-                    error,
-                )
-            })?;
+        let spec = format!(
+            "{},extract_extradata=remove=1",
+            metadata_spec(parameters.codec_id, color)?
+        );
+        let chain = open_chain(&spec, parameters, time_base)?;
         let initial_extradata = Some(alpha2_ffmpeg_bridge::codec_parameters_extradata(
             &chain.par_out(),
         ))
@@ -63,6 +63,24 @@ impl EncodedVideoFilter {
             chain,
             initial_extradata,
         })
+    }
+
+    pub(crate) fn tagging(
+        parameters: &AVCodecParameters,
+        color: ColorMetadata,
+        time_base: AVRational,
+    ) -> Result<Option<Self>, EncodeError> {
+        let Ok(spec) = metadata_spec(parameters.codec_id, color) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            chain: open_chain(&spec, parameters, time_base)?,
+            initial_extradata: None,
+        }))
+    }
+
+    pub(crate) fn parameters(&self) -> AVCodecParameters {
+        (*self.chain.par_out()).clone()
     }
 
     /// Filters one encoder packet and returns every packet ready, in the chain's time base.
@@ -129,11 +147,26 @@ impl EncodedVideoFilter {
     }
 }
 
-/// The filter chain for `codec` tagged `color`, in `FFmpeg`'s list syntax.
+fn open_chain(
+    spec: &str,
+    parameters: &AVCodecParameters,
+    time_base: AVRational,
+) -> Result<AVBSFContext, EncodeError> {
+    let spec = CString::new(spec)
+        .map_err(|_| EncodeError::Adapter("a bitstream filter list holds a NUL".into()))?;
+    alpha2_ffmpeg_bridge::bitstream_filter_list(&spec, parameters, time_base).map_err(|error| {
+        encode_adapter_error_at(
+            &format!("opening the bitstream filters {}", spec.to_string_lossy()),
+            error,
+        )
+    })
+}
+
+/// The colour filter for `codec` tagged `color`, in `FFmpeg`'s list syntax.
 ///
 /// Colour fields come from [`crate::convert::color_tags`], like the encoder options and the
 /// container's `colr` box, so all three agree.
-fn chain_spec(codec: ffi::AVCodecID, color: ColorMetadata) -> Result<CString, EncodeError> {
+fn metadata_spec(codec: ffi::AVCodecID, color: ColorMetadata) -> Result<String, EncodeError> {
     let (primaries, transfer, matrix, range) = crate::convert::color_tags(color);
     let full = u8::from(range == ffi::AVCOL_RANGE_JPEG);
     // AV1 spells the colour fields and range flag differently from the H.264/HEVC VUI names.
@@ -157,6 +190,5 @@ fn chain_spec(codec: ffi::AVCodecID, color: ColorMetadata) -> Result<CString, En
             )));
         }
     };
-    CString::new(format!("{metadata},extract_extradata=remove=1"))
-        .map_err(|_| EncodeError::Adapter("a bitstream filter list holds a NUL".into()))
+    Ok(metadata)
 }

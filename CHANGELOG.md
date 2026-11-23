@@ -13,6 +13,11 @@ All notable changes to this project are documented in this file.
 - A packet copy (`strategy` `prefer-copy` or `require-copy`) also compares the color the H.264 or
   HEVC stream itself declares with the output's, and no longer copies a stream whose VUI contradicts
   its container's `colr` box: such a copy kept the stream's own tags under a BT.709 container.
+- Exports through the readback path carry their color in the coded stream as well as in the
+  container: H.264, HEVC and AV1 packets pass through FFmpeg's metadata bitstream filter, as on the
+  GPU-resident path, so encoders that write no color description (Media Foundation's H.264 on
+  Windows) are tagged too, and frames reach the encoders tagged, so ProRes frame headers say BT.709
+  instead of unspecified.
 
 ### Changed
 

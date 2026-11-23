@@ -2026,6 +2026,27 @@ pub fn take_packet_side_data(
     Some(bytes)
 }
 
+/// Tags `frame` with `FFmpeg`'s colour properties, which some encoders (`ProRes`) write into each
+/// frame header.
+pub fn set_frame_color(
+    frame: &mut rsmpeg::avutil::AVFrame,
+    (primaries, transfer, space, range): (
+        ffi::AVColorPrimaries,
+        ffi::AVColorTransferCharacteristic,
+        ffi::AVColorSpace,
+        ffi::AVColorRange,
+    ),
+) {
+    let raw = frame.as_mut_ptr();
+    // SAFETY: `frame` is mutably borrowed; the fields are plain values.
+    unsafe {
+        (*raw).color_primaries = primaries;
+        (*raw).color_trc = transfer;
+        (*raw).colorspace = space;
+        (*raw).color_range = range;
+    }
+}
+
 /// Gives `packet` side data of `kind` holding `data`, replacing any it had.
 ///
 /// # Errors

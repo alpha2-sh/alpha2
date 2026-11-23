@@ -737,8 +737,9 @@ pub(super) fn open(
     )
     .map_err(refused)?;
     let time_base = ra(frame_rate.1, frame_rate.0);
-    let bitstream = EncodedVideoFilter::new(&context.extract_codecpar(), request.color, time_base)
-        .map_err(refused)?;
+    let bitstream =
+        EncodedVideoFilter::in_band(&context.extract_codecpar(), request.color, time_base)
+            .map_err(refused)?;
     let copier = alpha2_native_gpu::D3D12EncodeCopier::new(shared)
         .map_err(|error| HardwareEncodeOpenError::Refused(format!("{error:?}")))?;
     let gpu = shared.gpu();

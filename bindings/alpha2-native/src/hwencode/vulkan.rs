@@ -370,7 +370,7 @@ pub(super) fn open(
     // set and `extract_extradata` keeps them out of the packets, as `hvc1` requires. H.264 keeps
     // the session's own in-band and header parameter sets.
     let bitstream = (request.codec == NativeVideoCodec::Hevc)
-        .then(|| EncodedVideoFilter::new(&context.extract_codecpar(), request.color, time_base))
+        .then(|| EncodedVideoFilter::in_band(&context.extract_codecpar(), request.color, time_base))
         .transpose()
         .map_err(refused)?;
     let copier = alpha2_native_gpu::VulkanEncodeCopier::new(shared)

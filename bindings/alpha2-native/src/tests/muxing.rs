@@ -289,9 +289,12 @@ fn mux_in_band(name: &str, color: ColorMetadata, audio: usize, audio_first: usiz
     let (encoder, packets, time_base) = in_band_encoder_output(name, color);
     let path = output_path(&format!("deferred-{name}"));
     let _ = fs::remove_file(&path);
-    let mut filter =
-        crate::bitstream::EncodedVideoFilter::new(&encoder.extract_codecpar(), color, time_base)
-            .expect("filter");
+    let mut filter = crate::bitstream::EncodedVideoFilter::in_band(
+        &encoder.extract_codecpar(),
+        color,
+        time_base,
+    )
+    .expect("filter");
     let mut muxer = crate::mux::Muxer::open_deferred(
         &path,
         alpha2_media::Container::Mp4,
@@ -404,6 +407,57 @@ fn assert_in_band_stream_is_repaired(name: &str, color: ColorMetadata) {
         assert_eq!(written, source, "{name}: picture {index}");
     }
     fs::remove_file(path).expect("cleanup");
+}
+
+#[test]
+fn the_colour_filter_rewrites_a_global_header_streams_sample_description() {
+    use alpha2_host_core::parameter_sets::{ParameterSetCodec, VideoSignal, sequence_facts};
+    let mut input = crate::decode::open_input(&corpus("h264-bt709-copy.mp4")).expect("input");
+    let (parameters, time_base) = {
+        let stream = &input.streams()[0];
+        (stream.codecpar().clone(), stream.time_base)
+    };
+    let mut filter =
+        crate::bitstream::EncodedVideoFilter::tagging(&parameters, BT601_FULL_SRGB, time_base)
+            .expect("filter")
+            .expect("H.264 has a colour filter");
+    let signal = |parameters: &rsmpeg::avcodec::AVCodecParameters| {
+        sequence_facts(
+            ParameterSetCodec::H264,
+            &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
+        )
+        .expect("an SPS")
+        .vui
+        .signal
+    };
+    let (primaries, transfer, matrix, _) = crate::convert::color_tags(BT601_FULL_SRGB);
+    assert_eq!(
+        signal(&filter.parameters()),
+        Some(VideoSignal {
+            full_range: true,
+            description: Some(
+                [primaries, transfer, matrix]
+                    .map(|tag| { u8::try_from(tag).expect("an H.273 code") })
+            ),
+        })
+    );
+    assert_ne!(signal(&parameters), signal(&filter.parameters()));
+    let (mut read, mut written) = (0, 0);
+    while let Some(packet) = input.read_packet().expect("packet") {
+        if packet.stream_index == 0 {
+            read += 1;
+            written += filter.filter(packet).expect("filter").len();
+        }
+    }
+    written += filter.flush().expect("flush").len();
+    assert_eq!(written, read, "one packet out for each in");
+    let vp9 = crate::decode::open_input(&corpus("vp9.webm")).expect("vp9");
+    let vp9 = vp9.streams()[0].codecpar().clone();
+    assert!(
+        crate::bitstream::EncodedVideoFilter::tagging(&vp9, BT601_FULL_SRGB, time_base)
+            .expect("no filter to open")
+            .is_none()
+    );
 }
 
 /// In-band parameter sets with no extradata or colour (as D3D12 Video writes them)
