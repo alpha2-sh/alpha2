@@ -39,6 +39,7 @@ impl CpuRenderer {
     /// without a CPU kernel, [`RenderError::InvalidSource`] for a GPU source.
     #[allow(clippy::too_many_lines)]
     pub fn execute_graph(&self, graph: &RenderGraph<'_>) -> Result<Arc<CpuImage>, GraphError> {
+        self.frame_pool.next_frame();
         let started = Instant::now();
         let quality = self.quality_controls();
         let plan = graph.compile()?;

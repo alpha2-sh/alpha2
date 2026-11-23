@@ -31,7 +31,7 @@ fn texture_pool_evicts_idle_targets_to_its_budget_once_no_recent_frame_used_them
         "the last frame's textures stay whatever the budget"
     );
 
-    empty_frames(&renderer, crate::pool::RECENT_FRAMES);
+    empty_frames(&renderer, crate::recent_use::RECENT_FRAMES);
     renderer.set_texture_budget_bytes(0);
     let stats = renderer.texture_pool_stats();
     assert_eq!(stats.available, 0);
@@ -165,7 +165,7 @@ fn texture_pool_evicts_the_least_recently_released_descriptor() {
         "current descriptor",
     ));
 
-    empty_frames(&renderer, crate::pool::RECENT_FRAMES);
+    empty_frames(&renderer, crate::recent_use::RECENT_FRAMES);
     renderer.set_texture_budget_bytes(8);
     let after_eviction = renderer.texture_pool_stats();
     assert_eq!(after_eviction.available, 1);

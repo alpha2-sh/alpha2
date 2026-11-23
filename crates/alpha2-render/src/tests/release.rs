@@ -140,7 +140,7 @@ fn what_a_pool_evicts_or_declines_to_keep_is_destroyed() {
     drop((first, second));
     renderer.set_texture_budget_bytes(0);
     assert_eq!(renderer.texture_pool_stats().available, 2);
-    empty_frames(&renderer, crate::pool::RECENT_FRAMES);
+    empty_frames(&renderer, crate::recent_use::RECENT_FRAMES);
 
     let lease = renderer
         .textures
@@ -153,7 +153,7 @@ fn what_a_pool_evicts_or_declines_to_keep_is_destroyed() {
         "a texture over the budget beside an idle twin",
     );
 
-    empty_frames(&renderer, crate::pool::RECENT_FRAMES);
+    empty_frames(&renderer, crate::recent_use::RECENT_FRAMES);
     renderer.set_texture_budget_bytes(0);
     assert_eq!(renderer.texture_pool_stats().available, 0);
     assert_destroyed(
@@ -269,7 +269,7 @@ fn a_texture_let_go_while_its_frame_is_encoded_lives_until_the_frame_is_submitte
         })
         .collect::<Vec<_>>();
     drop(stale);
-    empty_frames(&unpooled, crate::pool::RECENT_FRAMES);
+    empty_frames(&unpooled, crate::recent_use::RECENT_FRAMES);
     let before = unpooled.texture_pool_stats();
     assert_eq!(tint_chain(&mut unpooled), expected);
     let evicted = unpooled.texture_pool_stats().evicted - before.evicted;

@@ -124,3 +124,23 @@ fn reused_frame_buffers_do_not_change_the_next_frame() {
     let cached = renderer.result_cache_stats().bytes;
     assert_eq!(renderer.release_idle_memory(), cached);
 }
+
+#[test]
+fn a_frame_whose_buffers_outgrow_the_budget_reuses_them_as_a_covering_budget_does() {
+    use crate::RenderControls;
+    let size = RenderSize::new(640, 360).expect("size");
+    let background = Color::rgba(0.1, 0.2, 0.3, 1.0);
+    let reused_per_frame = |budget: u64| {
+        let renderer = CpuRenderer::new(3);
+        renderer.set_texture_budget_bytes(budget);
+        for _ in 0..2 {
+            draw(&renderer, size, background);
+        }
+        let warm = renderer.stats().reused_frame_buffers;
+        draw(&renderer, size, background);
+        renderer.stats().reused_frame_buffers - warm
+    };
+    let covered = reused_per_frame(u64::MAX);
+    assert!(covered > 0);
+    assert_eq!(reused_per_frame(0), covered);
+}

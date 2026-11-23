@@ -41,6 +41,7 @@ mod pipeline;
 mod pool;
 mod present;
 mod readback;
+mod recent_use;
 mod registry;
 pub use registry::{CheckedEffect, CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect, check_effect};
 mod renderer;

@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use crate::RenderSize;
 use crate::Shared;
+use crate::recent_use::RecentPeaks;
 use crate::retire::{Retired, Retirement};
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
@@ -140,8 +141,6 @@ struct IdleTexture {
     generation: u64,
 }
 
-pub(crate) const RECENT_FRAMES: usize = 8;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Eviction {
     SecondChance,
@@ -151,36 +150,24 @@ enum Eviction {
 #[derive(Debug)]
 struct RecentUse {
     active: usize,
-    peaks_newest_first: [usize; RECENT_FRAMES],
+    peaks: RecentPeaks,
 }
 
 impl RecentUse {
     const fn new() -> Self {
         Self {
             active: 0,
-            peaks_newest_first: [0; RECENT_FRAMES],
+            peaks: RecentPeaks::new(),
         }
     }
 
-    fn demand(&self) -> usize {
-        self.peaks_newest_first.iter().copied().max().unwrap_or(0)
-    }
-
     fn kept_idle(&self) -> usize {
-        self.demand().saturating_sub(self.active)
-    }
-
-    fn advance(&mut self, frames: u64) {
-        let shift =
-            usize::try_from(frames).map_or(RECENT_FRAMES, |frames| frames.min(RECENT_FRAMES));
-        self.peaks_newest_first
-            .copy_within(..RECENT_FRAMES - shift, shift);
-        self.peaks_newest_first[..shift].fill(self.active);
+        self.peaks.most().saturating_sub(self.active)
     }
 
     fn take(&mut self) {
         self.active = self.active.saturating_add(1);
-        self.peaks_newest_first[0] = self.peaks_newest_first[0].max(self.active);
+        self.peaks.raise(self.active);
     }
 
     fn give_back(&mut self) {
@@ -434,8 +421,8 @@ impl TexturePool {
         }
         state.recent_use_frame = frame;
         state.recent_use.retain(|_, used| {
-            used.advance(frames);
-            used.active > 0 || used.demand() > 0
+            used.peaks.advance(frames, used.active);
+            used.peaks.most() > 0
         });
     }
 }
@@ -932,13 +919,13 @@ impl RecycleToken {
 impl TexturePool {
     /// Returns a texture to the idle pool.
     ///
-    /// Per descriptor, the pool keeps as many textures as any of the last [`RECENT_FRAMES`]
-    /// submitted frames had in use at once, whatever the budget; the budget bounds only the idle
-    /// textures beyond that. Those are evicted second-chance (CLOCK), oldest release first, so a
-    /// stale descriptor leaves on the next scan while two alternating working sets do not evict
-    /// each other on every release. If nothing can be evicted the incoming texture is dropped.
-    /// Dropped textures are destroyed via [`crate::retire`] after any frame still encoding them
-    /// is submitted.
+    /// Per descriptor, the pool keeps as many textures as any of the last
+    /// [`crate::recent_use::RECENT_FRAMES`] submitted frames had in use at once, whatever the
+    /// budget; the budget bounds only the idle textures beyond that. Those are evicted
+    /// second-chance (CLOCK), oldest release first, so a stale descriptor leaves on the next scan
+    /// while two alternating working sets do not evict each other on every release. If nothing can
+    /// be evicted the incoming texture is dropped. Dropped textures are destroyed via
+    /// [`crate::retire`] after any frame still encoding them is submitted.
     fn release(
         &self,
         key: TextureKey,

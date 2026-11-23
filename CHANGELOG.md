@@ -89,6 +89,9 @@ All notable changes to this project are documented in this file.
   under the default export quality, or many stacked clips) no longer destroy and recreate textures
   every frame, and no longer hold a destroyed texture beside its replacement until the frame is
   submitted.
+- The CPU renderer's frame buffer pool follows the same rule: per buffer length it keeps as many
+  buffers as the last frames took at once, so a 7680x4320 export no longer frees and allocates a
+  frame buffer every frame.
 
 ## [0.6.1] - 2026-11-18
 
