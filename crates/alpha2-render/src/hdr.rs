@@ -161,7 +161,7 @@ pub fn hdr_to_working(
 pub(crate) const fn is_working_gamut(primaries: ColorPrimaries) -> bool {
     match primaries {
         ColorPrimaries::Bt601 | ColorPrimaries::Bt709 => true,
-        ColorPrimaries::Bt2020 => false,
+        ColorPrimaries::Bt2020 | ColorPrimaries::DisplayP3 => false,
     }
 }
 
@@ -173,6 +173,7 @@ fn chromaticities(primaries: ColorPrimaries) -> [[f64; 2]; 4] {
             [[0.640, 0.330], [0.300, 0.600], [0.150, 0.060], D65]
         }
         ColorPrimaries::Bt2020 => [[0.708, 0.292], [0.170, 0.797], [0.131, 0.046], D65],
+        ColorPrimaries::DisplayP3 => [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060], D65],
     }
 }
 
@@ -266,13 +267,20 @@ mod tests {
     }
 
     #[test]
-    fn gamut_matrices_convert_white_to_white_and_bt2020_red_out_of_gamut() {
+    fn gamut_matrices_convert_white_to_white_and_match_the_published_values() {
         let m = gamut_matrix(ColorPrimaries::Bt2020, ColorPrimaries::Bt709);
         for row in m {
             assert!((row.iter().sum::<f32>() - 1.0).abs() < 1.0e-4);
         }
         // The published BT.2087 values.
         assert!((m[0][0] - 1.6605).abs() < 1.0e-3 && (m[2][2] - 1.1187).abs() < 1.0e-3);
+        let p3 = gamut_matrix(ColorPrimaries::DisplayP3, ColorPrimaries::Bt709);
+        for row in p3 {
+            assert!((row.iter().sum::<f32>() - 1.0).abs() < 1.0e-4);
+        }
+        // Display P3 to BT.709 as SMPTE EG 432-1's chromaticities give it.
+        assert!((p3[0][0] - 1.2249).abs() < 1.0e-3 && (p3[1][1] - 1.0420).abs() < 1.0e-3);
+        assert!((p3[2][2] - 1.0979).abs() < 1.0e-3 && p3[0][2].abs() < 1.0e-3);
         let identity = gamut_matrix(ColorPrimaries::Bt709, ColorPrimaries::Bt709);
         for (r, row) in identity.iter().enumerate() {
             for (c, value) in row.iter().enumerate() {

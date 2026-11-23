@@ -75,6 +75,7 @@ fn gpu_wide_gamut_sdr_sources_convert_into_bt709_as_the_reference_does() {
         pixels
     };
     let wide = render(ColorPrimaries::Bt2020);
+    let p3 = render(ColorPrimaries::DisplayP3);
     let narrow = render(ColorPrimaries::Bt709);
     // Gray, white and black are the same in both gamuts; the colors are not.
     for index in 0..3 {
@@ -82,14 +83,30 @@ fn gpu_wide_gamut_sdr_sources_convert_into_bt709_as_the_reference_does() {
             wide[index * 4..index * 4 + 3],
             narrow[index * 4..index * 4 + 3]
         );
+        assert_eq!(
+            p3[index * 4..index * 4 + 3],
+            narrow[index * 4..index * 4 + 3]
+        );
     }
-    let moved = (3..8)
-        .filter(|index| {
-            (0..3)
-                .any(|channel| wide[index * 4 + channel].abs_diff(narrow[index * 4 + channel]) > 8)
-        })
-        .count();
-    assert_eq!(moved, 5, "every color converts: {wide:?} vs {narrow:?}");
+    let moved = |from: &[u8], by: u8| {
+        (3..8)
+            .filter(|index| {
+                (0..3).any(|channel| {
+                    from[index * 4 + channel].abs_diff(narrow[index * 4 + channel]) > by
+                })
+            })
+            .count()
+    };
+    assert_eq!(
+        moved(&wide, 8),
+        5,
+        "every color converts: {wide:?} vs {narrow:?}"
+    );
+    assert_eq!(
+        moved(&p3, 2),
+        5,
+        "every color converts: {p3:?} vs {narrow:?}"
+    );
 }
 
 #[test]

@@ -374,7 +374,7 @@ CLIP_BLEND_MODE_VALUES: tuple[ClipBlendMode, ...] = ("normal", "multiply", "scre
 COLOR_MATRIX_VALUES: tuple[ColorMatrix, ...] = ("bt601", "bt709", "bt2020_ncl", "rgb")
 """Every `ColorMatrix`, in the model's order."""
 
-COLOR_PRIMARIES_VALUES: tuple[ColorPrimaries, ...] = ("bt601", "bt709", "bt2020")
+COLOR_PRIMARIES_VALUES: tuple[ColorPrimaries, ...] = ("bt601", "bt709", "bt2020", "display_p3")
 """Every `ColorPrimaries`, in the model's order."""
 
 COLOR_RANGE_VALUES: tuple[ColorRange, ...] = ("limited", "full")
@@ -944,7 +944,7 @@ class ColorPipeline(TypedDict):
     """
 
 
-ColorPrimaries: TypeAlias = Literal["bt601", "bt709", "bt2020"]
+ColorPrimaries: TypeAlias = Literal["bt601", "bt709", "bt2020", "display_p3"]
 """RGB primary chromaticities a source or export declares."""
 
 

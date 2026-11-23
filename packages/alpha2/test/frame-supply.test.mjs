@@ -5,10 +5,21 @@ import { runInNewContext } from "node:vm";
 import { FrameSupply, decoderCursorKey } from "../dist/frame-supply.js";
 import {
   chromaSitingForCodec,
+  colorMetadataFromVideoColorSpace,
   copyPlanarYuvFrame,
   NonPlanarVideoFrameError,
   PlanarDecodeUnavailableError,
 } from "../dist/hdr-frames.js";
+
+test("webcodecs primaries read as the engine's, display p3 included", () => {
+  const primaries = (value) =>
+    colorMetadataFromVideoColorSpace({ primaries: value }).primaries;
+  assert.equal(primaries("smpte432"), "display_p3");
+  assert.equal(primaries("bt2020"), "bt2020");
+  assert.equal(primaries("smpte170m"), "bt601");
+  assert.equal(primaries("bt709"), "bt709");
+  assert.equal(primaries(null), "bt709");
+});
 
 test("independent decoder cursors run concurrently and upload in need order", async () => {
   const needs = [

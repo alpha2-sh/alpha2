@@ -68,6 +68,7 @@ impl ColorMetadata {
         Some(Self {
             primaries: match primaries {
                 9 => ColorPrimaries::Bt2020,
+                12 => ColorPrimaries::DisplayP3,
                 5 | 6 => ColorPrimaries::Bt601,
                 _ => ColorPrimaries::Bt709,
             },
@@ -144,6 +145,8 @@ pub enum ColorPrimaries {
     Bt709,
     /// Wide-gamut BT.2020 primaries, normally indicating HDR input.
     Bt2020,
+    /// Display P3 (SMPTE EG 432-1, D65 white), as phones record SDR video.
+    DisplayP3,
 }
 
 /// Encoded transfer curve.
@@ -269,6 +272,20 @@ pub enum DynamicRange {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn h273_primaries_read_as_their_gamut_and_unknown_ones_as_bt709() {
+        let primaries = |code| {
+            ColorMetadata::from_h273(code, 1, 1, Some(false))
+                .expect("tagged")
+                .primaries
+        };
+        assert_eq!(primaries(1), ColorPrimaries::Bt709);
+        assert_eq!(primaries(6), ColorPrimaries::Bt601);
+        assert_eq!(primaries(9), ColorPrimaries::Bt2020);
+        assert_eq!(primaries(12), ColorPrimaries::DisplayP3);
+        assert_eq!(primaries(11), ColorPrimaries::Bt709);
+    }
 
     #[test]
     fn levels_scale_the_limited_range_with_the_bit_depth() {

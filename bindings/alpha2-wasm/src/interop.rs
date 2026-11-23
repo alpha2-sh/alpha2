@@ -925,6 +925,7 @@ pub(crate) fn video_color_space(color: alpha2_media::ColorMetadata) -> Result<Js
         ColorPrimaries::Bt601 => "smpte170m",
         ColorPrimaries::Bt709 => "bt709",
         ColorPrimaries::Bt2020 => "bt2020",
+        ColorPrimaries::DisplayP3 => "smpte432",
     };
     let transfer = match color.transfer {
         TransferFunction::Bt709 => "bt709",

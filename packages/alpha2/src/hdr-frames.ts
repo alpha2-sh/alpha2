@@ -126,6 +126,8 @@ export function colorMetadataFromVideoColorSpace(
     switch (named?.primaries) {
       case "bt2020":
         return "bt2020" as const;
+      case "smpte432":
+        return "display_p3" as const;
       case "bt470bg":
       case "smpte170m":
         return "bt601" as const;

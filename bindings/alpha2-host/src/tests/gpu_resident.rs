@@ -936,7 +936,7 @@ fn a_decoded_picture_is_transcoded_only_when_a_render_would_not_change_it() {
         crate::frames::check_repackable(&undeclared, size, encoding),
         Ok(())
     );
-    let refused: [(&str, NativeVideoFrameMetadata, &str); 7] = [
+    let refused: [(&str, NativeVideoFrameMetadata, &str); 8] = [
         (
             "cropped",
             NativeVideoFrameMetadata {
@@ -984,6 +984,17 @@ fn a_decoded_picture_is_transcoded_only_when_a_render_would_not_change_it() {
             "another matrix",
             NativeVideoFrameMetadata {
                 color: Some(bt601),
+                ..shown.clone()
+            },
+            "not the output's",
+        ),
+        (
+            "Display P3 primaries",
+            NativeVideoFrameMetadata {
+                color: Some(ColorMetadata {
+                    primaries: alpha2_media::ColorPrimaries::DisplayP3,
+                    ..ColorMetadata::EXPORT
+                }),
                 ..shown.clone()
             },
             "not the output's",

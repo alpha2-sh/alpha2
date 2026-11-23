@@ -1355,6 +1355,11 @@
           "const": "bt2020",
           "description": "Wide-gamut BT.2020 primaries, normally indicating HDR input.",
           "type": "string"
+        },
+        {
+          "const": "display_p3",
+          "description": "Display P3 (SMPTE EG 432-1, D65 white), as phones record SDR video.",
+          "type": "string"
         }
       ]
     },

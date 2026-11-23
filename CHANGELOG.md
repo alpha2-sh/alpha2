@@ -26,6 +26,10 @@ All notable changes to this project are documented in this file.
   or BT.601 with the new `RenderError::UnsupportedOutputColor`, coded `INVALID_INPUT`. The packs
   follow only the color's matrix and range, so such a tag would have described other pixels than
   the planes hold. No binding requested such a color.
+- **Breaking:** Display P3 sources (H.273 primaries 12, `smpte432` in WebCodecs) are converted into
+  BT.709 on import, as BT.2020 sources are, instead of being read as BT.709. `ColorPrimaries` gains
+  `DisplayP3` (`display_p3` in projects). Under the BT.709 output their pictures are neither
+  transcoded nor packet-copied, and the packs refuse a Display P3 output color.
 - **Breaking:** `alpha2-render` no longer exports `SdrOutputTransfer` or `encode_linear_rgb`.
   Nothing outside tests called them, and the export path never applied either curve: it writes
   the working space's sRGB-coded values and tags them BT.709.

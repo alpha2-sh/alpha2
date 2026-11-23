@@ -41,12 +41,12 @@ use objc2_core_video::{
     CVPixelBufferGetHeightOfPlane, CVPixelBufferGetWidthOfPlane, CVPixelBufferLockBaseAddress,
     CVPixelBufferLockFlags, CVPixelBufferPool, CVPixelBufferUnlockBaseAddress,
     kCVImageBufferColorPrimaries_ITU_R_709_2, kCVImageBufferColorPrimaries_ITU_R_2020,
-    kCVImageBufferColorPrimaries_SMPTE_C, kCVImageBufferTransferFunction_ITU_R_709_2,
-    kCVImageBufferTransferFunction_ITU_R_2100_HLG, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
-    kCVImageBufferTransferFunction_sRGB, kCVImageBufferYCbCrMatrix_ITU_R_601_4,
-    kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrix_ITU_R_2020,
-    kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey,
-    kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
+    kCVImageBufferColorPrimaries_P3_D65, kCVImageBufferColorPrimaries_SMPTE_C,
+    kCVImageBufferTransferFunction_ITU_R_709_2, kCVImageBufferTransferFunction_ITU_R_2100_HLG,
+    kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, kCVImageBufferTransferFunction_sRGB,
+    kCVImageBufferYCbCrMatrix_ITU_R_601_4, kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+    kCVImageBufferYCbCrMatrix_ITU_R_2020, kCVPixelBufferHeightKey,
+    kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
 };
 use objc2_video_toolbox::{
     VTCompressionSession, VTCopyVideoEncoderList, VTEncodeInfoFlags, VTSessionSetProperty,
@@ -375,6 +375,7 @@ fn color_tags(config: &VideoEncodeConfig) -> [&'static CFString; 3] {
                 ColorPrimaries::Bt601 => kCVImageBufferColorPrimaries_SMPTE_C,
                 ColorPrimaries::Bt709 => kCVImageBufferColorPrimaries_ITU_R_709_2,
                 ColorPrimaries::Bt2020 => kCVImageBufferColorPrimaries_ITU_R_2020,
+                ColorPrimaries::DisplayP3 => kCVImageBufferColorPrimaries_P3_D65,
             },
             match color.transfer {
                 TransferFunction::Bt709 => kCVImageBufferTransferFunction_ITU_R_709_2,

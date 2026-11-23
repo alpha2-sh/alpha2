@@ -794,6 +794,7 @@ impl Vp9Format {
                     ColorPrimaries::Bt601 => 6,
                     ColorPrimaries::Bt709 => 1,
                     ColorPrimaries::Bt2020 => 9,
+                    ColorPrimaries::DisplayP3 => 12,
                 },
                 match color.transfer {
                     TransferFunction::Bt709 => 1,

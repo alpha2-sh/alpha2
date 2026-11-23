@@ -224,6 +224,31 @@ mod tests {
     }
 
     #[test]
+    fn the_packs_take_only_the_working_gamut_and_an_sdr_transfer() {
+        let pack = |primaries, transfer| {
+            check_packable(YuvEncoding::new(
+                ColorMetadata {
+                    primaries,
+                    transfer,
+                    dynamic_range: if matches!(transfer, TransferFunction::Pq) {
+                        DynamicRange::Hdr
+                    } else {
+                        DynamicRange::Sdr
+                    },
+                    ..ColorMetadata::EXPORT
+                },
+                alpha2_media::ChromaLocation::Center,
+            ))
+            .is_ok()
+        };
+        assert!(pack(ColorPrimaries::Bt709, TransferFunction::Bt709));
+        assert!(pack(ColorPrimaries::Bt601, TransferFunction::Srgb));
+        assert!(!pack(ColorPrimaries::Bt2020, TransferFunction::Bt709));
+        assert!(!pack(ColorPrimaries::DisplayP3, TransferFunction::Bt709));
+        assert!(!pack(ColorPrimaries::Bt709, TransferFunction::Pq));
+    }
+
+    #[test]
     fn neutral_black_and_white_match_all_sdr_matrices_and_ranges() {
         for matrix in [
             ColorMatrix::Bt601,

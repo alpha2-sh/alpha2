@@ -555,6 +555,7 @@ export const PROJECT_SHAPE: unknown = {
         { const: "bt601", type: "string" },
         { const: "bt709", type: "string" },
         { const: "bt2020", type: "string" },
+        { const: "display_p3", type: "string" },
       ],
     },
     ColorRange: {

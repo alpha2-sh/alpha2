@@ -413,6 +413,7 @@ export const COLOR_PRIMARIES_VALUES: readonly ColorPrimaries[] = [
   "bt601",
   "bt709",
   "bt2020",
+  "display_p3",
 ];
 
 /** Every {@link ColorRange}, in the model's order. */
@@ -1282,7 +1283,7 @@ export interface ColorPipeline {
 /**
  * RGB primary chromaticities a source or export declares.
  */
-export type ColorPrimaries = "bt601" | "bt709" | "bt2020";
+export type ColorPrimaries = "bt601" | "bt709" | "bt2020" | "display_p3";
 
 /**
  * Nominal encoded component range.
