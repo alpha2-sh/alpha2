@@ -375,10 +375,10 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The answer to a `ca
 | `PLUGIN_TRAPPED` | The wasm module trapped, or the native plugin caught a panic at its boundary. |
 | `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or table bound, or a call past its deadline, or a native plugin call did not return within three stall limits. |
 | `HOST_RETIRING` | The host is `draining` and did not start the request; send it to another host. |
-| `INTERNAL` | A defect in the host failed the request. When the request panicked, the host drains with reason `defect`: requests running finish, and those it has read but not started and later ones are answered `HOST_RETIRING`. |
+| `INTERNAL` | A defect in the host or the engine failed the request. When the request panicked, the host drains with reason `defect`: requests running finish, and those it has read but not started and later ones are answered `HOST_RETIRING`. |
 | `ALPHA2_ERROR` | A failure no other code describes. |
 
-The codes the engine itself reports (`INVALID_INPUT`, `MISSING_INPUT`, `INCOMPLETE_COMPOSITION`, `EFFECT_ERROR`, `ENCODE_ERROR`, `GPU_DEVICE_LOST`, `GPU_DEVICE_HUNG`, `GPU_TIMEOUT`, `ALPHA2_ERROR`) are the ones the browser engine reports too.
+The codes the engine itself reports (`INVALID_INPUT`, `MISSING_INPUT`, `INCOMPLETE_COMPOSITION`, `EFFECT_ERROR`, `ENCODE_ERROR`, `GPU_DEVICE_LOST`, `GPU_DEVICE_HUNG`, `GPU_TIMEOUT`, `INTERNAL`, `ALPHA2_ERROR`) are the ones the browser engine reports too.
 
 An `export` that fails, before or while it renders, also has `error.failure`: the class of the failure (`code`, such as `OUT_OF_MEMORY`, `DEVICE_LOST`, `INVALID_INPUT` or `CANCELLED`), the step it failed at (`phase`, `stage`) and the frame (`frameIndex`), the protocol code (`hostCode`), and the device, memory and path diagnostics recorded up to then (`diagnostics`). It reports the first failure, not the cancellations that failure caused in the rest of the export. A `RESOURCE_BUSY` failure (`ENCODER_BUSY`) also has `retryAfterMs`, how long to wait before trying again. The type is `ExportFailure` in `alpha2/export-failure`, and `alpha2/export-retry` decides from it whether to retry. A caught defect (`INTERNAL`) has the class `DEFECT`, which it retries once, at once, on a fresh host.
 

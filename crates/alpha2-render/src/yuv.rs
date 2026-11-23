@@ -593,7 +593,7 @@ impl Renderer {
             self.gpu.device(),
             u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
         );
-        let uniform = uniforms.write(&uniform_bytes);
+        let uniform = uniforms.write(&uniform_bytes)?;
         let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
             label: Some("alpha2 RGBA presentation bind group"),
             layout: &cached.bind_group_layout,
@@ -1000,7 +1000,7 @@ impl Renderer {
             self.gpu.device(),
             u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
         );
-        let uniform = uniforms.write(&uniform_bytes);
+        let uniform = uniforms.write(&uniform_bytes)?;
         let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
             label: Some("alpha2 YUV bind group"),
             layout: &cached.bind_group_layout,

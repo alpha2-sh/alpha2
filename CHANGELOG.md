@@ -77,6 +77,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A pass that writes more uniform data than its frame reserved fails that frame with the new
+  `RenderError::UniformArenaOverrun`, coded `INTERNAL` (a new engine code, class `DEFECT`),
+  instead of panicking the rendering thread. A frame also resolves each effect's registration once,
+  so another thread registering an effect while a frame encodes can no longer cause one.
 - Each submission of a split frame names the effects encoded into its own command buffers in loss
   reports; the frame's first submission named every effect of the frame and the others none.
 - A GPU loss after a heavy frame split into short submissions is reported `GPU_DEVICE_LOST` and

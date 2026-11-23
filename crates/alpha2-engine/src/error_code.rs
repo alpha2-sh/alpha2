@@ -33,13 +33,15 @@ pub enum ErrorCode {
     GpuDeviceHung,
     /// GPU work did not complete within the wait timeout.
     GpuTimeout,
+    /// A defect in the engine failed the request; the engine stays usable.
+    Internal,
     /// A failure nothing classified.
     Alpha2Error,
 }
 
 impl ErrorCode {
     /// Every code, for tables and tests.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::InvalidInput,
         Self::MissingInput,
         Self::IncompleteComposition,
@@ -48,6 +50,7 @@ impl ErrorCode {
         Self::GpuDeviceLost,
         Self::GpuDeviceHung,
         Self::GpuTimeout,
+        Self::Internal,
         Self::Alpha2Error,
     ];
 
@@ -63,6 +66,7 @@ impl ErrorCode {
             Self::GpuDeviceLost => "GPU_DEVICE_LOST",
             Self::GpuDeviceHung => "GPU_DEVICE_HUNG",
             Self::GpuTimeout => "GPU_TIMEOUT",
+            Self::Internal => "INTERNAL",
             Self::Alpha2Error => "ALPHA2_ERROR",
         }
     }
@@ -257,6 +261,7 @@ fn render_code(error: RenderError) -> ErrorCode {
         | RenderError::ExternalTextureSync(Some(GpuFault::DeviceLost)) => ErrorCode::GpuDeviceLost,
         RenderError::GpuDeviceHung { .. }
         | RenderError::ExternalTextureSync(Some(GpuFault::DeviceHung)) => ErrorCode::GpuDeviceHung,
+        RenderError::UniformArenaOverrun => ErrorCode::Internal,
         // A GPU rejection is the engine's failure, not the caller's input.
         _ => ErrorCode::Alpha2Error,
     }
@@ -312,6 +317,10 @@ mod tests {
         assert_eq!(
             ErrorCode::of(&RenderError::UnsupportedHdr),
             Some(ErrorCode::InvalidInput)
+        );
+        assert_eq!(
+            ErrorCode::of(&RenderError::UniformArenaOverrun),
+            Some(ErrorCode::Internal)
         );
         let wide = alpha2_media::ColorMetadata {
             primaries: alpha2_media::ColorPrimaries::Bt2020,

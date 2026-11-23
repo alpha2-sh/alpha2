@@ -628,7 +628,7 @@ impl Renderer {
             self.gpu.device(),
             u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
         );
-        let uniform = uniforms.write(&uniform_bytes);
+        let uniform = uniforms.write(&uniform_bytes)?;
         self.encode_yuv420_pack(
             target,
             [y_texture.view(), u_texture.view(), v_texture.view()],
@@ -760,7 +760,7 @@ impl Renderer {
             self.gpu.device(),
             u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
         );
-        let uniform = uniforms.write(&uniform_bytes);
+        let uniform = uniforms.write(&uniform_bytes)?;
         let cached = self.yuv_readback_pipeline()?;
         let bind_group = self.yuv_pack_bind_group(target, cached, &uniforms, uniform);
         encode_yuv_render_pass(

@@ -117,7 +117,7 @@ impl Renderer {
             size,
             runtime,
             self.quality_controls().max_filter_samples,
-        )));
+        )))?;
         // Held until the bind group is made, whatever another thread registers meanwhile.
         let bound = registered
             .definition

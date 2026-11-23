@@ -141,7 +141,7 @@ impl Renderer {
                 self.gpu.device(),
                 u64::try_from(origin.len()).unwrap_or(u64::MAX),
             );
-            let slice = uniforms.write(&origin);
+            let slice = uniforms.write(&origin)?;
 
             let bind_group = self.bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("alpha2 YUV repack bind group"),
@@ -156,7 +156,7 @@ impl Renderer {
                     },
                 ],
             });
-            PendingSourceWork::new(SourceWork {
+            Ok(PendingSourceWork::new(SourceWork {
                 label,
                 conversion: false,
                 pipeline: pipeline.clone(),
@@ -167,7 +167,7 @@ impl Renderer {
                 uniforms,
                 uploads,
                 external_leases,
-            })
+            }))
         };
         Ok([
             pass(
@@ -176,7 +176,7 @@ impl Renderer {
                 targets.luma,
                 uploads,
                 lease.into_iter().collect(),
-            ),
+            )?,
             pass(
                 "alpha2 YUV repack chroma pass",
                 if format.interleaved_chroma {
@@ -187,7 +187,7 @@ impl Renderer {
                 targets.chroma,
                 Vec::new(),
                 Vec::new(),
-            ),
+            )?,
         ])
     }
 

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::Mutex;
 
-use crate::Shared;
 use crate::retire::{Retired, Retirement};
+use crate::{RenderError, Shared};
 
 /// Bytes per effect parameter in `EffectParams`; every type pads to one 16-byte slot.
 pub(crate) const PARAM_SLOT_BYTES: usize = 16;
@@ -330,36 +330,32 @@ impl UniformBufferPool {
 }
 
 impl UniformArenaLease {
-    pub(crate) fn write(&mut self, contents: &[u8]) -> UniformSlice {
-        let written: Result<_, std::convert::Infallible> =
-            self.write_with(contents.len(), |bytes| {
-                bytes.copy_from_slice(contents);
-                Ok(())
-            });
-        match written {
-            Ok(slice) => slice,
-        }
+    pub(crate) fn write(&mut self, contents: &[u8]) -> Result<UniformSlice, RenderError> {
+        self.write_with(contents.len(), |bytes| {
+            bytes.copy_from_slice(contents);
+            Ok(())
+        })
     }
 
-    pub(crate) fn write_with<E>(
+    pub(crate) fn write_with(
         &mut self,
         size: usize,
-        fill: impl FnOnce(&mut [u8]) -> Result<(), E>,
-    ) -> Result<UniformSlice, E> {
+        fill: impl FnOnce(&mut [u8]) -> Result<(), RenderError>,
+    ) -> Result<UniformSlice, RenderError> {
         let offset = align_up(self.cursor, self.alignment);
-        let size = u64::try_from(size).expect("uniform contents fit u64");
-        let end = offset.checked_add(size).expect("uniform arena offset");
-        assert!(end <= self.capacity, "uniform arena capacity was reserved");
+        let end = u64::try_from(size)
+            .ok()
+            .and_then(|size| offset.checked_add(size))
+            .filter(|end| *end <= self.capacity)
+            .ok_or(RenderError::UniformArenaOverrun)?;
+        let size = NonZeroU64::new(end - offset).expect("uniform binding is non-empty");
         let start = usize::try_from(offset).expect("uniform offset fits host indexing");
         let end = usize::try_from(end).expect("uniform end fits host indexing");
         let bytes = &mut self.bytes[start..end];
         bytes.fill(0);
         fill(bytes)?;
         self.cursor = u64::try_from(end).expect("uniform cursor fits u64");
-        Ok(UniformSlice {
-            offset,
-            size: NonZeroU64::new(size).expect("uniform binding is non-empty"),
-        })
+        Ok(UniformSlice { offset, size })
     }
 
     /// The arena's first `size` bytes as a dynamic-offset binding; pass a slice's

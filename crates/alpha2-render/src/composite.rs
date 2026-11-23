@@ -139,7 +139,7 @@ impl Renderer {
         let bounded = |bounds: &PixelRect| under_half(*bounds, size);
         let ((first, first_bounds), rest) = batches.split_first().expect("a layer is drawn");
         let first_program = self.batch_program(first);
-        let first = prepare_batch(&preparation, None, first, uniforms);
+        let first = prepare_batch(&preparation, None, first, uniforms)?;
         // The clear writes the stored background, so a small first batch can draw only inside its
         // bounds.
         let first_pass = PassTarget {
@@ -183,7 +183,7 @@ impl Renderer {
                 // A pass cannot read the texture it writes, so copy the backdrop region aside
                 // first.
                 copy_region(encoder, textures[current], textures[other], *bounds);
-                let prepared = prepare_batch(&preparation, Some(views[other]), batch, uniforms);
+                let prepared = prepare_batch(&preparation, Some(views[other]), batch, uniforms)?;
                 self.draw_batch(
                     encoder,
                     cached,
@@ -196,7 +196,7 @@ impl Renderer {
                     },
                 )?;
             } else {
-                let prepared = prepare_batch(&preparation, Some(views[current]), batch, uniforms);
+                let prepared = prepare_batch(&preparation, Some(views[current]), batch, uniforms)?;
                 self.draw_batch(
                     encoder,
                     cached,
@@ -537,7 +537,7 @@ fn prepare_batch(
     backdrop: Option<&wgpu::TextureView>,
     batch: &[(&CompositeLayer<'_>, PixelRect, LayerTier)],
     uniforms: &mut UniformArenaLease,
-) -> OffsetBindGroup<1> {
+) -> Result<OffsetBindGroup<1>, RenderError> {
     debug_assert!(!batch.is_empty() && batch.len() <= COMPOSITE_BATCH_LAYERS);
     let mut values = [0.0_f32; BATCH_UNIFORM_FLOATS];
     #[allow(clippy::cast_precision_loss)]
@@ -581,7 +581,7 @@ fn prepare_batch(
             (bounds.y + bounds.height) as f32,
         ]);
     }
-    let uniform = uniforms.write(bytemuck::cast_slice(&values));
+    let uniform = uniforms.write(bytemuck::cast_slice(&values))?;
     let texture = |slot: usize| {
         let (layer, _, _) = batch.get(slot).unwrap_or(&batch[0]);
         layer.texture
@@ -601,14 +601,14 @@ fn prepare_batch(
         binding: UNIFORM_BINDING,
         resource: uniforms.dynamic_binding(uniform.size()),
     });
-    OffsetBindGroup {
+    Ok(OffsetBindGroup {
         group: context.renderer.bind_group(&wgpu::BindGroupDescriptor {
             label: Some("alpha2 layer batch bind group"),
             layout: context.layout,
             entries: &entries,
         }),
         offsets: [uniform.dynamic_offset()],
-    }
+    })
 }
 
 /// Clears `target` to `stored`, a value its format holds exactly, so the clear matches what a

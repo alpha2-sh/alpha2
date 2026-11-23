@@ -81,6 +81,9 @@ pub enum RenderError {
     /// A pack was asked for an output color it cannot write: an HDR transfer, or primaries
     /// other than BT.709 or BT.601. Packs follow the color's matrix and range only.
     UnsupportedOutputColor(alpha2_media::ColorMetadata),
+    /// A pass wrote more uniform data than its frame reserved, a defect in the renderer. The
+    /// frame fails; the renderer stays usable.
+    UniformArenaOverrun,
 }
 
 impl fmt::Display for RenderError {
@@ -182,6 +185,7 @@ impl fmt::Display for RenderError {
                  BT.709 or BT.601 primaries with an SDR transfer",
                 color.primaries, color.transfer
             ),
+            Self::UniformArenaOverrun => formatter.write_str(UNIFORM_ARENA_OVERRUN_MESSAGE),
         }
     }
 }
@@ -236,6 +240,9 @@ impl fmt::Display for ReadbackFailure {
         formatter.write_str(self.as_str())
     }
 }
+
+const UNIFORM_ARENA_OVERRUN_MESSAGE: &str =
+    "a pass wrote more uniform data than its frame reserved; this is a renderer defect";
 
 /// Message every GPU wait timeout carries, so hosts can classify errors from text alone.
 pub use alpha2_media::GPU_TIMEOUT_MESSAGE;

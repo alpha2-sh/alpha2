@@ -31,6 +31,13 @@ const FULL_SLOT: u32 = u32::MAX;
 /// One op's uniform: fifteen `vec4`s.
 pub(crate) const VECTOR_UNIFORM_BYTES: u64 = 15 * 16;
 
+const VECTOR_UNIFORM_WORDS: usize = 60;
+
+const _: () = assert!(
+    size_of::<[u32; VECTOR_UNIFORM_WORDS]>() as u64 == VECTOR_UNIFORM_BYTES,
+    "the vector uniform writers fill the bytes the arena reserves"
+);
+
 /// One tile instance: position (two `u16`) and slot.
 const INSTANCE_BYTES: u64 = 8;
 
@@ -461,7 +468,9 @@ impl Renderer {
                 }
                 VectorOp::PopLayer => {
                     let (bounds, opacity) = open.pop().ok_or(RenderError::InvalidGraph)?;
-                    let uniform = uniforms.write(&op_uniform_plain(canvas, opacity)).offset();
+                    let uniform = uniforms
+                        .write(bytemuck::cast_slice(&op_uniform_plain(canvas, opacity)))?
+                        .offset();
                     steps.push(Step::Pop { bounds, uniform });
                 }
                 VectorOp::Fill { paint, opacity, .. } => {
@@ -486,13 +495,17 @@ impl Renderer {
                         }
                     }
                     let uniform = uniforms
-                        .write(&op_uniform(paint, canvas, *opacity, !linear))
+                        .write(bytemuck::cast_slice(&op_uniform(
+                            paint, canvas, *opacity, !linear,
+                        )))?
                         .offset();
                     steps.push(Step::Fill(FillDraw { ranges, uniform }));
                 }
             }
         }
-        let encode_uniform = uniforms.write(&op_uniform_plain(canvas, 1.0)).offset();
+        let encode_uniform = uniforms
+            .write(bytemuck::cast_slice(&op_uniform_plain(canvas, 1.0)))?
+            .offset();
 
         let mut transient = crate::retire::TransientBuffers::new(&self.retirement);
         // Upload pages in encoder order so a page reused later in the frame still holds these
@@ -743,11 +756,16 @@ fn scissor(bounds: IRect, size: RenderSize) -> Option<(u32, u32, u32, u32)> {
 }
 
 /// A fill op's uniform: inverse paint transform, canvas, opacity and the sRGB-store flag.
-fn op_uniform(paint: &ScenePaint, canvas: [f32; 2], opacity: f32, encoded: bool) -> Vec<u8> {
+fn op_uniform(
+    paint: &ScenePaint,
+    canvas: [f32; 2],
+    opacity: f32,
+    encoded: bool,
+) -> [u32; VECTOR_UNIFORM_WORDS] {
     let [xx, yx, xy, yy, x0, y0] = paint.inverse.as_coeffs();
     #[allow(clippy::cast_possible_truncation)]
     let narrow = |value: f64| value as f32;
-    let mut floats = [0.0_f32; 60];
+    let mut floats = [0.0_f32; VECTOR_UNIFORM_WORDS];
     // Paint-space x = xx * x + xy * y + x0; y = yx * x + yy * y + y0.
     floats[0..4].copy_from_slice(&[narrow(xx), narrow(xy), narrow(x0), paint.space[0]]);
     floats[4..8].copy_from_slice(&[narrow(yx), narrow(yy), narrow(y0), paint.space[1]]);
@@ -774,27 +792,15 @@ fn op_uniform(paint: &ScenePaint, canvas: [f32; 2], opacity: f32, encoded: bool)
         floats[20 + index] = stop.offset;
         floats[28 + index * 4..32 + index * 4].copy_from_slice(&stop.color);
     }
-    let mut bytes = Vec::with_capacity(floats.len() * 4);
-    for (index, value) in floats.iter().enumerate() {
-        let word = match index {
-            16 => kind,
-            17 => paint.spread,
-            18 => count,
-            19 => 0,
-            _ => value.to_bits(),
-        };
-        bytes.extend_from_slice(&word.to_ne_bytes());
-    }
-    bytes
+    let mut words = floats.map(f32::to_bits);
+    words[16..20].copy_from_slice(&[kind, paint.spread, count, 0]);
+    words
 }
 
-fn op_uniform_plain(canvas: [f32; 2], opacity: f32) -> Vec<u8> {
-    let mut floats = [0.0_f32; 60];
+fn op_uniform_plain(canvas: [f32; 2], opacity: f32) -> [u32; VECTOR_UNIFORM_WORDS] {
+    let mut floats = [0.0_f32; VECTOR_UNIFORM_WORDS];
     floats[8..12].copy_from_slice(&[canvas[0], canvas[1], opacity, 0.0]);
-    floats
-        .iter()
-        .flat_map(|value| value.to_ne_bytes())
-        .collect()
+    floats.map(f32::to_bits)
 }
 
 impl CachedVectorPipeline {

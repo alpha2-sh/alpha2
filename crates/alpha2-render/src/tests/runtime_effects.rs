@@ -526,6 +526,26 @@ fn an_effect_registered_while_a_frame_encodes_never_overruns_the_frames_uniform_
     );
 }
 
+#[test]
+fn a_uniform_write_past_its_reservation_fails_and_leaves_the_renderer_usable() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let mut uniforms = renderer.uniform_buffers.acquire(renderer.gpu.device(), 16);
+    assert!(uniforms.write(&[0; 16]).is_ok());
+    assert_eq!(
+        uniforms.write(&[0; 16]).map(|_| ()),
+        Err(RenderError::UniformArenaOverrun)
+    );
+    drop(uniforms);
+    let solid = renderer
+        .render_solid(
+            RenderSize::new(2, 2).expect("size"),
+            Color::rgba(0.0, 0.0, 0.0, 1.0),
+        )
+        .expect("the renderer draws after a failed write");
+    assert_eq!(read_rgba8(&renderer, &solid), [0, 0, 0, 255].repeat(4));
+}
+
 fn effect_with_float_params(id: &str, count: usize) -> EffectDef {
     EffectDef {
         id: id.into(),
