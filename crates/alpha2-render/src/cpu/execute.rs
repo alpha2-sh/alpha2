@@ -232,7 +232,7 @@ impl CpuRenderer {
             return Err(GraphError::EffectKindMismatch);
         }
         crate::runtime_effect::validate_runtime(node.runtime)?;
-        crate::runtime_effect::encode_params(&definition.params, node.params)?;
+        crate::runtime_effect::validate_params(&definition.params, node.params)?;
         if node
             .resources
             .iter()

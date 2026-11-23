@@ -4,9 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::{
     EffectId, EffectKind, EffectParams, EffectResources, EffectRuntime, GraphError, ParamSpec,
     ParamType, ParamValue, RenderError, RenderGraph, RenderSize, RenderedTexture, Renderer,
-    uniform::{
-        PARAM_SLOT_BYTES, RUNTIME_UNIFORM_WORDS, UniformArenaLease, f32_bytes, param_uniform_bytes,
-    },
+    uniform::{PARAM_SLOT_BYTES, RUNTIME_UNIFORM_WORDS, UniformArenaLease, param_uniform_bytes},
 };
 
 impl Renderer {
@@ -103,7 +101,7 @@ impl Renderer {
             (EffectKind::Effect | EffectKind::Generator, _) => source_a,
         };
         validate_runtime(runtime)?;
-        let parameter_bytes = encode_params(&registered.definition.params, params)?;
+        validate_params(&registered.definition.params, params)?;
         if resources.iter().any(|(name, _)| {
             !registered
                 .definition
@@ -113,12 +111,15 @@ impl Renderer {
         }) {
             return Err(RenderError::InvalidEffectParams);
         }
-        let parameter_uniform = uniforms.write(&parameter_bytes);
-        let runtime_uniform = uniforms.write(&runtime_bytes(
+        let parameter_uniform = uniforms.write_with(
+            param_uniform_bytes(registered.definition.params.len()),
+            |bytes| encode_params(&registered.definition.params, params, bytes),
+        )?;
+        let runtime_uniform = uniforms.write(bytemuck::cast_slice(&runtime_words(
             size,
             runtime,
             self.quality_controls().max_filter_samples,
-        ));
+        )));
         // Held until the bind group is made, whatever another thread registers meanwhile.
         let bound = registered
             .definition
@@ -136,7 +137,8 @@ impl Renderer {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut entries = vec![
+        let mut entries = arrayvec::ArrayVec::<_, { crate::registry::MAX_EFFECT_BINDINGS }>::new();
+        entries.extend([
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::TextureView(source_a),
@@ -153,7 +155,7 @@ impl Renderer {
                 binding: crate::registry::RUNTIME_BINDING,
                 resource: uniforms.dynamic_binding(runtime_uniform.size()),
             },
-        ];
+        ]);
         for (index, resource) in bound.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
                 binding: crate::registry::resource_binding(index),
@@ -357,14 +359,14 @@ pub(crate) struct EffectPass<'a> {
 pub(crate) fn encode_params(
     schema: &[ParamSpec],
     supplied: &EffectParams,
-) -> Result<Vec<u8>, RenderError> {
+    bytes: &mut [u8],
+) -> Result<(), RenderError> {
     if supplied
         .names()
         .any(|name| !schema.iter().any(|param| param.name == name))
     {
         return Err(RenderError::InvalidEffectParams);
     }
-    let mut bytes = vec![0; param_uniform_bytes(schema.len())];
     for (spec, slot) in schema
         .iter()
         .zip(bytes.as_chunks_mut::<PARAM_SLOT_BYTES>().0)
@@ -372,7 +374,24 @@ pub(crate) fn encode_params(
         let value = supplied.get(&spec.name).unwrap_or(&spec.default);
         encode_value(spec, value, slot)?;
     }
-    Ok(bytes)
+    Ok(())
+}
+
+pub(crate) fn validate_params(
+    schema: &[ParamSpec],
+    supplied: &EffectParams,
+) -> Result<(), RenderError> {
+    if supplied
+        .names()
+        .any(|name| !schema.iter().any(|param| param.name == name))
+    {
+        return Err(RenderError::InvalidEffectParams);
+    }
+    for spec in schema {
+        let value = supplied.get(&spec.name).unwrap_or(&spec.default);
+        encode_value(spec, value, &mut [0; PARAM_SLOT_BYTES])?;
+    }
+    Ok(())
 }
 
 fn encode_value(
@@ -393,14 +412,14 @@ fn encode_value(
         (ParamType::Vec4, ParamValue::Vec4(values))
             if values.iter().all(|value| valid_scalar(spec, *value)) =>
         {
-            output.copy_from_slice(&f32_bytes(*values));
+            output.copy_from_slice(bytemuck::cast_slice(values));
         }
         (ParamType::Color, ParamValue::Color(values))
             if values
                 .iter()
                 .all(|value| value.is_finite() && (0.0..=1.0).contains(value)) =>
         {
-            output.copy_from_slice(&f32_bytes(*values));
+            output.copy_from_slice(bytemuck::cast_slice(values));
         }
         (ParamType::Enum, ParamValue::Enum(value))
             if usize::try_from(*value).is_ok_and(|index| index < spec.enum_values.len()) =>
@@ -438,7 +457,11 @@ pub(crate) fn validate_runtime(runtime: EffectRuntime) -> Result<(), RenderError
 /// budget as floats, then the tick count as two words, low first (`time_ticks()`), and the render
 /// scale in 16.16 fixed point (`render_scale_fixed()`).
 #[allow(clippy::cast_precision_loss)]
-fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u32) -> Vec<u8> {
+fn runtime_words(
+    size: RenderSize,
+    runtime: EffectRuntime,
+    max_filter_samples: u32,
+) -> [u32; RUNTIME_UNIFORM_WORDS] {
     let ticks = runtime.time.ticks().cast_unsigned();
     // Rounded once from the exact quotient.
     #[allow(clippy::cast_possible_truncation)]
@@ -454,15 +477,20 @@ fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u
         0.0,
     ];
     #[allow(clippy::cast_possible_truncation)]
-    let words: [u32; RUNTIME_UNIFORM_WORDS - 8] = [
+    let ticks = [
         ticks as u32,
         (ticks >> 32) as u32,
         render_scale_fixed(runtime.scale),
         0,
     ];
-    let mut bytes = f32_bytes(values);
-    bytes.extend(words.iter().flat_map(|word| word.to_ne_bytes()));
-    bytes
+    let mut words = [0; RUNTIME_UNIFORM_WORDS];
+    for (word, value) in words
+        .iter_mut()
+        .zip(values.map(f32::to_bits).iter().chain(&ticks))
+    {
+        *word = *value;
+    }
+    words
 }
 
 /// `scale` in 16.16 fixed point, as `render_scale_fixed()` gives it.

@@ -1,6 +1,6 @@
-//! What building one frame's render graph allocates. Effect and parameter names are borrowed,
-//! so only node lists, per-pass parameter lists and frame bookkeeping allocate. Submission is
-//! not counted.
+//! What building and encoding one frame allocates. Effect and parameter names are borrowed, so
+//! building allocates only node lists, per-pass parameter lists and frame bookkeeping; a warm
+//! frame's encode reuses its textures, views, bind groups and uniform arena.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -226,5 +226,39 @@ fn building_a_frame_of_shapes_and_masks_allocates_within_its_budget() {
     assert!(
         counts.iter().all(|&count| count <= VECTOR_FRAME_GRAPH),
         "building a frame's graph allocated {counts:?}, budget {VECTOR_FRAME_GRAPH}"
+    );
+}
+
+const FRAME_ENCODE: u64 = 332;
+
+#[test]
+fn encoding_a_warm_frame_allocates_within_its_budget() {
+    let gpu = pollster::block_on(GpuContext::request_product())
+        .expect("these budgets need a GPU adapter");
+    let mut renderer = Renderer::new(gpu);
+    renderer.register_builtins().expect("built-ins");
+    renderer.set_result_cache_budget(0);
+    let project = project(false);
+    let index = ActiveIndex::build(&project).expect("valid project");
+    let frame = evaluate(&project, &index, MediaTime::from_ticks(60_000)).expect("evaluation");
+    let size = RenderSize::new(64, 36).expect("size");
+    for _ in 0..8 {
+        drop(
+            renderer
+                .render_frame(size, &frame, &NoSources)
+                .expect("renders"),
+        );
+    }
+    let counts = (0..5)
+        .map(|_| {
+            let (render, count) = allocations(|| renderer.render_frame(size, &frame, &NoSources));
+            drop(render.expect("renders"));
+            count
+        })
+        .collect::<Vec<_>>();
+    println!("render_frame generated=1 effects=4: allocations per warm frame {counts:?}");
+    assert!(
+        counts.iter().all(|&count| count <= FRAME_ENCODE),
+        "encoding a warm frame allocated {counts:?}, budget {FRAME_ENCODE}"
     );
 }

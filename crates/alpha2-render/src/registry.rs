@@ -42,6 +42,8 @@ pub const MAX_EFFECT_INPUTS: usize = 8;
 #[allow(clippy::cast_possible_truncation)]
 const INPUT_BINDING_BASE: u32 = FIRST_RESOURCE_BINDING + 2 * MAX_EFFECT_RESOURCES as u32;
 const FIRST_RESOURCE_BINDING: u32 = 4;
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) const MAX_EFFECT_BINDINGS: usize = INPUT_BINDING_BASE as usize + MAX_EFFECT_INPUTS;
 /// `ResourceMetadata_<name>`: `domain_min` and `domain_max`, two `vec4f`.
 const RESOURCE_METADATA_BYTES: usize = 32;
 

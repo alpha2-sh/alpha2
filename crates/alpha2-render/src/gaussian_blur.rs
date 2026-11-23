@@ -430,7 +430,7 @@ pub(crate) fn checked_values<const N: usize>(
     params: &EffectParams,
     names: [&str; N],
 ) -> Result<[ParamValue; N], GraphError> {
-    crate::runtime_effect::encode_params(&definition.params, params)?;
+    crate::runtime_effect::validate_params(&definition.params, params)?;
     let mut values = std::array::from_fn(|_| ParamValue::Float(0.0));
     for (value, name) in values.iter_mut().zip(names) {
         let spec = definition
@@ -450,7 +450,7 @@ pub(crate) fn checked_params<const N: usize>(
     params: &EffectParams,
     names: [&str; N],
 ) -> Result<[f32; N], GraphError> {
-    crate::runtime_effect::encode_params(&definition.params, params)?;
+    crate::runtime_effect::validate_params(&definition.params, params)?;
     let mut values = [0.0; N];
     for (value, name) in values.iter_mut().zip(names) {
         let spec = definition

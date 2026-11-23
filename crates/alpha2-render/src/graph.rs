@@ -611,7 +611,6 @@ impl<'a> RenderGraph<'a> {
         for index in 0..count {
             if self.nodes[index]
                 .dependencies()
-                .iter()
                 .any(|input| bypassed[input.index])
             {
                 bypassed[index] = true;
@@ -695,15 +694,23 @@ impl RenderNode<'_> {
         }
     }
 
-    pub(crate) fn dependencies(&self) -> Vec<RenderNodeId> {
-        match self {
-            Self::Source(_) | Self::Generator { .. } | Self::Vector { .. } => Vec::new(),
-            Self::Effect { source, inputs, .. } => std::iter::once(*source)
-                .chain(inputs.iter().map(|(_, input)| input))
-                .collect(),
-            Self::Transition { from, to, .. } => vec![*from, *to],
-            Self::Composite { layers, .. } => layers.iter().map(|layer| layer.source).collect(),
-        }
+    pub(crate) fn dependencies(&self) -> impl Iterator<Item = RenderNodeId> + '_ {
+        let (leading, inputs, layers): (_, &[(Cow<'_, str>, RenderNodeId)], &[GraphLayer]) =
+            match self {
+                Self::Source(_) | Self::Generator { .. } | Self::Vector { .. } => {
+                    ([None, None], &[], &[])
+                }
+                Self::Effect { source, inputs, .. } => {
+                    ([Some(*source), None], inputs.values.as_slice(), &[])
+                }
+                Self::Transition { from, to, .. } => ([Some(*from), Some(*to)], &[], &[]),
+                Self::Composite { layers, .. } => ([None, None], &[], layers.as_slice()),
+            };
+        leading
+            .into_iter()
+            .flatten()
+            .chain(inputs.iter().map(|(_, input)| *input))
+            .chain(layers.iter().map(|layer| layer.source))
     }
 }
 

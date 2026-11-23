@@ -198,8 +198,15 @@ impl SubmissionPlanner {
     }
 
     pub(crate) fn name_placed(&mut self, effect: Option<&crate::EffectId>) {
-        self.placed_effect =
-            effect.map(|effect| format!("{}@{}", effect.as_str(), effect.version()));
+        let unchanged = match (&self.placed_effect, effect) {
+            (Some(name), Some(effect)) => names(name, effect),
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            self.placed_effect =
+                effect.map(|effect| format!("{}@{}", effect.as_str(), effect.version()));
+        }
         self.name_current_buffer();
     }
 
@@ -406,6 +413,12 @@ pub(crate) fn band_rows(band: u32, bands: u32, height: u32) -> (u32, u32) {
     (top, edge(band + 1).saturating_sub(top))
 }
 
+fn names(name: &str, effect: &crate::EffectId) -> bool {
+    name.strip_prefix(effect.as_str())
+        .and_then(|rest| rest.strip_prefix('@'))
+        .is_some_and(|version| version.parse() == Ok(effect.version()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,6 +461,29 @@ mod tests {
         );
         assert!((planner.cost().unit_pixels() - 24_000.0).abs() < 1e-9);
         assert_eq!(planner.planned_at(), Some((1.0, 2_500.0)));
+    }
+
+    #[test]
+    fn an_effect_placed_again_after_a_cut_names_the_new_buffer_once() {
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(std::sync::Arc::default(), 1.0, 2_500.0);
+        let pass = EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 10,
+        };
+        let blur = crate::EffectId::from_static("blur", 2);
+        let _ = planner.pass(pass, 100, false, None);
+        planner.name_placed(Some(&blur));
+        let _ = planner.pass(pass, 100, false, None);
+        planner.name_placed(Some(&blur));
+        let _ = planner.pass(pass, 10_000, false, None);
+        planner.name_placed(Some(&blur));
+        let buffers = planner.buffer_effects();
+        assert!(buffers.len() > 1, "{buffers:?}");
+        for buffer in buffers {
+            assert_eq!(buffer, ["blur@2"]);
+        }
     }
 
     #[test]

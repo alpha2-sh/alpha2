@@ -290,6 +290,7 @@ dependencies = [
  "alpha2-media",
  "alpha2-shaders",
  "alpha2-time",
+ "arrayvec",
  "bytemuck",
  "half",
  "libm",

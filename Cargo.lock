@@ -659,6 +659,7 @@ dependencies = [
  "alpha2-shaders",
  "alpha2-test-support",
  "alpha2-time",
+ "arrayvec",
  "bytemuck",
  "half",
  "libm",

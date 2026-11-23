@@ -3,7 +3,7 @@ use crate::{
     BlendMode, Color, GraphError, GraphLayer, RenderError, RenderGraph, RenderSize,
     RenderedTexture, Renderer, SourceView,
     pipeline::CachedCompositePipeline,
-    uniform::{BATCH_UNIFORM_FLOATS, UniformArenaLease, f32_bytes, float_uniform_bytes},
+    uniform::{BATCH_UNIFORM_FLOATS, UniformArenaLease, float_uniform_bytes},
 };
 use alpha2_shaders::COMPOSITE_WGSL;
 
@@ -589,17 +589,18 @@ fn prepare_batch(
             (bounds.y + bounds.height) as f32,
         ]);
     }
-    let uniform = uniforms.write(&f32_bytes(values));
+    let uniform = uniforms.write(bytemuck::cast_slice(&values));
     let texture = |slot: usize| {
         let (layer, _, _) = batch.get(slot).unwrap_or(&batch[0]);
         layer.texture
     };
-    let mut entries = (0..COMPOSITE_BATCH_LAYERS)
-        .map(|slot| wgpu::BindGroupEntry {
+    let mut entries = arrayvec::ArrayVec::<_, { COMPOSITE_BATCH_LAYERS + 2 }>::new();
+    entries.extend(
+        (0..COMPOSITE_BATCH_LAYERS).map(|slot| wgpu::BindGroupEntry {
             binding: u32::try_from(slot).expect("few layer slots"),
             resource: wgpu::BindingResource::TextureView(texture(slot)),
-        })
-        .collect::<Vec<_>>();
+        }),
+    );
     entries.push(wgpu::BindGroupEntry {
         binding: BACKDROP_BINDING,
         resource: wgpu::BindingResource::TextureView(backdrop.unwrap_or(context.no_backdrop)),
