@@ -28,9 +28,9 @@ pub struct TexturePoolStats {
     pub available: usize,
     /// Approximate bytes retained by idle textures.
     pub available_bytes: u64,
-    /// Current soft limit for idle texture retention.
+    /// Limit on idle bytes beyond what recent frames had in use.
     pub budget_bytes: u64,
-    /// Textures discarded because retaining them would exceed the budget.
+    /// Textures discarded: over the budget, or untrusted after a GPU error.
     pub evicted: u64,
 }
 
@@ -140,9 +140,59 @@ struct IdleTexture {
     generation: u64,
 }
 
+pub(crate) const RECENT_FRAMES: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Eviction {
+    SecondChance,
+    Immediate,
+}
+
+#[derive(Debug)]
+struct RecentUse {
+    active: usize,
+    peaks_newest_first: [usize; RECENT_FRAMES],
+}
+
+impl RecentUse {
+    const fn new() -> Self {
+        Self {
+            active: 0,
+            peaks_newest_first: [0; RECENT_FRAMES],
+        }
+    }
+
+    fn demand(&self) -> usize {
+        self.peaks_newest_first.iter().copied().max().unwrap_or(0)
+    }
+
+    fn kept_idle(&self) -> usize {
+        self.demand().saturating_sub(self.active)
+    }
+
+    fn advance(&mut self, frames: u64) {
+        let shift =
+            usize::try_from(frames).map_or(RECENT_FRAMES, |frames| frames.min(RECENT_FRAMES));
+        self.peaks_newest_first
+            .copy_within(..RECENT_FRAMES - shift, shift);
+        self.peaks_newest_first[..shift].fill(self.active);
+    }
+
+    fn take(&mut self) {
+        self.active = self.active.saturating_add(1);
+        self.peaks_newest_first[0] = self.peaks_newest_first[0].max(self.active);
+    }
+
+    fn give_back(&mut self) {
+        self.active = self.active.saturating_sub(1);
+    }
+}
+
 #[derive(Debug)]
 struct TexturePoolState {
     available: VecDeque<IdleTexture>,
+    recent_use: HashMap<TextureKey, RecentUse>,
+    recent_use_frame: u64,
     created: u64,
     reused: u64,
     active: usize,
@@ -159,6 +209,8 @@ impl Default for TexturePoolState {
     fn default() -> Self {
         Self {
             available: VecDeque::new(),
+            recent_use: HashMap::new(),
+            recent_use_frame: 0,
             created: 0,
             reused: 0,
             active: 0,
@@ -260,6 +312,7 @@ impl TexturePool {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.advance_recent_use(&mut state);
             let untrusted = self.drop_untrusted(&mut state);
             let index = state
                 .available
@@ -296,6 +349,11 @@ impl TexturePool {
             state.active = state.active.saturating_add(1);
             state.active_bytes = state.active_bytes.saturating_add(key.byte_len());
             state.high_water_bytes = state.high_water_bytes.max(state.active_bytes);
+            state
+                .recent_use
+                .entry(key)
+                .or_insert_with(RecentUse::new)
+                .take();
         }
         TextureLease {
             pool: Shared::clone(self),
@@ -361,18 +419,24 @@ impl TexturePool {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.budget_bytes = budget_bytes;
+        self.advance_recent_use(&mut state);
         let mut evicted = Vec::new();
-        while state.available_bytes > state.budget_bytes {
-            let Some(idle) = state.available.pop_front() else {
-                state.available_bytes = 0;
-                break;
-            };
-            state.available_bytes = state.available_bytes.saturating_sub(idle.key.byte_len());
-            state.evicted = state.evicted.saturating_add(1);
-            evicted.push(idle.retired());
-        }
+        make_room(&mut state, 0, None, Eviction::Immediate, &mut evicted);
         drop(state);
         self.retirement.retire(evicted);
+    }
+
+    fn advance_recent_use(&self, state: &mut TexturePoolState) {
+        let frame = self.retirement.submitted_frames();
+        let frames = frame.saturating_sub(state.recent_use_frame);
+        if frames == 0 {
+            return;
+        }
+        state.recent_use_frame = frame;
+        state.recent_use.retain(|_, used| {
+            used.advance(frames);
+            used.active > 0 || used.demand() > 0
+        });
     }
 }
 
@@ -866,13 +930,15 @@ impl RecycleToken {
 }
 
 impl TexturePool {
-    /// Returns a texture to the idle pool, evicting older idle textures of other descriptors to fit
-    /// the budget.
+    /// Returns a texture to the idle pool.
     ///
-    /// Eviction is second-chance (CLOCK), oldest release first, so stale descriptors leave on the
-    /// next scan while two alternating working sets do not evict each other on every release. If
-    /// nothing can be evicted the incoming texture is dropped. Dropped textures are destroyed via
-    /// [`crate::retire`] after any frame still encoding them is submitted.
+    /// Per descriptor, the pool keeps as many textures as any of the last [`RECENT_FRAMES`]
+    /// submitted frames had in use at once, whatever the budget; the budget bounds only the idle
+    /// textures beyond that. Those are evicted second-chance (CLOCK), oldest release first, so a
+    /// stale descriptor leaves on the next scan while two alternating working sets do not evict
+    /// each other on every release. If nothing can be evicted the incoming texture is dropped.
+    /// Dropped textures are destroyed via [`crate::retire`] after any frame still encoding them
+    /// is submitted.
     fn release(
         &self,
         key: TextureKey,
@@ -899,39 +965,79 @@ impl TexturePool {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.advance_recent_use(&mut state);
         let key = incoming.key;
         let bytes = key.byte_len();
         state.active = state.active.saturating_sub(1);
         state.active_bytes = state.active_bytes.saturating_sub(bytes);
-        // Too big for the budget, or created before a reported GPU error and possibly invalid.
-        if bytes > state.budget_bytes || !self.retirement.trusts(incoming.generation) {
+        if let Some(used) = state.recent_use.get_mut(&key) {
+            used.give_back();
+        }
+        if !self.retirement.trusts(incoming.generation) {
             state.evicted = state.evicted.saturating_add(1);
             retired.push(incoming.retired());
             return;
         }
-        let mut index = 0;
-        while state.available_bytes.saturating_add(bytes) > state.budget_bytes {
-            let Some(idle) = state.available.get_mut(index) else {
-                // Everything left is protected or has this descriptor.
-                state.evicted = state.evicted.saturating_add(1);
-                retired.push(incoming.retired());
-                return;
-            };
-            if idle.key == key {
-                index += 1;
-            } else if idle.second_chance {
-                idle.second_chance = false;
-                index += 1;
-            } else if let Some(evicted) = state.available.remove(index) {
-                state.available_bytes =
-                    state.available_bytes.saturating_sub(evicted.key.byte_len());
-                state.evicted = state.evicted.saturating_add(1);
-                retired.push(evicted.retired());
-            }
+        let needed = idle_count(&state, key) < kept_idle(&state, key);
+        if !needed
+            && (bytes > state.budget_bytes
+                || !make_room(
+                    &mut state,
+                    bytes,
+                    Some(key),
+                    Eviction::SecondChance,
+                    retired,
+                ))
+        {
+            state.evicted = state.evicted.saturating_add(1);
+            retired.push(incoming.retired());
+            return;
         }
         state.available.push_back(incoming);
         state.available_bytes = state.available_bytes.saturating_add(bytes);
+        if needed {
+            make_room(&mut state, 0, None, Eviction::SecondChance, retired);
+        }
     }
+}
+
+fn kept_idle(state: &TexturePoolState, key: TextureKey) -> usize {
+    state.recent_use.get(&key).map_or(0, RecentUse::kept_idle)
+}
+
+fn idle_count(state: &TexturePoolState, key: TextureKey) -> usize {
+    state
+        .available
+        .iter()
+        .filter(|idle| idle.key == key)
+        .count()
+}
+
+fn make_room(
+    state: &mut TexturePoolState,
+    extra: u64,
+    incoming: Option<TextureKey>,
+    eviction: Eviction,
+    retired: &mut Vec<(Retired, u64)>,
+) -> bool {
+    let mut index = 0;
+    while state.available_bytes.saturating_add(extra) > state.budget_bytes {
+        let Some(idle) = state.available.get(index) else {
+            return false;
+        };
+        let key = idle.key;
+        if Some(key) == incoming || idle_count(state, key) <= kept_idle(state, key) {
+            index += 1;
+        } else if eviction == Eviction::SecondChance && state.available[index].second_chance {
+            state.available[index].second_chance = false;
+            index += 1;
+        } else if let Some(evicted) = state.available.remove(index) {
+            state.available_bytes = state.available_bytes.saturating_sub(key.byte_len());
+            state.evicted = state.evicted.saturating_add(1);
+            retired.push(evicted.retired());
+        }
+    }
+    true
 }
 
 impl TextureKey {

@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn texture_pool_evicts_idle_targets_to_its_budget() {
+fn texture_pool_evicts_idle_targets_to_its_budget_once_no_recent_frame_used_them() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let input = rgba_texture(&renderer, [255; 4]);
@@ -19,11 +19,21 @@ fn texture_pool_evicts_idle_targets_to_its_budget() {
             &[layer, layer],
         )
         .expect("layer renders");
-    assert!(renderer.texture_pool_stats().available_bytes > 0);
+    let idle = renderer.texture_pool_stats();
+    assert!(idle.available_bytes > 0);
 
     renderer.set_texture_budget_bytes(0);
+    let recent = renderer.texture_pool_stats();
+    assert_eq!(recent.budget_bytes, 0);
+    assert_eq!(
+        (recent.available, recent.available_bytes),
+        (idle.available, idle.available_bytes),
+        "the last frame's textures stay whatever the budget"
+    );
+
+    empty_frames(&renderer, crate::pool::RECENT_FRAMES);
+    renderer.set_texture_budget_bytes(0);
     let stats = renderer.texture_pool_stats();
-    assert_eq!(stats.budget_bytes, 0);
     assert_eq!(stats.available, 0);
     assert_eq!(stats.available_bytes, 0);
     assert_eq!(stats.evicted, 1);
@@ -155,6 +165,7 @@ fn texture_pool_evicts_the_least_recently_released_descriptor() {
         "current descriptor",
     ));
 
+    empty_frames(&renderer, crate::pool::RECENT_FRAMES);
     renderer.set_texture_budget_bytes(8);
     let after_eviction = renderer.texture_pool_stats();
     assert_eq!(after_eviction.available, 1);
@@ -333,4 +344,123 @@ fn a_gpu_memory_budget_holds_the_idle_pools_to_a_quarter_of_it() {
     assert!(renderer.set_gpu_memory_budget(Some(256 * mib)));
     assert_eq!(renderer.texture_pool_stats().budget_bytes, 64 * mib);
     assert_eq!(renderer.upload_textures.stats().budget_bytes, 64 * mib);
+}
+
+#[test]
+fn a_frame_holding_more_than_the_idle_budget_reuses_its_textures() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 36).expect("size");
+    solid_frame(&renderer, size, 2);
+    renderer.set_texture_budget_bytes(renderer.texture_pool_stats().available_bytes);
+    for _ in 0..3 {
+        solid_frame(&renderer, size, 3);
+    }
+    let settled = renderer.texture_pool_stats();
+    for _ in 0..20 {
+        solid_frame(&renderer, size, 3);
+    }
+    let after = renderer.texture_pool_stats();
+    assert_eq!(
+        after.created - settled.created,
+        0,
+        "textures created by 20 frames after warm-up"
+    );
+}
+
+fn clip_frame(renderer: &Renderer, tint: &crate::EffectId, size: RenderSize, effects: usize) {
+    let pixels = vec![128_u8; usize::try_from(size.width * size.height * 4).expect("small")];
+    let stride = usize::try_from(size.width * 4).expect("small stride");
+    let (source, pending) = renderer
+        .prepare_rgba8_presented(
+            plane(&pixels, stride),
+            size,
+            SourcePresentation::identity(size),
+        )
+        .expect("source presents")
+        .into_parts();
+    let mut graph = RenderGraph::new(size);
+    let mut node = graph.add_source(SourceView::from_wgpu(source.view()));
+    for _ in 0..effects {
+        node = graph
+            .add_effect(
+                tint.clone(),
+                node,
+                EffectParams::new().with("tint", ParamValue::Color([0.5, 1.0, 0.75, 1.0])),
+                EffectRuntime::default(),
+            )
+            .expect("dependency exists");
+    }
+    let output = graph
+        .add_composite(vec![GraphLayer {
+            source: node,
+            visual: visual([1.0, 1.0], 1.0),
+            blend_mode: BlendMode::Normal,
+        }])
+        .expect("dependency exists");
+    graph.set_output(output).expect("output exists");
+    let sources = pending.iter().collect::<Vec<_>>();
+    renderer
+        .render_graph_yuv420p(&graph, &sources, centred(ColorMetadata::default()))
+        .expect("frame submits")
+        .wait()
+        .expect("frame reads back");
+}
+
+fn tint_effect(renderer: &Renderer) -> crate::EffectId {
+    pollster::block_on(renderer.register_effect(runtime_tint_effect(
+        "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
+    )))
+    .expect("tint effect compiles")
+}
+
+fn target_bytes(renderer: &Renderer, size: RenderSize) -> u64 {
+    solid_frame(renderer, size, 1);
+    let bytes = renderer.texture_pool_stats().available_bytes;
+    renderer.clear_texture_pool();
+    bytes
+}
+
+#[test]
+fn a_warm_export_frame_creates_no_texture_when_its_targets_outgrow_the_idle_budget() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let tint = tint_effect(&renderer);
+    let size = RenderSize::new(64, 32).expect("size");
+    renderer.set_texture_budget_bytes(2 * target_bytes(&renderer, size));
+    for _ in 0..3 {
+        clip_frame(&renderer, &tint, size, 3);
+    }
+    let settled = renderer.texture_pool_stats();
+    for _ in 0..8 {
+        clip_frame(&renderer, &tint, size, 3);
+    }
+    let after = renderer.texture_pool_stats();
+    assert_eq!(
+        after.created - settled.created,
+        0,
+        "textures created by 8 frames after warm-up"
+    );
+}
+
+#[test]
+fn a_longer_chain_creates_no_more_textures_when_no_target_fits_the_idle_budget() {
+    let _lock = gpu_test_lock();
+    let created_per_frame = |effects: usize| {
+        let renderer = Renderer::new(gpu());
+        let tint = tint_effect(&renderer);
+        let size = RenderSize::new(64, 32).expect("size");
+        renderer.set_texture_budget_bytes(target_bytes(&renderer, size) - 1);
+        for _ in 0..3 {
+            clip_frame(&renderer, &tint, size, effects);
+        }
+        let settled = renderer.texture_pool_stats();
+        clip_frame(&renderer, &tint, size, effects);
+        renderer.texture_pool_stats().created - settled.created
+    };
+    assert_eq!(
+        created_per_frame(8),
+        created_per_frame(2),
+        "textures a warm frame creates, eight effects against two"
+    );
 }

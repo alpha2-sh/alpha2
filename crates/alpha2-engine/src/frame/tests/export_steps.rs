@@ -226,3 +226,56 @@ fn a_still_renders_the_grid_frame_that_holds_its_time_at_an_odd_size() {
         ExportTextureStep::Complete
     ));
 }
+
+#[test]
+fn an_export_reuses_its_textures_when_a_frame_outgrows_the_texture_budget() {
+    use crate::{ExportStep, Exporter, QualityProfile};
+    use alpha2_media::VideoCodec;
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let mut project = one_clip_snapshot().project().clone();
+    project.settings = alpha2_model::ProjectSettings::new(
+        512,
+        512,
+        alpha2_time::FrameRate::new(30, 1).expect("rate"),
+        48_000,
+    )
+    .expect("settings");
+    let snapshot = crate::EngineProject::new(project).expect("valid project");
+    let size = RenderSize::new(16, 16).expect("size");
+    let texture = rgba_image_texture(&renderer, size, &[200; 16 * 16 * 4]);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let provider = ArrivingFrame {
+        source: SourceId::new("video").expect("valid ID"),
+        texture: &view,
+        arrived: std::cell::Cell::new(true),
+    };
+    let frames = 12;
+    let range = alpha2_time::TimeRange::new(MediaTime::ZERO, MediaTime::from_ticks(4_000 * frames))
+        .expect("twelve frames");
+    let mut exporter = Exporter::new(
+        &snapshot,
+        range,
+        alpha2_time::FrameRate::new(30, 1).expect("rate"),
+        QualityProfile {
+            texture_budget_bytes: QualityProfile::MIN_TEXTURE_BUDGET_BYTES,
+            ..QualityProfile::export()
+        },
+        VideoCodec::H264,
+    )
+    .expect("exporter");
+    let mut created = Vec::new();
+    for _ in 0..frames {
+        let step = exporter
+            .render_next(&snapshot, &renderer, &provider)
+            .expect("a step");
+        assert!(matches!(step, ExportStep::Rendered { .. }), "{step:?}");
+        drop(step);
+        created.push(renderer.texture_pool_stats().created);
+    }
+    assert_eq!(
+        created[11] - created[3],
+        0,
+        "textures created by eight frames after warm-up (in all, per frame: {created:?})"
+    );
+}

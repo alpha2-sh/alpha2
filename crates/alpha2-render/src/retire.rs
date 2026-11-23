@@ -37,6 +37,7 @@ pub(crate) struct Retirement {
     /// Current trust generation; only resources of the current one return to a pool (see
     /// [`Retirement::doubt`]).
     generation: AtomicU64,
+    submitted_frames: AtomicU64,
 }
 
 #[derive(Debug, Default)]
@@ -114,6 +115,10 @@ impl Retirement {
         self.generation.fetch_add(1, Ordering::AcqRel);
     }
 
+    pub(crate) fn submitted_frames(&self) -> u64 {
+        self.submitted_frames.load(Ordering::Acquire)
+    }
+
     /// Bytes retired so far, destroyed or waiting.
     pub(crate) fn retired_bytes(&self) -> u64 {
         self.lock().retired_bytes
@@ -126,6 +131,9 @@ impl Drop for EncodeScope {
             let mut state = self.retirement.lock();
             state.open = state.open.saturating_sub(1);
             if state.open == 0 {
+                self.retirement
+                    .submitted_frames
+                    .fetch_add(1, Ordering::AcqRel);
                 std::mem::take(&mut state.waiting)
             } else {
                 Vec::new()

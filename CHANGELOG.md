@@ -50,7 +50,6 @@ All notable changes to this project are documented in this file.
   for one to be sampled, and one whose samples were not read back in time. Rust:
   `GpuFrameRenderer` gains the required `render_frame_layout_readback`, `Renderer` gains
   `render_graph_layout_readback`, and `FrameGpuTimes` gains `timed_frames` and `unread_frames`.
-
 - **Breaking:** an export's in-flight plan gives up encode channel slots, down to a rendezvous,
   before it gives up a frame in flight: where the in-flight budget holds the requested readbacks
   beside the least the encoder side needs, they are kept (ProRes 4444 at 3840x2160 under the
@@ -84,6 +83,12 @@ All notable changes to this project are documented in this file.
 - Exports whose encoder keeps a frame after taking it (ProRes) no longer allocate, zero and fill a
   new encoder frame with the previous picture for every output frame; the frame pool grows to the
   encoder's delay instead, and `encoderFramesAllocated` counts every frame it allocated.
+- The renderer keeps, per texture size and format, as many idle intermediate textures as the
+  last frames had in use at once, whatever the texture budget; the budget now bounds only idle
+  textures no recent frame used. Exports whose frames outgrow the budget (7680x4320 and larger
+  under the default export quality, or many stacked clips) no longer destroy and recreate textures
+  every frame, and no longer hold a destroyed texture beside its replacement until the frame is
+  submitted.
 
 ## [0.6.1] - 2026-11-18
 

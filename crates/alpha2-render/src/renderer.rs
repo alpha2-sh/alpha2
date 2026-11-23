@@ -980,7 +980,8 @@ impl Renderer {
         self.retirement.retired_bytes().saturating_sub(before)
     }
 
-    /// Sets the soft byte budget for idle intermediate textures, evicting down to it now.
+    /// Sets the byte budget for idle intermediate textures beyond what recent frames had in use,
+    /// evicting down to it now.
     pub fn set_texture_budget_bytes(&self, budget_bytes: u64) {
         self.textures
             .set_budget(budget_bytes.min(self.pool_budget_cap()));
