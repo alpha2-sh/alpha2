@@ -860,6 +860,26 @@ fn an_export_without_gpu_time_says_which_frames_it_lacks() {
 }
 
 #[test]
+fn submissions_predicted_over_the_budget_are_reported_with_a_warning() {
+    let mut stats = alpha2_render::GpuSubmissionStats {
+        frames: 3,
+        max_predicted_ms: Some(180.0),
+        budget_ms: Some(250.0),
+        ..alpha2_render::GpuSubmissionStats::default()
+    };
+    assert_eq!(crate::metrics::over_budget_warning(&stats), None);
+    stats.over_budget = 2;
+    stats.max_predicted_ms = Some(612.5);
+    let warning = crate::metrics::over_budget_warning(&stats).expect("a warning");
+    assert!(
+        warning.contains("2 GPU submissions")
+            && warning.contains("250.0 ms")
+            && warning.contains("612.5 ms"),
+        "{warning}"
+    );
+}
+
+#[test]
 fn a_4k_alpha_prores_export_keeps_two_frames_in_flight_under_the_default_budget() {
     let size = RenderSize::new(3_840, 2_160).expect("4K");
     let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuva444p10le").expect("layout");

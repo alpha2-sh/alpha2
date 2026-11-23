@@ -162,15 +162,29 @@ fn even_split(start: u32, length: u32, part: u32, parts: u32) -> (u32, u32) {
 }
 
 #[derive(Debug)]
-struct Plan {
+pub(crate) struct SubmissionPlan {
     rate: std::sync::Arc<alpha2_gpu::GpuRate>,
     ms_per_unit_pixel: f64,
     budget_ms: f64,
 }
 
+impl SubmissionPlan {
+    pub(crate) fn new(
+        rate: std::sync::Arc<alpha2_gpu::GpuRate>,
+        ms_per_unit_pixel: f64,
+        budget_ms: f64,
+    ) -> Self {
+        Self {
+            rate,
+            ms_per_unit_pixel,
+            budget_ms: budget_ms.max(f64::MIN_POSITIVE),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct SubmissionPlanner {
-    plan: Option<Plan>,
+    plan: Option<SubmissionPlan>,
     /// Predicted milliseconds of the command buffer being recorded.
     current_ms: f64,
     /// Predicted milliseconds of each command buffer finished before it.
@@ -181,23 +195,15 @@ pub(crate) struct SubmissionPlanner {
     /// Time of each remaining band of a banded pass.
     band_ms: f64,
     cost: FrameCost,
+    device_rated_ms: f64,
     /// Set once a graph was encoded.
     frame: bool,
     pilot_rows: Option<u32>,
 }
 
 impl SubmissionPlanner {
-    pub(crate) fn plan(
-        &mut self,
-        rate: std::sync::Arc<alpha2_gpu::GpuRate>,
-        ms_per_unit_pixel: f64,
-        budget_ms: f64,
-    ) {
-        self.plan = Some(Plan {
-            rate,
-            ms_per_unit_pixel,
-            budget_ms: budget_ms.max(f64::MIN_POSITIVE),
-        });
+    pub(crate) fn plan(&mut self, plan: SubmissionPlan) {
+        self.plan = Some(plan);
     }
 
     pub(crate) const fn mark_frame(&mut self) {
@@ -235,6 +241,9 @@ impl SubmissionPlanner {
         let budget = plan.budget_ms;
         let rate = plan.rate.planning_rate(plan.ms_per_unit_pixel, pass);
         let ms = work.unit_pixels() * rate;
+        if rate <= plan.ms_per_unit_pixel {
+            self.device_rated_ms += ms;
+        }
         self.place(ms, budget, bandable.then_some(region))
     }
 
@@ -317,6 +326,10 @@ impl SubmissionPlanner {
         self.cost
     }
 
+    pub(crate) const fn device_rated_ms(&self) -> f64 {
+        self.device_rated_ms
+    }
+
     pub(crate) fn planned_at(&self) -> Option<(f64, f64)> {
         self.plan
             .as_ref()
@@ -368,14 +381,9 @@ impl crate::Renderer {
     /// calibrated by the first such frame and again when frames disagree with it. A browser
     /// cannot wait for calibration, so it assumes [`alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL`]
     /// meanwhile.
-    pub(crate) fn plan_submissions(
-        &self,
-        encoder: &mut crate::renderer::RenderEncoder,
-        cost: FrameCost,
-    ) {
-        encoder.planner().mark_frame();
+    pub(crate) fn plan_submissions(&self, cost: FrameCost) -> Option<SubmissionPlan> {
         if cost.unit_pixels() <= PLANNING_THRESHOLD_UNIT_PIXELS {
-            return;
+            return None;
         }
         let rate = self.gpu.rate();
         if rate.begin_calibration() && self.calibrate().is_err() {
@@ -384,11 +392,11 @@ impl crate::Renderer {
         let ms_per_unit_pixel = rate
             .ms_per_unit_pixel()
             .unwrap_or(alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL);
-        encoder.planner().plan(
+        Some(SubmissionPlan::new(
             std::sync::Arc::clone(rate),
             ms_per_unit_pixel,
             f64::from(alpha2_gpu::submission_budget_ms()),
-        );
+        ))
     }
 
     /// Draws the calibration effect [`CALIBRATION_DRAWS`] times at 512x512, one submission each,
@@ -520,7 +528,7 @@ mod tests {
             Pieces::ONE
         );
         assert_eq!(planner.buffer_ms(), None);
-        planner.plan(std::sync::Arc::default(), 1.0, 2_500.0);
+        planner.plan(SubmissionPlan::new(std::sync::Arc::default(), 1.0, 2_500.0));
         // 1000 ms each: two fit, the third starts a new buffer.
         assert!(
             !planner
@@ -560,7 +568,7 @@ mod tests {
     #[test]
     fn an_effect_placed_again_after_a_cut_names_the_new_buffer_once() {
         let mut planner = SubmissionPlanner::default();
-        planner.plan(std::sync::Arc::default(), 1.0, 2_500.0);
+        planner.plan(SubmissionPlan::new(std::sync::Arc::default(), 1.0, 2_500.0));
         let pass = EffectCost {
             fetches: 0,
             transcendentals: 0,
@@ -583,7 +591,7 @@ mod tests {
     #[test]
     fn effect_names_follow_the_command_buffer_their_pass_is_encoded_into() {
         let mut planner = SubmissionPlanner::default();
-        planner.plan(std::sync::Arc::default(), 1.0, 2_500.0);
+        planner.plan(SubmissionPlan::new(std::sync::Arc::default(), 1.0, 2_500.0));
         let pass = EffectCost {
             fetches: 0,
             transcendentals: 0,
@@ -626,7 +634,7 @@ mod tests {
         let scattered = alpha2_gpu::PassKey::new(1, 100);
         rate.record_pass_rate(scattered, 5.0);
         let mut planner = SubmissionPlanner::default();
-        planner.plan(rate, 1.0, 2_500.0);
+        planner.plan(SubmissionPlan::new(rate, 1.0, 2_500.0));
         let pass = EffectCost {
             fetches: 0,
             transcendentals: 0,
@@ -665,7 +673,7 @@ mod tests {
     #[test]
     fn a_pass_past_the_most_bands_is_cut_into_tiles_no_smaller_than_a_quad() {
         let mut planner = SubmissionPlanner::default();
-        planner.plan(std::sync::Arc::default(), 1.0, 100.0);
+        planner.plan(SubmissionPlan::new(std::sync::Arc::default(), 1.0, 100.0));
         let pass = EffectCost::fixed(0, 0).plus(EffectCost {
             fetches: 0,
             transcendentals: 0,

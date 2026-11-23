@@ -242,6 +242,7 @@ impl SourceWorkTicket<'_> {
         encoder.placed_pass(
             work.work,
             crate::composite::PixelRect::whole(work.output_size),
+            crate::submission_pilot::PassKind::Conversion.key(work.output_size.pixels()),
             |encoder, crate::submission_planner::Piece { scissor, first }| {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some(work.label),
@@ -992,6 +993,22 @@ impl Renderer {
             vec![lease],
         )?;
         Ok((prepared, diagnostics))
+    }
+
+    pub(crate) fn prepare_pilot_conversion(
+        &self,
+        planes: GpuVideoPlanes<'_>,
+        size: RenderSize,
+    ) -> Result<PreparedSourceTexture, RenderError> {
+        self.prepare_gpu_yuv_presented_inner(
+            planes,
+            None,
+            SourcePresentation::identity(size),
+            None,
+            PlaneStorage::Unorm8,
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -27,6 +27,7 @@ pub(crate) enum PreparedNode {
 pub(crate) struct PreparedComposite {
     pub(crate) drawn: Vec<(usize, PixelRect, LayerTier)>,
     pub(crate) batches: Vec<PreparedBatch>,
+    pub(crate) pass: alpha2_gpu::PassKey,
 }
 
 pub(crate) struct PreparedBatch {
@@ -165,6 +166,12 @@ pub(crate) enum FramePack {
     Texels,
 }
 
+pub(crate) fn composite_uniform_capacity(composite: &PreparedComposite, alignment: u64) -> u64 {
+    (0..composite.batches.len()).fold(0, |cursor, _| {
+        aligned_uniform_end(cursor, float_uniform_bytes(BATCH_UNIFORM_FLOATS), alignment)
+    })
+}
+
 pub(crate) fn source_uniform_capacity(sources: &[SourceWorkTicket<'_>], alignment: u64) -> u64 {
     source_uniform_end(0, sources, alignment)
 }
@@ -247,7 +254,11 @@ impl Renderer {
                 }
             })
             .collect();
-        PreparedComposite { drawn, batches }
+        PreparedComposite {
+            drawn,
+            batches,
+            pass: crate::submission_pilot::PassKind::Composite.key(size.pixels()),
+        }
     }
 }
 

@@ -134,6 +134,10 @@ pub struct GpuSubmissionStats {
     pub max_per_frame: u32,
     /// Longest predicted GPU time of one submission, in milliseconds, among planned frames.
     pub max_predicted_ms: Option<f64>,
+    /// Submissions predicted over the submission budget: a pass the planner could not cut finer.
+    pub over_budget: u64,
+    /// The submission budget the frames were planned under, in milliseconds.
+    pub budget_ms: Option<f64>,
 }
 
 /// One pipeline creation for tracing.
@@ -397,12 +401,25 @@ pub(crate) fn take_pipeline_creations(state: &SharedDiagnostics) -> Vec<Pipeline
         .collect()
 }
 
-/// Records how one frame was submitted and its longest predicted submission.
+/// Records how one frame was submitted and its submissions' predicted times.
 pub(crate) fn record_frame_plan(
     state: &SharedDiagnostics,
     frame: &crate::FrameSubmissions,
-    max_predicted_ms: Option<f64>,
+    buffer_ms: &[f64],
+    budget_ms: Option<f64>,
 ) {
+    let max_predicted_ms = buffer_ms
+        .iter()
+        .copied()
+        .fold(None, |most: Option<f64>, ms| {
+            Some(most.map_or(ms, |most| most.max(ms)))
+        });
+    let over_budget = budget_ms.map_or(0, |budget| {
+        buffer_ms
+            .iter()
+            .filter(|ms| **ms > budget * OVER_BUDGET_ROUNDING)
+            .count()
+    });
     let mut state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -415,7 +432,13 @@ pub(crate) fn record_frame_plan(
     if let Some(ms) = max_predicted_ms {
         totals.max_predicted_ms = Some(totals.max_predicted_ms.map_or(ms, |most| most.max(ms)));
     }
+    totals.over_budget = totals
+        .over_budget
+        .saturating_add(u64::try_from(over_budget).unwrap_or(u64::MAX));
+    totals.budget_ms = budget_ms.or(totals.budget_ms);
 }
+
+const OVER_BUDGET_ROUNDING: f64 = 1.0 + 1e-9;
 
 /// Submission counts since the last call, then resets them.
 pub(crate) fn take_gpu_submission_stats(state: &SharedDiagnostics) -> GpuSubmissionStats {

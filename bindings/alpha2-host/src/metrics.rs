@@ -597,13 +597,29 @@ pub fn add_gpu_time_metrics(value: &mut Value, renderer: Option<&alpha2_render::
     value["gpuTimeUnavailable"] = json!(unavailable);
     value["gpuSubmissions"] = renderer.map_or(Value::Null, |renderer| {
         let stats = renderer.take_gpu_submission_stats();
+        if let Some(warning) = over_budget_warning(&stats) {
+            alpha2_os::diagnostic!("{warning}");
+        }
         json!({
             "frames": stats.frames,
             "splitFrames": stats.split_frames,
             "maxPerFrame": stats.max_per_frame,
             "maxPredictedMs": stats.max_predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
+            "overBudget": stats.over_budget,
         })
     });
+}
+
+pub fn over_budget_warning(stats: &alpha2_render::GpuSubmissionStats) -> Option<String> {
+    (stats.over_budget > 0).then(|| {
+        format!(
+            "alpha2-host warning: {} GPU submissions were predicted over the {:.1} ms submission \
+             budget, the longest at {:.1} ms; a pass could not be cut finer",
+            stats.over_budget,
+            stats.budget_ms.unwrap_or_default(),
+            stats.max_predicted_ms.unwrap_or_default()
+        )
+    })
 }
 
 pub fn gpu_time_unavailable(times: &alpha2_render::FrameGpuTimes) -> &'static str {

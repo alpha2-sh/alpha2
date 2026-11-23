@@ -2053,6 +2053,7 @@ impl WebEffectRegistry {
             "splitFrames": stats.split_frames,
             "maxPerFrame": stats.max_per_frame,
             "maxPredictedMs": stats.max_predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
+            "overBudget": stats.over_budget,
         })
         .to_string()
     }

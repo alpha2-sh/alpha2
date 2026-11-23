@@ -153,7 +153,7 @@ impl Renderer {
                 cached,
                 first_program,
                 &first,
-                first_batch,
+                (first_batch, prepared.pass),
                 (output_view, first_pass),
                 None,
             )?;
@@ -179,7 +179,7 @@ impl Renderer {
             cached,
             first_program,
             &first,
-            first_batch,
+            (first_batch, prepared.pass),
             (views[current], first_pass),
             None,
         )?;
@@ -187,15 +187,16 @@ impl Renderer {
             let other = 1 - current;
             let program = self.batch_program(layers);
             if bounded(&batch.bounds) {
-                let prepared = prepare_batch(&preparation, Some(views[other]), layers, uniforms)?;
+                let prepared_batch =
+                    prepare_batch(&preparation, Some(views[other]), layers, uniforms)?;
                 // A pass cannot read the texture it writes, so copy the backdrop region aside
                 // first.
                 self.draw_batch(
                     encoder,
                     cached,
                     program,
-                    &prepared,
-                    batch,
+                    &prepared_batch,
+                    (batch, prepared.pass),
                     (
                         views[current],
                         PassTarget {
@@ -206,13 +207,14 @@ impl Renderer {
                     Some((textures[current], textures[other])),
                 )?;
             } else {
-                let prepared = prepare_batch(&preparation, Some(views[current]), layers, uniforms)?;
+                let prepared_batch =
+                    prepare_batch(&preparation, Some(views[current]), layers, uniforms)?;
                 self.draw_batch(
                     encoder,
                     cached,
                     program,
-                    &prepared,
-                    batch,
+                    &prepared_batch,
+                    (batch, prepared.pass),
                     (views[other], PassTarget::WHOLE),
                     None,
                 )?;
@@ -242,14 +244,14 @@ impl Renderer {
         cached: &CachedCompositePipeline,
         (program, tier, layers): (CompositeProgram, LayerTier, usize),
         bind_group: &OffsetBindGroup<1>,
-        batch: &crate::prepared_frame::PreparedBatch,
+        (batch, key): (&crate::prepared_frame::PreparedBatch, alpha2_gpu::PassKey),
         (target, pass): (&wgpu::TextureView, PassTarget),
         backdrop: Option<(&wgpu::Texture, &wgpu::Texture)>,
     ) -> Result<(), RenderError> {
         let pipeline = self.composite_program_pipeline(cached, program)?;
         #[cfg(not(test))]
         let _ = (tier, layers);
-        let placement = encoder.place_pass(batch.work, batch.region, true, None, None);
+        let placement = encoder.place_pass(batch.work, batch.region, true, Some(key), None);
         if let Some((from, to)) = backdrop {
             copy_region(encoder, from, to, batch.bounds);
         }

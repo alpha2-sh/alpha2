@@ -6,6 +6,10 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Breaking:** `GpuSubmissionStats` gains `over_budget` (submissions still predicted over the
+  submission budget, which the planner cuts passes to avoid) and `budget_ms`; the host's and the
+  browser's `gpuSubmissions` add `overBudget`, and the host prints a warning when it is nonzero.
+  `alpha2_gpu::FrameMeasurement` gains `device_rated_ms`.
 - **Breaking:** every YUV pack in `alpha2-render` (the GPU readbacks, the NV12 pack and the CPU
   renderer's packs) refuses an output color with an HDR transfer or primaries other than BT.709
   or BT.601 with the new `RenderError::UnsupportedOutputColor`, coded `INVALID_INPUT`. The packs
@@ -81,6 +85,13 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Layer composites, vector scenes, source conversions and packs get pass rates of their own, as
+  effect passes did: a planned frame pilots each kind it draws past the planning threshold once per
+  device and frame size, and plans it at what the pilot measured when that is slower than the
+  device. Pilots now draw before the frame's encoder opens, so their scratch textures are no longer
+  held beside the frame's until it is submitted.
+- A frame that runs over its prediction raises the device rate only by what its work planned at
+  the device rate took; work planned at its own measured rate no longer moves the device rate.
 - A pass predicted at more than 64 submission budgets is no longer drawn in 64 bands each over the
   budget: past 64 bands it is cut across as well, into up to 16 tiles a band of at least a 2x2
   quad, so no submission is predicted over the budget below 1024 budgets a pass.

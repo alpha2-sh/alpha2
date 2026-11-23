@@ -7,12 +7,21 @@ use crate::graph::{GraphError, RenderCacheKey, RenderGraph, RenderNode, RenderNo
 use crate::graph_cache::{renderer_cache_key, renderer_node_key};
 use crate::prepared_frame::{FramePack, PreparedNode};
 use crate::runtime_effect::{EffectPass, PendingEffectTiming};
+use crate::submission_pilot::PassKind;
 use crate::uniform::UniformArenaLease;
 use crate::yuv::SourceWorkTicket;
 use crate::{
     CompositeLayer, EffectId, EffectKind, RenderedTexture, Renderer, ShaderDiagnostics,
     WarmupReport,
 };
+
+pub(crate) struct FrameStart {
+    plan: crate::RenderPlan,
+    prepared: crate::prepared_frame::PreparedFrame,
+    uniforms: UniformArenaLease,
+    cached: CachedResults,
+    submission_plan: Option<crate::submission_planner::SubmissionPlan>,
+}
 
 pub(crate) struct EncodedGraph {
     texture: RenderedTexture,
@@ -122,37 +131,33 @@ impl Renderer {
     /// Returns a structural error or the first rendering failure.
     #[allow(clippy::too_many_lines)]
     pub fn execute_graph(&self, graph: &RenderGraph<'_>) -> Result<RenderedTexture, GraphError> {
+        let _frame = self.frame_lock.hold();
+        let start = self.prepare_graph(graph, &[], FramePack::Nothing)?;
         let mut command_encoder = self.command_encoder("alpha2 render graph encoder");
-        let graph_work =
-            self.encode_graph(graph, &mut command_encoder, &[], FramePack::Nothing, None)?;
+        let graph_work = self.encode_graph(start, graph, &mut command_encoder, &[], None)?;
         graph_work.flush_uniforms(self.gpu.queue());
         self.submit([command_encoder.finish()])
             .map_err(GraphError::Render)?;
         Ok(self.complete_graph_work(graph_work, true))
     }
 
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn encode_graph(
+    pub(crate) fn prepare_graph(
         &self,
         graph: &RenderGraph<'_>,
-        encoder: &mut crate::renderer::RenderEncoder,
         sources: &[SourceWorkTicket<'_>],
         pack: FramePack,
-        sample: Option<&FrameSample<'_>>,
-    ) -> Result<EncodedGraph, GraphError> {
+    ) -> Result<FrameStart, GraphError> {
+        self.forget_after_reported_errors();
         self.validate_size(graph.size)?;
         let plan = graph.compile()?;
         if matches!(graph.nodes[plan.output.index], RenderNode::Source(_)) {
             return Err(GraphError::SourceOutput);
         }
-        let format = self.intermediate_format();
         let mut prepared = self.prepare_frame(graph, &plan.order);
-        let mut uniforms = self.uniform_buffers.acquire(
+        let uniforms = self.uniform_buffers.acquire(
             self.gpu.device(),
             prepared.uniform_capacity(sources, &plan.order, pack, self.uniform_alignment()),
         );
-        let mut outputs: Vec<Option<RenderedTexture>> =
-            (0..graph.nodes.len()).map(|_| None).collect();
         let blend_space = graph.blend_space.unwrap_or(self.blend_space).shader_value();
         let cached = self.cached_results(graph, &plan.order, plan.output, blend_space);
         let pixels = u64::from(graph.size.width) * u64::from(graph.size.height);
@@ -162,24 +167,72 @@ impl Renderer {
                 .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
         };
         prepared.prepare_vectors(self, graph, drawn());
-        let mut predicted = pack.work(graph.size);
+        let mut conversions = crate::FrameCost::default();
         for work in sources {
-            predicted.add_cost(work.work());
+            conversions.add_cost(work.work());
         }
+        let mut composites = crate::FrameCost::default();
+        let mut predicted = pack.work(graph.size);
+        predicted.add_cost(conversions);
         for node in drawn() {
-            predicted.add_cost(node_work(
-                &graph.nodes[node.index],
-                prepared.node(*node),
-                pixels,
-            ));
+            let work = node_work(&graph.nodes[node.index], prepared.node(*node), pixels);
+            if prepared.composite(*node).is_some() {
+                composites.add_cost(work);
+            }
+            predicted.add_cost(work);
         }
-        self.plan_submissions(encoder, predicted);
-        if encoder.planner().is_planned() {
+        let submission_plan = self.plan_submissions(predicted);
+        if submission_plan.is_some() {
             self.pilot_passes(
                 drawn().map(|node| (&graph.nodes[node.index], prepared.registration(*node))),
                 graph.size,
             );
+            self.pilot_kinds(
+                graph.size,
+                &[
+                    (PassKind::Conversion, conversions),
+                    (PassKind::Composite, composites),
+                    (PassKind::Pack, pack.work(graph.size)),
+                ],
+            );
+            for node in drawn() {
+                if let Some(Ok(scene)) = prepared.vector(*node) {
+                    let _ = self.pilot_vector(scene, graph.size);
+                }
+            }
         }
+        Ok(FrameStart {
+            plan,
+            prepared,
+            uniforms,
+            cached,
+            submission_plan,
+        })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn encode_graph(
+        &self,
+        start: FrameStart,
+        graph: &RenderGraph<'_>,
+        encoder: &mut crate::renderer::RenderEncoder,
+        sources: &[SourceWorkTicket<'_>],
+        sample: Option<&FrameSample<'_>>,
+    ) -> Result<EncodedGraph, GraphError> {
+        let FrameStart {
+            plan,
+            prepared,
+            mut uniforms,
+            cached,
+            submission_plan,
+        } = start;
+        encoder.planner().mark_frame();
+        if let Some(submission_plan) = submission_plan {
+            encoder.planner().plan(submission_plan);
+        }
+        let format = self.intermediate_format();
+        let mut outputs: Vec<Option<RenderedTexture>> =
+            (0..graph.nodes.len()).map(|_| None).collect();
         for work in sources {
             work.encode(self, encoder, &mut uniforms)?;
         }

@@ -266,6 +266,7 @@ pub(crate) trait PassEncoder {
         &mut self,
         work: crate::FrameCost,
         region: crate::composite::PixelRect,
+        pass: alpha2_gpu::PassKey,
         encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
     );
 
@@ -281,9 +282,10 @@ impl PassEncoder for RenderEncoder {
         &mut self,
         work: crate::FrameCost,
         region: crate::composite::PixelRect,
+        pass: alpha2_gpu::PassKey,
         encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
     ) {
-        let placement = self.place_pass(work, region, true, None, None);
+        let placement = self.place_pass(work, region, true, Some(pass), None);
         self.encode_pieces(placement, region, encode);
     }
 
@@ -301,6 +303,7 @@ impl PassEncoder for wgpu::CommandEncoder {
         &mut self,
         _work: crate::FrameCost,
         _region: crate::composite::PixelRect,
+        _pass: alpha2_gpu::PassKey,
         mut encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
     ) {
         encode(self, crate::submission_planner::Piece::first(None));
@@ -563,6 +566,14 @@ impl Renderer {
         self
     }
 
+    pub(crate) fn forget_after_reported_errors(&self) {
+        if self.gpu_errors.take_unhandled() {
+            // The browser reported an error for earlier work; cached results may be bad.
+            self.clear_result_cache_for(crate::CacheInvalidation::GpuError);
+            self.forget_untrusted_resources();
+        }
+    }
+
     /// Drops pooled resources after the GPU reported an error that may involve them.
     fn forget_untrusted_resources(&self) {
         self.retirement.doubt();
@@ -729,11 +740,7 @@ impl Renderer {
     ///
     /// Open it before acquiring the frame's targets so a failed allocation is the frame's error.
     pub(crate) fn command_encoder(&self, label: &'static str) -> RenderEncoder {
-        if self.gpu_errors.take_unhandled() {
-            // The browser reported an error for earlier work; cached results may be bad.
-            self.clear_result_cache_for(crate::CacheInvalidation::GpuError);
-            self.forget_untrusted_resources();
-        }
+        self.forget_after_reported_errors();
         // Wait for other frames before opening any scope of this one.
         let frame = self.frame_lock.hold();
         // Open first so nothing the encoder uses can be destroyed under it.
@@ -955,13 +962,8 @@ impl Renderer {
         crate::diagnostics::record_frame_plan(
             &self.diagnostics,
             &report,
-            buffer_ms
-                .iter()
-                .flatten()
-                .copied()
-                .fold(None, |most: Option<f64>, ms| {
-                    Some(most.map_or(ms, |most| most.max(ms)))
-                }),
+            buffer_ms.as_deref().unwrap_or_default(),
+            planner.planned_at().map(|(_, budget_ms)| budget_ms),
         );
         *self
             .last_frame_submissions
@@ -970,6 +972,7 @@ impl Renderer {
         if let (Some(predicted_ms), Some((planned_ms_per_unit_pixel, budget_ms))) =
             (report.predicted_ms, planner.planned_at())
         {
+            let device_rated_ms = planner.device_rated_ms();
             let clock = Arc::clone(&self.submission_clock);
             let rate = Arc::clone(self.gpu.rate());
             let last = submitted.sequences.end - 1;
@@ -986,6 +989,7 @@ impl Renderer {
                 rate.observe(alpha2_gpu::FrameMeasurement {
                     measured_ms: started.elapsed().as_secs_f64() * 1_000.0,
                     predicted_ms,
+                    device_rated_ms,
                     planned_ms_per_unit_pixel,
                     budget_ms,
                     trust,

@@ -931,3 +931,80 @@ fn a_pass_past_the_most_bands_is_cut_across_too_and_not_submitted_over_the_budge
     );
     assert!(whole == cut, "the tiles drew other bytes than the one pass");
 }
+
+#[test]
+fn a_planned_frame_pilots_its_composite_vector_conversion_and_pack_work() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(3840, 2160).expect("size");
+    let (texture, pending) = yuv_source(&renderer, size, size).into_parts();
+    let pending = pending.expect("the conversion is pending");
+    let mut graph = RenderGraph::new(size);
+    let input = graph.add_source(SourceView::from_wgpu(texture.view()));
+    let shapes = graph.add_vector(Arc::new(alpha2_geometry::build_scene(
+        &whole_canvas_fills(1),
+        alpha2_geometry::CanvasSize::new(size.width, size.height),
+    )));
+    let output = graph
+        .add_composite(vec![
+            GraphLayer {
+                source: input,
+                visual: visual([1.0, 1.0], 1.0),
+                blend_mode: BlendMode::Normal,
+            },
+            GraphLayer {
+                source: shapes,
+                visual: visual([1.0, 1.0], 0.5),
+                blend_mode: BlendMode::Normal,
+            },
+        ])
+        .expect("sources exist");
+    graph.set_output(output).expect("output exists");
+    renderer
+        .render_graph_yuv420p(&graph, &[&pending], centred(ColorMetadata::default()))
+        .expect("the frame renders")
+        .wait_ready()
+        .expect("the readback maps");
+    for kind in [
+        crate::submission_pilot::PassKind::Composite,
+        crate::submission_pilot::PassKind::Vector,
+        crate::submission_pilot::PassKind::Conversion,
+        crate::submission_pilot::PassKind::Pack,
+    ] {
+        assert!(
+            gpu.rate().pass_rate(kind.key(size.pixels())).is_some(),
+            "{kind:?} work of a planned frame was not piloted"
+        );
+    }
+}
+
+#[test]
+fn a_submission_predicted_over_the_budget_is_counted() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let size = RenderSize::new(512, 288).expect("size");
+    let view = flat_source(&renderer, size);
+    let graph = effect_graph(&view, &effect, size);
+    let (planned, _, _) = frame_planned_at(&gpu, &renderer, &graph, 8.0);
+    let _ = renderer.execute_graph(&graph).expect("the graph renders");
+    let stats = renderer.take_gpu_submission_stats();
+    assert_eq!((stats.frames, stats.over_budget), (1, 0), "{planned:?}");
+    let most_pieces =
+        crate::submission_planner::MAX_BANDS * crate::submission_planner::MAX_TILE_COLUMNS;
+    seeded_at(
+        &gpu,
+        planned.cost.unit_pixels(),
+        4.0 * f64::from(most_pieces),
+    );
+    let _ = renderer.take_gpu_submission_stats();
+    let _ = renderer.execute_graph(&graph).expect("the graph renders");
+    let stats = renderer.take_gpu_submission_stats();
+    assert_eq!(stats.over_budget, u64::from(most_pieces), "{stats:?}");
+    assert_eq!(
+        stats.budget_ms,
+        Some(f64::from(alpha2_gpu::submission_budget_ms()))
+    );
+}

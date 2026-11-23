@@ -822,6 +822,19 @@ impl Renderer {
         }
     }
 
+    pub(crate) fn encode_pilot_pack(
+        &self,
+        target: &RenderedTexture,
+        plane_views: [&wgpu::TextureView; 3],
+        encoder: &mut crate::renderer::RenderEncoder,
+        uniforms: &mut UniformArenaLease,
+    ) -> Result<(), RenderError> {
+        let uniform = uniforms.write(bytemuck::cast_slice(&yuv_uniform(YuvEncoding::export(
+            alpha2_media::VideoCodec::H264,
+        ))))?;
+        self.encode_yuv420_pack(target, plane_views, encoder, uniforms, uniform)
+    }
+
     fn encode_yuv420_pack(
         &self,
         target: &RenderedTexture,
@@ -1816,11 +1829,12 @@ fn encode_pack_passes(
         width: size.width.div_ceil(2),
         height: size.height.div_ceil(2),
     };
+    let pass = crate::submission_pilot::PassKind::Pack.key(size.pixels());
     for ((label, pipeline, targets), work, size) in [
         (luma, pack_luma_work(size), size),
         (chroma, pack_chroma_work(size), chroma_size),
     ] {
-        encoder.placed_pass(work, PixelRect::whole(size), |encoder, piece| {
+        encoder.placed_pass(work, PixelRect::whole(size), pass, |encoder, piece| {
             encode_yuv_render_pass(encoder, label, pipeline, bind_group, targets, piece);
         });
     }

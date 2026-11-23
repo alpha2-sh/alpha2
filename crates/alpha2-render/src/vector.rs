@@ -252,6 +252,7 @@ enum Step {
     Push,
     Pop {
         bounds: IRect,
+        region: PixelRect,
         uniform: [u32; VECTOR_UNIFORM_WORDS],
         work: crate::FrameCost,
     },
@@ -270,6 +271,41 @@ pub(crate) struct PreparedVector {
 }
 
 impl PreparedVector {
+    pub(crate) fn pilot_work(&self, rows: u32) -> f64 {
+        let drawn = |work: crate::FrameCost, region: PixelRect| {
+            if region.height == 0 {
+                0.0
+            } else {
+                work.unit_pixels() * f64::from(rows.min(region.height)) / f64::from(region.height)
+            }
+        };
+        let mut total = if self.linear {
+            drawn(self.encode_work, self.encode_region)
+        } else {
+            0.0
+        };
+        for step in &self.steps {
+            total += match step {
+                Step::Fill(fill) => drawn(fill.work, fill.region),
+                Step::Pop { work, region, .. } => drawn(*work, *region),
+                Step::Push => 0.0,
+            };
+        }
+        total
+    }
+
+    pub(crate) fn uniform_bytes(&self, alignment: u64) -> u64 {
+        let slices = self
+            .steps
+            .iter()
+            .filter(|step| !matches!(step, Step::Push))
+            .count()
+            + 1;
+        (0..slices).fold(0, |cursor, _| {
+            crate::uniform::aligned_uniform_end(cursor, VECTOR_UNIFORM_BYTES, alignment)
+        })
+    }
+
     pub(crate) fn work(&self) -> crate::FrameCost {
         let mut total = if self.linear {
             self.encode_work
@@ -528,13 +564,12 @@ impl Renderer {
                 }
                 VectorOp::PopLayer => {
                     let (bounds, opacity) = open.pop().ok_or(RenderError::InvalidGraph)?;
+                    let region = irect_region(bounds, size);
                     prepared.steps.push(Step::Pop {
                         bounds,
+                        region,
                         uniform: op_uniform_plain(canvas, opacity),
-                        work: crate::FrameCost::of(
-                            VECTOR_LAYER_COST,
-                            irect_region(bounds, size).area(),
-                        ),
+                        work: crate::FrameCost::of(VECTOR_LAYER_COST, region.area()),
                     });
                 }
                 VectorOp::Fill { paint, opacity, .. } => {
@@ -577,6 +612,7 @@ impl Renderer {
         }
         let pipelines = self.vector_pipelines(format)?;
         let cached = self.vector_pipeline()?;
+        let pass = crate::submission_pilot::PassKind::Vector.key(size.pixels());
         let mut offsets = Vec::with_capacity(prepared.steps.len());
         for step in &prepared.steps {
             offsets.push(match step {
@@ -726,7 +762,7 @@ impl Renderer {
                         let clear_first = !*parent_cleared;
                         *parent_cleared = true;
                         let region = irect_region(*bounds, size);
-                        let placement = encoder.place_pass(*work, region, true, None, None);
+                        let placement = encoder.place_pass(*work, region, true, Some(pass), None);
                         encoder.encode_pieces(placement, region, |encoder, piece| {
                             let mut pass = begin(encoder, parent, piece.first && clear_first);
                             passes += 1;
@@ -749,7 +785,10 @@ impl Renderer {
                     let target = layers.last().map_or(base, crate::pool::TextureLease::view);
                     let clear_first = !*cleared.last().expect("a target");
                     *cleared.last_mut().expect("a target") = true;
-                    let placement = encoder.planner().pass(fill.work, fill.region, true, None);
+                    let placement =
+                        encoder
+                            .planner()
+                            .pass(fill.work, fill.region, true, Some(pass));
                     let whole = !placement.cut_before
                         && placement.pieces.count() <= 1
                         && placement.pilot.is_none();
@@ -797,7 +836,8 @@ impl Renderer {
         if let Some(linear_target) = &linear_target {
             let encode_group = group(linear_target.view());
             let region = prepared.encode_region;
-            let placement = encoder.place_pass(prepared.encode_work, region, true, None, None);
+            let placement =
+                encoder.place_pass(prepared.encode_work, region, true, Some(pass), None);
             encoder.encode_pieces(placement, region, |encoder, piece| {
                 let mut pass = begin(encoder, output, piece.first);
                 passes += 1;

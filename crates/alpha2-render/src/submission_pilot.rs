@@ -130,81 +130,12 @@ impl crate::Renderer {
             reason = "a cost in units over a frame, far below 2^52"
         )]
         let unit_pixels_per_row = registered.cost.units() as f64 * f64::from(size.width);
-        let rows = pilot_rows(
-            size.height,
-            unit_pixels_per_row,
-            self.gpu
-                .rate()
-                .ms_per_unit_pixel()
-                .unwrap_or(alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL),
-        );
-        let band_unit_pixels = unit_pixels_per_row * f64::from(rows);
+        let rows = self.pilot_rows(size.height, unit_pixels_per_row);
         let uniform_bytes = crate::prepared_frame::effect_uniform_capacity(
             registered.definition.params.len(),
             self.uniform_alignment(),
         );
-        #[cfg(not(target_arch = "wasm32"))]
-        self.gpu
-            .device()
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(self.gpu_wait_timeout),
-            })
-            .map_err(crate::error::poll_error)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut fastest: Option<f64> = None;
-        #[cfg(target_arch = "wasm32")]
-        let mut drawn: Option<(std::ops::Range<u64>, bool)> = None;
-        for _ in 0..PILOT_DRAWS {
-            let submitted = self.draw_pilot(registered, pass, rows, uniform_bytes)?;
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                submitted
-                    .submission
-                    .wait(&self.gpu, self.gpu_wait_timeout)?;
-                if submitted.queue_idle
-                    && let Some(ms) = self.submission_clock.gpu_ms(submitted.sequences.clone())
-                {
-                    fastest = Some(fastest.map_or(ms, |fastest| fastest.min(ms)));
-                }
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                drawn = Some(drawn.map_or(
-                    (submitted.sequences.clone(), submitted.queue_idle),
-                    |(sequences, idle)| (sequences.start..submitted.sequences.end, idle),
-                ));
-            }
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(ms) = fastest {
-            self.gpu.rate().record_pass_rate(key, ms / band_unit_pixels);
-        }
-        #[cfg(target_arch = "wasm32")]
-        self.gpu.rate().record_pass_rate(key, 0.0);
-        #[cfg(target_arch = "wasm32")]
-        if let Some((sequences, true)) = drawn {
-            let clock = std::sync::Arc::clone(&self.submission_clock);
-            let rate = std::sync::Arc::clone(self.gpu.rate());
-            self.gpu.on_submitted_work_done(move || {
-                if let Some(ms) = clock.gpu_ms(sequences) {
-                    rate.record_pass_rate(key, ms / f64::from(PILOT_DRAWS) / band_unit_pixels);
-                }
-            });
-        }
-        Ok(())
-    }
-
-    fn draw_pilot(
-        &self,
-        registered: &crate::registry::RegisteredEffect,
-        pass: crate::runtime_effect::EffectPass<'_>,
-        rows: u32,
-        uniform_bytes: u64,
-    ) -> Result<crate::renderer::MeasuredSubmit, crate::RenderError> {
         let format = self.intermediate_format();
-        let mut encoder = self.command_encoder("alpha2 pilot encoder");
-        encoder.planner().mark_pilot(rows);
         let scratch = |label| {
             self.textures
                 .acquire(self.gpu.device(), pass.size, format, label)
@@ -227,27 +158,339 @@ impl crate::Renderer {
             .map(|(spec, texture)| (spec.name.as_str(), texture.view()))
             .collect::<Vec<_>>();
         let target = scratch("alpha2 pilot target");
-        let mut uniforms = self
-            .uniform_buffers
-            .acquire(self.gpu.device(), uniform_bytes);
-        self.encode_registered_pass(
-            &mut encoder,
-            registered,
-            crate::runtime_effect::EffectPass {
-                source_a: source_a
-                    .as_ref()
-                    .map_or(&self.empty_input, |texture| texture.view()),
-                source_b: source_b.as_ref().map(crate::pool::TextureLease::view),
-                inputs: &input_views,
-                output: target.view(),
-                ..pass
+        self.measure_pilot(
+            key,
+            unit_pixels_per_row * f64::from(rows),
+            rows,
+            uniform_bytes,
+            &mut |encoder, uniforms| {
+                self.encode_registered_pass(
+                    encoder,
+                    registered,
+                    crate::runtime_effect::EffectPass {
+                        source_a: source_a
+                            .as_ref()
+                            .map_or(&self.empty_input, |texture| texture.view()),
+                        source_b: source_b.as_ref().map(crate::pool::TextureLease::view),
+                        inputs: &input_views,
+                        output: target.view(),
+                        ..pass
+                    },
+                    uniforms,
+                )
+                .map(drop)
             },
-            &mut uniforms,
+        )
+    }
+
+    pub(crate) fn pilot_kinds(
+        &self,
+        size: crate::RenderSize,
+        work: &[(PassKind, crate::FrameCost)],
+    ) {
+        for (kind, work) in work {
+            let key = kind.key(size.pixels());
+            if work.unit_pixels() <= PLANNING_THRESHOLD_UNIT_PIXELS
+                || self.gpu.rate().pass_rate(key).is_some()
+            {
+                continue;
+            }
+            let piloted = match kind {
+                PassKind::Composite => self.pilot_composite(key, size),
+                PassKind::Vector => continue,
+                PassKind::Conversion => self.pilot_conversion(key, size),
+                PassKind::Pack => self.pilot_pack(key, size),
+            };
+            if piloted.is_err() {
+                self.gpu.rate().record_pass_rate(key, 0.0);
+            }
+        }
+    }
+
+    pub(crate) fn pilot_vector(
+        &self,
+        scene: &crate::vector::PreparedVector,
+        size: crate::RenderSize,
+    ) -> Result<(), crate::RenderError> {
+        let key = PassKind::Vector.key(size.pixels());
+        if scene.work().unit_pixels() <= PLANNING_THRESHOLD_UNIT_PIXELS
+            || self.gpu.rate().pass_rate(key).is_some()
+        {
+            return Ok(());
+        }
+        let rows = self.pilot_rows(
+            size.height,
+            scene.work().unit_pixels() / f64::from(size.height),
+        );
+        let target = self.textures.acquire(
+            self.gpu.device(),
+            size,
+            self.intermediate_format(),
+            "alpha2 pilot target",
+        );
+        let measured = self.measure_pilot(
+            key,
+            scene.pilot_work(rows),
+            rows,
+            scene.uniform_bytes(self.uniform_alignment()),
+            &mut |encoder, uniforms| {
+                self.encode_vector(encoder, scene, size, target.view(), uniforms)
+                    .map(drop)
+            },
+        );
+        if measured.is_err() {
+            self.gpu.rate().record_pass_rate(key, 0.0);
+        }
+        measured
+    }
+
+    fn pilot_composite(
+        &self,
+        key: alpha2_gpu::PassKey,
+        size: crate::RenderSize,
+    ) -> Result<(), crate::RenderError> {
+        let format = self.intermediate_format();
+        let source = self
+            .textures
+            .acquire(self.gpu.device(), size, format, "alpha2 pilot source");
+        let target = self
+            .textures
+            .acquire(self.gpu.device(), size, format, "alpha2 pilot target");
+        let visual = crate::LayerTransform {
+            position: [0.5, 0.5],
+            anchor: [0.5, 0.5],
+            scale: [1.0, 1.0],
+            rotation_degrees: 0.0,
+            opacity: 0.5,
+        };
+        let prepared = self.prepare_composite(std::iter::once((visual, size)), size);
+        let layers = [crate::CompositeLayer {
+            texture: source.view(),
+            visual,
+            blend_mode: crate::BlendMode::Normal,
+        }];
+        let rows = self.pilot_rows(
+            size.height,
+            prepared.work().unit_pixels() / f64::from(size.height),
+        );
+        let uniform_bytes =
+            crate::prepared_frame::composite_uniform_capacity(&prepared, self.uniform_alignment());
+        self.measure_pilot(
+            key,
+            prepared.work().unit_pixels() * f64::from(rows) / f64::from(size.height),
+            rows,
+            uniform_bytes,
+            &mut |encoder, uniforms| {
+                self.encode_layers_pass(
+                    encoder,
+                    size,
+                    &layers,
+                    &prepared,
+                    crate::composite::CompositeTarget {
+                        background: None,
+                        blend_space: self.blend_space,
+                        output: target.texture(),
+                        output_view: target.view(),
+                    },
+                    uniforms,
+                )
+                .map(drop)
+            },
+        )
+    }
+
+    fn pilot_conversion(
+        &self,
+        key: alpha2_gpu::PassKey,
+        size: crate::RenderSize,
+    ) -> Result<(), crate::RenderError> {
+        let plane = |size: crate::RenderSize| {
+            self.textures.acquire(
+                self.gpu.device(),
+                size,
+                wgpu::TextureFormat::R8Unorm,
+                "alpha2 pilot plane",
+            )
+        };
+        let chroma_size = crate::RenderSize {
+            width: size.width.div_ceil(2),
+            height: size.height.div_ceil(2),
+        };
+        let (y, u, v) = (plane(size), plane(chroma_size), plane(chroma_size));
+        let prepared = self.prepare_pilot_conversion(
+            crate::GpuVideoPlanes {
+                y: y.view(),
+                chroma: u.view(),
+                v: Some(v.view()),
+                format: alpha2_media::YuvFormat::I420,
+                size,
+                alpha: 1.0,
+                color: Some(alpha2_media::ColorMetadata::default()),
+            },
+            size,
         )?;
-        uniforms.flush(self.gpu.queue());
-        let submitted = self.submit_measured([encoder.finish()], false)?;
-        uniforms.recycle();
-        Ok(submitted)
+        let (_, pending) = prepared.into_parts();
+        let pending = pending.ok_or(crate::RenderError::InvalidImageData)?;
+        let frame = self.frame_lock.hold();
+        let ticket = pending
+            .begin(&frame)
+            .ok_or(crate::RenderError::InvalidImageData)?;
+        let work = ticket.work();
+        let rows = self.pilot_rows(size.height, work.unit_pixels() / f64::from(size.height));
+        let uniform_bytes = crate::prepared_frame::source_uniform_capacity(
+            std::slice::from_ref(&ticket),
+            self.uniform_alignment(),
+        );
+        self.measure_pilot(
+            key,
+            work.unit_pixels() * f64::from(rows) / f64::from(size.height),
+            rows,
+            uniform_bytes,
+            &mut |encoder, uniforms| ticket.encode(self, encoder, uniforms),
+        )
+    }
+
+    fn pilot_pack(
+        &self,
+        key: alpha2_gpu::PassKey,
+        size: crate::RenderSize,
+    ) -> Result<(), crate::RenderError> {
+        let format = self.intermediate_format();
+        let target = crate::RenderedTexture::pooled(
+            size,
+            format,
+            self.textures
+                .acquire(self.gpu.device(), size, format, "alpha2 pilot source"),
+        );
+        let chroma_size = crate::RenderSize {
+            width: size.width.div_ceil(2),
+            height: size.height.div_ceil(2),
+        };
+        let plane = |size| {
+            self.textures.acquire(
+                self.gpu.device(),
+                size,
+                wgpu::TextureFormat::R8Unorm,
+                "alpha2 pilot plane",
+            )
+        };
+        let (y, u, v) = (plane(size), plane(chroma_size), plane(chroma_size));
+        let luma = crate::readback::pack_luma_work(size).unit_pixels();
+        let chroma = crate::readback::pack_chroma_work(size).unit_pixels();
+        let rows = self.pilot_rows(size.height, (luma + chroma) / f64::from(size.height));
+        let drawn = luma * f64::from(rows.min(size.height)) / f64::from(size.height)
+            + chroma * f64::from(rows.min(chroma_size.height)) / f64::from(chroma_size.height);
+        self.measure_pilot(
+            key,
+            drawn,
+            rows,
+            crate::readback::YUV_PACK_UNIFORM_BYTES,
+            &mut |encoder, uniforms| {
+                self.encode_pilot_pack(&target, [y.view(), u.view(), v.view()], encoder, uniforms)
+            },
+        )
+    }
+
+    fn pilot_rows(&self, height: u32, unit_pixels_per_row: f64) -> u32 {
+        pilot_rows(
+            height,
+            unit_pixels_per_row,
+            self.gpu
+                .rate()
+                .ms_per_unit_pixel()
+                .unwrap_or(alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL),
+        )
+    }
+
+    fn measure_pilot(
+        &self,
+        key: alpha2_gpu::PassKey,
+        unit_pixels: f64,
+        rows: u32,
+        uniform_bytes: u64,
+        encode: &mut dyn FnMut(
+            &mut crate::renderer::RenderEncoder,
+            &mut crate::uniform::UniformArenaLease,
+        ) -> Result<(), crate::RenderError>,
+    ) -> Result<(), crate::RenderError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.gpu
+            .device()
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(self.gpu_wait_timeout),
+            })
+            .map_err(crate::error::poll_error)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut fastest: Option<f64> = None;
+        #[cfg(target_arch = "wasm32")]
+        let mut drawn: Option<(std::ops::Range<u64>, bool)> = None;
+        for _ in 0..PILOT_DRAWS {
+            let mut encoder = self.command_encoder("alpha2 pilot encoder");
+            encoder.planner().mark_pilot(rows);
+            let mut uniforms = self
+                .uniform_buffers
+                .acquire(self.gpu.device(), uniform_bytes);
+            encode(&mut encoder, &mut uniforms)?;
+            uniforms.flush(self.gpu.queue());
+            let submitted = self.submit_measured([encoder.finish()], false)?;
+            uniforms.recycle();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                submitted
+                    .submission
+                    .wait(&self.gpu, self.gpu_wait_timeout)?;
+                if submitted.queue_idle
+                    && let Some(ms) = self.submission_clock.gpu_ms(submitted.sequences.clone())
+                {
+                    fastest = Some(fastest.map_or(ms, |fastest| fastest.min(ms)));
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                drawn = Some(drawn.map_or(
+                    (submitted.sequences.clone(), submitted.queue_idle),
+                    |(sequences, idle)| (sequences.start..submitted.sequences.end, idle),
+                ));
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ms) = fastest {
+            self.gpu.rate().record_pass_rate(key, ms / unit_pixels);
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.gpu.rate().record_pass_rate(key, 0.0);
+        #[cfg(target_arch = "wasm32")]
+        if let Some((sequences, true)) = drawn {
+            let clock = std::sync::Arc::clone(&self.submission_clock);
+            let rate = std::sync::Arc::clone(self.gpu.rate());
+            self.gpu.on_submitted_work_done(move || {
+                if let Some(ms) = clock.gpu_ms(sequences) {
+                    rate.record_pass_rate(key, ms / f64::from(PILOT_DRAWS) / unit_pixels);
+                }
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PassKind {
+    Composite,
+    Vector,
+    Conversion,
+    Pack,
+}
+
+impl PassKind {
+    pub(crate) fn key(self, frame_pixels: u64) -> alpha2_gpu::PassKey {
+        let id = match self {
+            Self::Composite => u64::from_le_bytes(*b"composit"),
+            Self::Vector => u64::from_le_bytes(*b"vectorsc"),
+            Self::Conversion => u64::from_le_bytes(*b"convsrce"),
+            Self::Pack => u64::from_le_bytes(*b"yuvpack_"),
+        };
+        alpha2_gpu::PassKey::new(id, frame_pixels)
     }
 }
 

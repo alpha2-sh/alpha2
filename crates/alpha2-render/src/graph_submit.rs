@@ -90,16 +90,13 @@ impl Renderer {
     ) -> Result<RenderedTexture, RenderError> {
         // Held past the tickets, which revert to pending if the frame fails.
         let frame = self.frame_lock.hold();
-        let mut command_encoder = self.command_encoder("alpha2 frame encoder");
         let source_work = begin_source_work(&frame, sources);
+        let start = self
+            .prepare_graph(graph, &source_work, FramePack::Nothing)
+            .map_err(GraphError::into_render_error)?;
+        let mut command_encoder = self.command_encoder("alpha2 frame encoder");
         let graph_work = self
-            .encode_graph(
-                graph,
-                &mut command_encoder,
-                &source_work,
-                FramePack::Nothing,
-                None,
-            )
+            .encode_graph(start, graph, &mut command_encoder, &source_work, None)
             .map_err(GraphError::into_render_error)?;
         stage_source_submissions(&source_work)?;
         graph_work.flush_uniforms(self.gpu.queue());
@@ -200,18 +197,21 @@ impl Renderer {
         let mut clock = StageClock::start(true);
         let mut collected = FrameSubmitTimings::default();
         let frame = self.frame_lock.hold();
-        let mut command_encoder = self.command_encoder("alpha2 render and NV12 pack encoder");
         self.check_submitted_work()?;
         let source_work = begin_source_work(&frame, sources);
+        let start = self
+            .prepare_graph(graph, &source_work, FramePack::Nv12)
+            .map_err(GraphError::into_render_error)?;
+        let mut command_encoder = self.command_encoder("alpha2 render and NV12 pack encoder");
         let sample = self
             .frame_gpu_timer()
             .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
         let mut graph_work = self
             .encode_graph(
+                start,
                 graph,
                 &mut command_encoder,
                 &source_work,
-                FramePack::Nv12,
                 sample.as_ref(),
             )
             .map_err(GraphError::into_render_error)?;
@@ -264,11 +264,21 @@ impl Renderer {
         let mut clock = StageClock::start(measure);
         let mut collected = FrameSubmitTimings::default();
         let frame = self.frame_lock.hold();
+        let source_work = begin_source_work(&frame, sources);
+        let start = self
+            .prepare_graph(
+                graph,
+                &source_work,
+                match readback {
+                    ReadbackKind::PackedYuv420p => FramePack::Yuv420p,
+                    ReadbackKind::Texels(_) => FramePack::Texels,
+                },
+            )
+            .map_err(GraphError::into_render_error)?;
         let mut command_encoder = self.command_encoder(match readback {
             ReadbackKind::PackedYuv420p => "alpha2 render and YUV420P readback encoder",
             ReadbackKind::Texels(_) => "alpha2 render and texel readback encoder",
         });
-        let source_work = begin_source_work(&frame, sources);
         // Only an export's timed frames are sampled.
         let sample = measure
             .then(|| self.frame_gpu_timer())
@@ -276,13 +286,10 @@ impl Renderer {
             .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
         let mut graph_work = self
             .encode_graph(
+                start,
                 graph,
                 &mut command_encoder,
                 &source_work,
-                match readback {
-                    ReadbackKind::PackedYuv420p => FramePack::Yuv420p,
-                    ReadbackKind::Texels(_) => FramePack::Texels,
-                },
                 sample.as_ref(),
             )
             .map_err(GraphError::into_render_error)?;

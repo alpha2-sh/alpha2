@@ -476,15 +476,12 @@ fn a_result_encoded_before_a_clear_is_not_kept_after_it() {
     let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let built = graph(&view, true, &tint, 0.5, 1.0);
+    let start = renderer
+        .prepare_graph(&built.graph, &[], crate::prepared_frame::FramePack::Nothing)
+        .expect("prepares");
     let mut encoder = renderer.command_encoder("alpha2 test encoder");
     let work = renderer
-        .encode_graph(
-            &built.graph,
-            &mut encoder,
-            &[],
-            crate::prepared_frame::FramePack::Nothing,
-            None,
-        )
+        .encode_graph(start, &built.graph, &mut encoder, &[], None)
         .expect("encodes");
     work.flush_uniforms(renderer.gpu.queue());
     // What a resource registration or a quality change on another thread does meanwhile.
