@@ -500,7 +500,7 @@ fn frame_planned_at(
 }
 
 fn seeded_at(gpu: &GpuContext, unit_pixels: f64, budgets: f64) {
-    let budget = f64::from(alpha2_gpu::submission_budget_ms());
+    let budget = alpha2_gpu::submission_budget_ms();
     gpu.rate()
         .seed(budgets * budget / unit_pixels / alpha2_gpu::MARGIN);
 }
@@ -508,7 +508,7 @@ fn seeded_at(gpu: &GpuContext, unit_pixels: f64, budgets: f64) {
 const OVER_ROUNDING: f64 = 1.0 + 1e-9;
 
 fn assert_within_the_budget(longest: f64, planned: crate::FrameSubmissions, what: &str) {
-    let budget = f64::from(alpha2_gpu::submission_budget_ms());
+    let budget = alpha2_gpu::submission_budget_ms();
     assert!(
         longest <= budget * OVER_ROUNDING,
         "{what} went in {} submission(s), the longest predicted at {longest:.0} ms against a \
@@ -1003,10 +1003,7 @@ fn a_submission_predicted_over_the_budget_is_counted() {
     let _ = renderer.execute_graph(&graph).expect("the graph renders");
     let stats = renderer.take_gpu_submission_stats();
     assert_eq!(stats.over_budget, u64::from(most_pieces), "{stats:?}");
-    assert_eq!(
-        stats.budget_ms,
-        Some(f64::from(alpha2_gpu::submission_budget_ms()))
-    );
+    assert_eq!(stats.budget_ms, Some(alpha2_gpu::submission_budget_ms()));
 }
 
 #[test]

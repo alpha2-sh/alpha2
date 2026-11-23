@@ -392,7 +392,7 @@ impl crate::Renderer {
         Some(SubmissionPlan::new(
             std::sync::Arc::clone(rate),
             ms_per_unit_pixel,
-            f64::from(alpha2_gpu::submission_budget_ms()),
+            alpha2_gpu::submission_budget_ms(),
         ))
     }
 
