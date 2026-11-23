@@ -107,10 +107,12 @@ impl Default for ColorMetadata {
     }
 }
 
-/// How rendered RGB is packed into 8-bit 4:2:0 YUV: color coding and chroma siting.
+/// How rendered RGB is packed into YUV: color coding and chroma siting.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct YuvEncoding {
-    /// Matrix, range, and the tags the output carries.
+    /// The output's color. Packs follow its matrix and range and write the working space's
+    /// primaries and SDR curve, so they refuse an HDR transfer or primaries other than BT.709
+    /// or BT.601.
     pub color: ColorMetadata,
     /// Chroma sample siting, which the pack filters for.
     pub chroma: crate::ChromaLocation,

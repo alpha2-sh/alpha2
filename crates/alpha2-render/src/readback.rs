@@ -401,7 +401,7 @@ impl Renderer {
     ///
     /// # Errors
     /// [`RenderError::TextureReadback`] for unsupported formats, odd dimensions or unrepresentable
-    /// layouts.
+    /// layouts, and [`RenderError::UnsupportedOutputColor`] for a color the pack cannot write.
     pub fn begin_yuv420p_readback(
         &self,
         target: &RenderedTexture,
@@ -429,7 +429,8 @@ impl Renderer {
     ///
     /// # Errors
     /// [`RenderError::TextureReadback`] for an unsupported format, a 10-bit layout over an 8-bit
-    /// target, or an unrepresentable row layout.
+    /// target, or an unrepresentable row layout, and [`RenderError::UnsupportedOutputColor`] for a
+    /// color the pack cannot write.
     pub fn begin_layout_readback(
         &self,
         target: &RenderedTexture,
@@ -438,6 +439,7 @@ impl Renderer {
     ) -> Result<Yuv420pReadback, RenderError> {
         self.ensure_gpu_runs_work()?;
         self.validate_size(target.size)?;
+        crate::color::check_packable(encoding)?;
         let texel_bytes = match target.format {
             wgpu::TextureFormat::Rgba16Float => 8,
             wgpu::TextureFormat::Rgba8Unorm
@@ -529,6 +531,7 @@ impl Renderer {
     ) -> Result<EncodedYuv420pReadback, RenderError> {
         self.ensure_gpu_runs_work()?;
         self.validate_size(target.size)?;
+        crate::color::check_packable(encoding)?;
         if !matches!(
             target.format,
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Float
@@ -675,7 +678,8 @@ impl Renderer {
     ///
     /// # Errors
     /// [`RenderError::TextureReadback`] for an unaccepted target format or size,
-    /// [`RenderError::InvalidPlaneTarget`] for mismatched plane textures, and
+    /// [`RenderError::InvalidPlaneTarget`] for mismatched plane textures,
+    /// [`RenderError::UnsupportedOutputColor`] for a color the pack cannot write, and
     /// [`RenderError::GpuWorkDropped`] once the device was found dropping work.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub fn encode_nv12_pack(
@@ -689,6 +693,7 @@ impl Renderer {
         self.ensure_gpu_runs_work()?;
         let encode = self.open_encode();
         self.validate_size(target.size)?;
+        crate::color::check_packable(encoding)?;
         if !matches!(
             target.format,
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Float

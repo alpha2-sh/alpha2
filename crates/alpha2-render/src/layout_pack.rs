@@ -205,6 +205,7 @@ pub(crate) fn pack_with(
     targets: &mut [PlaneTarget<'_>],
     bands: &dyn Bands,
 ) -> Result<(), RenderError> {
+    crate::color::check_packable(encoding)?;
     let refuse = |failure| Err(RenderError::TextureReadback(failure));
     let (width, height) = (picture.width, picture.height);
     let (step_x, step_y) = layout.chroma.subsampling();

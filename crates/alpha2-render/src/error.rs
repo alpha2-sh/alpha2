@@ -69,6 +69,9 @@ pub enum RenderError {
     UnsupportedHdr,
     /// A source belongs to the other backend (CPU source on GPU renderer or vice versa).
     InvalidSource,
+    /// A pack was asked for an output color it cannot write: an HDR transfer, or primaries
+    /// other than BT.709 or BT.601. Packs follow the color's matrix and range only.
+    UnsupportedOutputColor(alpha2_media::ColorMetadata),
 }
 
 impl fmt::Display for RenderError {
@@ -149,6 +152,12 @@ impl fmt::Display for RenderError {
             Self::InvalidSource => {
                 formatter.write_str("the source belongs to another renderer backend")
             }
+            Self::UnsupportedOutputColor(color) => write!(
+                formatter,
+                "the output color ({:?} primaries, {:?} transfer) cannot be packed: packs write \
+                 BT.709 or BT.601 primaries with an SDR transfer",
+                color.primaries, color.transfer
+            ),
         }
     }
 }

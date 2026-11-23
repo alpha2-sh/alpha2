@@ -133,6 +133,7 @@ pub(crate) fn pack_yuv420p(
     encoding: YuvEncoding,
     targets: &mut Yuv420pTargets<'_>,
 ) -> Result<(), RenderError> {
+    crate::color::check_packable(encoding)?;
     let size = picture.size();
     if !size.width.is_multiple_of(2) || !size.height.is_multiple_of(2) {
         return Err(RenderError::TextureReadback(
@@ -224,7 +225,8 @@ impl super::CpuRenderer {
     ///
     /// # Errors
     /// [`RenderError::TextureReadback`] for a size the chroma cannot subsample, a wrong target
-    /// count, or a target too small.
+    /// count, or a target too small, and [`RenderError::UnsupportedOutputColor`] for a color the
+    /// pack cannot write.
     pub fn pack_image(
         &self,
         picture: &CpuImage,

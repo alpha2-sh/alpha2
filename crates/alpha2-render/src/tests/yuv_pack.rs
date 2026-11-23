@@ -303,7 +303,7 @@ fn an_nv12_pack_keeps_its_uniforms_until_the_caller_submits() {
 }
 
 #[test]
-fn nv12_plane_targets_that_cannot_be_packed_into_are_refused_before_recording() {
+fn nv12_plane_targets_or_colours_the_pack_cannot_write_are_refused_before_recording() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let size = RenderSize::new(8, 4).expect("even size");
@@ -376,6 +376,28 @@ fn nv12_plane_targets_that_cannot_be_packed_into_are_refused_before_recording() 
         drop(encoder);
         assert!(pollster::block_on(scope.pop()).is_none(), "{label}");
     }
+    let wide = ColorMetadata {
+        primaries: ColorPrimaries::Bt2020,
+        ..ColorMetadata::EXPORT
+    };
+    let mut encoder = renderer
+        .gpu
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let packed = renderer.encode_nv12_pack(
+        &target,
+        crate::Nv12PlaneTargets {
+            luma: &luma,
+            chroma: &chroma,
+        },
+        centred(wide),
+        &mut encoder,
+    );
+    assert!(
+        matches!(packed, Err(RenderError::UnsupportedOutputColor(color)) if color == wide),
+        "{:?}",
+        packed.err()
+    );
 }
 
 #[test]
@@ -698,5 +720,221 @@ fn every_yuv_readback_consumer_refuses_a_buffer_the_gpu_did_not_write() {
             "{name}: later readbacks are refused"
         );
         assert!(pollster::block_on(scope.pop()).is_none(), "{name}");
+    }
+}
+
+const TAGGED_PATCH: [u8; 3] = [200, 60, 60];
+
+fn read_back_as(color: ColorMetadata, codes: [u16; 3], depth: u8) -> [u8; 3] {
+    let maximum = f32::from((1_u16 << depth) - 1);
+    let (linear, _) = crate::convert_yuv_to_linear_rgba(
+        crate::YuvSample {
+            y: f32::from(codes[0]) / maximum,
+            u: f32::from(codes[1]) / maximum,
+            v: f32::from(codes[2]) / maximum,
+            alpha: 1.0,
+        },
+        depth,
+        Some(color),
+        ColorPolicy::ToneMapHdr(crate::hdr::HdrToneMap::default()),
+    )
+    .expect("a tone-mapping import takes every tag");
+    crate::encode_linear_rgb(
+        [linear[0], linear[1], linear[2]],
+        crate::SdrOutputTransfer::Srgb,
+    )
+    .map(quantize_unorm8)
+}
+
+fn returns_the_patch(back: [u8; 3]) -> bool {
+    back.iter()
+        .zip(TAGGED_PATCH)
+        .all(|(got, want)| got.abs_diff(want) <= 2)
+}
+
+fn tags_the_pack_follows() -> Vec<ColorMetadata> {
+    let mut tags = Vec::new();
+    for primaries in [ColorPrimaries::Bt709, ColorPrimaries::Bt601] {
+        for transfer in [TransferFunction::Bt709, TransferFunction::Srgb] {
+            for matrix in [
+                ColorMatrix::Bt601,
+                ColorMatrix::Bt709,
+                ColorMatrix::Bt2020Ncl,
+            ] {
+                for range in [ColorRange::Limited, ColorRange::Full] {
+                    tags.push(ColorMetadata {
+                        primaries,
+                        transfer,
+                        matrix,
+                        range,
+                        dynamic_range: DynamicRange::Sdr,
+                    });
+                }
+            }
+        }
+    }
+    tags
+}
+
+fn tags_past_matrix_and_range() -> [(&'static str, ColorMetadata); 3] {
+    let wide = |transfer, dynamic_range| ColorMetadata {
+        primaries: ColorPrimaries::Bt2020,
+        transfer,
+        matrix: ColorMatrix::Bt2020Ncl,
+        range: ColorRange::Limited,
+        dynamic_range,
+    };
+    [
+        (
+            "BT.2020 SDR",
+            wide(TransferFunction::Bt709, DynamicRange::Sdr),
+        ),
+        ("BT.2020 PQ", wide(TransferFunction::Pq, DynamicRange::Hdr)),
+        (
+            "BT.2020 HLG",
+            wide(TransferFunction::Hlg, DynamicRange::Hdr),
+        ),
+    ]
+}
+
+fn first_codes(
+    layout: alpha2_media::PixelLayout,
+    fill: impl FnOnce(&mut [PlaneTarget<'_>]) -> Result<(), RenderError>,
+) -> Option<[u16; 3]> {
+    let shapes = layout.planes(8, 4);
+    let mut planes = shapes
+        .iter()
+        .map(|&(width, rows, sample)| vec![0_u8; (width * sample * rows) as usize])
+        .collect::<Vec<_>>();
+    let mut targets = planes
+        .iter_mut()
+        .zip(&shapes)
+        .map(|(plane, &(width, _, sample))| PlaneTarget::new(plane, (width * sample) as usize))
+        .collect::<Vec<_>>();
+    fill(&mut targets).ok()?;
+    drop(targets);
+    let wide = shapes[0].2 == 2;
+    Some([0, 1, 2].map(|plane| {
+        if wide {
+            u16::from_le_bytes([planes[plane][0], planes[plane][1]])
+        } else {
+            u16::from(planes[plane][0])
+        }
+    }))
+}
+
+const TEN_BIT_444: alpha2_media::PixelLayout = alpha2_media::PixelLayout {
+    chroma: alpha2_media::Chroma::Yuv444,
+    bit_depth: alpha2_media::BitDepth::Ten,
+    alpha: false,
+    planes: alpha2_media::PlaneLayout::Planar,
+};
+
+#[test]
+fn gpu_planes_read_back_as_the_picture_under_the_tag_they_were_packed_for() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(8, 4).expect("even size");
+    let [red, green, blue] = TAGGED_PATCH.map(|code| f64::from(code) / 255.0);
+    let target = renderer
+        .render_solid(size, Color::rgba(red, green, blue, 1.0))
+        .expect("solid target");
+    let eight_bit = |color: ColorMetadata| {
+        let planes = renderer
+            .begin_yuv420p_readback(&target, centred(color))
+            .ok()?
+            .wait()
+            .expect("an accepted readback maps");
+        Some(read_back_as(
+            color,
+            [planes.y[0], planes.u[0], planes.v[0]].map(u16::from),
+            8,
+        ))
+    };
+    let ten_bit = |color: ColorMetadata| {
+        let readback = renderer
+            .begin_layout_readback(&target, centred(color), TEN_BIT_444)
+            .ok()?;
+        readback.wait_ready().expect("an accepted readback maps");
+        let codes = first_codes(TEN_BIT_444, |targets| readback.finish_into_planes(targets))?;
+        Some(read_back_as(color, codes, 10))
+    };
+    for color in tags_the_pack_follows() {
+        let back = eight_bit(color).expect("an SDR tag over BT.709 primaries packs");
+        assert!(returns_the_patch(back), "{color:?}: {back:?}");
+    }
+    for (name, color) in tags_past_matrix_and_range() {
+        for (path, back) in [
+            ("8-bit 4:2:0", eight_bit(color)),
+            ("texels", ten_bit(color)),
+        ] {
+            if let Some(back) = back {
+                assert!(
+                    returns_the_patch(back),
+                    "{name}, {path}: {TAGGED_PATCH:?} was packed and tagged {color:?}, which \
+                     reads back as {back:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cpu_planes_read_back_as_the_picture_under_the_tag_they_were_packed_for() {
+    let renderer = crate::CpuRenderer::new(2);
+    let size = RenderSize::new(8, 4).expect("even size");
+    let pixels = [TAGGED_PATCH[0], TAGGED_PATCH[1], TAGGED_PATCH[2], 255].repeat(32);
+    let picture = std::sync::Arc::new(
+        crate::CpuImage::from_premultiplied_rgba8(size, &pixels).expect("picture"),
+    );
+    let source = crate::CpuSource::image(picture.clone());
+    let eight_bit = |color: ColorMetadata| {
+        let mut graph = RenderGraph::new(size);
+        let node = graph.add_source(SourceView::cpu(&source));
+        let node = graph
+            .add_composite(vec![GraphLayer {
+                source: node,
+                visual: visual([1.0, 1.0], 1.0),
+                blend_mode: BlendMode::Normal,
+            }])
+            .expect("composite");
+        graph.set_output(node).expect("output");
+        let (mut y, mut u, mut v) = (vec![0_u8; 32], vec![0_u8; 8], vec![0_u8; 8]);
+        renderer
+            .render_graph_into_yuv420p(
+                &graph,
+                centred(color),
+                &mut Yuv420pTargets {
+                    y: PlaneTarget::new(&mut y, 8),
+                    u: PlaneTarget::new(&mut u, 4),
+                    v: PlaneTarget::new(&mut v, 4),
+                },
+            )
+            .ok()?;
+        Some(read_back_as(color, [y[0], u[0], v[0]].map(u16::from), 8))
+    };
+    let ten_bit = |color: ColorMetadata| {
+        let codes = first_codes(TEN_BIT_444, |targets| {
+            renderer.pack_image(&picture, centred(color), TEN_BIT_444, targets)
+        })?;
+        Some(read_back_as(color, codes, 10))
+    };
+    for color in tags_the_pack_follows() {
+        let back = eight_bit(color).expect("an SDR tag over BT.709 primaries packs");
+        assert!(returns_the_patch(back), "{color:?}: {back:?}");
+    }
+    for (name, color) in tags_past_matrix_and_range() {
+        for (path, back) in [
+            ("8-bit 4:2:0", eight_bit(color)),
+            ("texels", ten_bit(color)),
+        ] {
+            if let Some(back) = back {
+                assert!(
+                    returns_the_patch(back),
+                    "{name}, {path}: {TAGGED_PATCH:?} was packed and tagged {color:?}, which \
+                     reads back as {back:?}"
+                );
+            }
+        }
     }
 }

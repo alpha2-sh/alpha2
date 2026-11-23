@@ -201,8 +201,8 @@ impl CpuRenderer {
     /// CPU counterpart of [`crate::Renderer::render_graph_yuv420p`].
     ///
     /// # Errors
-    /// [`Self::execute_graph`]'s errors, and [`RenderError::TextureReadback`] for an odd size or a
-    /// target too small.
+    /// [`Self::execute_graph`]'s errors, [`RenderError::TextureReadback`] for an odd size or a
+    /// target too small, and [`RenderError::UnsupportedOutputColor`] for an unpackable color.
     pub fn render_graph_into_yuv420p(
         &self,
         graph: &RenderGraph<'_>,

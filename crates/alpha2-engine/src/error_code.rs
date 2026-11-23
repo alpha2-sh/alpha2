@@ -240,7 +240,8 @@ fn render_code(error: RenderError) -> ErrorCode {
         | RenderError::InvalidVisual
         | RenderError::InvalidImageData
         | RenderError::InvalidGraph
-        | RenderError::UnsupportedHdr => ErrorCode::InvalidInput,
+        | RenderError::UnsupportedHdr
+        | RenderError::UnsupportedOutputColor(_) => ErrorCode::InvalidInput,
         RenderError::InvalidEffectParameter
         | RenderError::UnknownEffect
         | RenderError::InvalidEffectParams
@@ -310,6 +311,14 @@ mod tests {
         );
         assert_eq!(
             ErrorCode::of(&RenderError::UnsupportedHdr),
+            Some(ErrorCode::InvalidInput)
+        );
+        let wide = alpha2_media::ColorMetadata {
+            primaries: alpha2_media::ColorPrimaries::Bt2020,
+            ..alpha2_media::ColorMetadata::EXPORT
+        };
+        assert_eq!(
+            ErrorCode::of(&RenderError::UnsupportedOutputColor(wide)),
             Some(ErrorCode::InvalidInput)
         );
         let model = alpha2_model::ModelError::UnsupportedSchemaVersion { found: 0 };

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** every YUV pack in `alpha2-render` (the GPU readbacks, the NV12 pack and the CPU
+  renderer's packs) refuses an output color with an HDR transfer or primaries other than BT.709
+  or BT.601 with the new `RenderError::UnsupportedOutputColor`, coded `INVALID_INPUT`. The packs
+  follow only the color's matrix and range, so such a tag would have described other pixels than
+  the planes hold. No binding requested such a color.
+
 ### Removed
 
 - **Breaking:** the motion blur subframe count, which no pass read. Removed from Rust:

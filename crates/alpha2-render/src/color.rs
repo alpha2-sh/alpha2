@@ -1,6 +1,7 @@
-use alpha2_media::{ColorMetadata, ColorPrimaries, TransferFunction};
+use alpha2_media::{ColorMetadata, ColorPrimaries, TransferFunction, YuvEncoding};
 
-use crate::hdr::{HdrToneMap, gamut_matrix, hdr_to_working};
+use crate::RenderError;
+use crate::hdr::{HdrToneMap, gamut_matrix, hdr_to_working, is_working_gamut};
 
 /// A normalized YUV sample and straight alpha value.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -143,17 +144,17 @@ pub fn convert_yuv_to_linear_rgba(
         }
         _ => {
             let decoded = encoded.map(decode_sdr);
-            if color.primaries == ColorPrimaries::Bt2020 {
+            if is_working_gamut(color.primaries) {
+                decoded
+            } else {
                 // Wide-gamut SDR: convert to BT.709 primaries, clipping out-of-gamut values.
-                gamut_matrix(ColorPrimaries::Bt2020, ColorPrimaries::Bt709).map(|row| {
+                gamut_matrix(color.primaries, ColorPrimaries::Bt709).map(|row| {
                     row.iter()
                         .zip(decoded)
                         .map(|(weight, value)| weight * value)
                         .sum::<f32>()
                         .clamp(0.0, 1.0)
                 })
-            } else {
-                decoded
             }
         }
     };
@@ -163,6 +164,14 @@ pub fn convert_yuv_to_linear_rgba(
     }
     output[3] = sample.alpha;
     Ok((output, diagnostics))
+}
+
+pub(crate) fn check_packable(encoding: YuvEncoding) -> Result<(), RenderError> {
+    let color = encoding.color;
+    if color.is_hdr() || !is_working_gamut(color.primaries) {
+        return Err(RenderError::UnsupportedOutputColor(color));
+    }
+    Ok(())
 }
 
 /// Encodes linear-light RGB for an SDR output target.

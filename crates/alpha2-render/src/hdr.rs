@@ -158,6 +158,13 @@ pub fn hdr_to_working(
     converted.map(|component| (component * scale / SDR_WHITE_NITS).clamp(0.0, 1.0))
 }
 
+pub(crate) const fn is_working_gamut(primaries: ColorPrimaries) -> bool {
+    match primaries {
+        ColorPrimaries::Bt601 | ColorPrimaries::Bt709 => true,
+        ColorPrimaries::Bt2020 => false,
+    }
+}
+
 /// CIE xy of red, green, blue and white.
 fn chromaticities(primaries: ColorPrimaries) -> [[f64; 2]; 4] {
     const D65: [f64; 2] = [0.3127, 0.3290];
