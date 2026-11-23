@@ -9,6 +9,7 @@
 //! Frames below [`PLANNING_THRESHOLD_UNIT_PIXELS`] stay one command buffer and need no rate.
 //! Splitting never changes pixels, only when the GPU starts each part.
 
+use crate::composite::PixelRect;
 use crate::effect_cost::{ARITHMETIC_UNITS, EffectCost, FETCH_UNITS, TRANSCENDENTAL_UNITS};
 
 /// Frames at most this cost (64 units per pixel over a megapixel) are not planned; well under a
@@ -51,6 +52,18 @@ impl FrameCost {
         self.transcendentals += cost.transcendentals as f64 * pixels;
         self.arithmetic += cost.arithmetic as f64 * pixels;
     }
+
+    pub(crate) fn of(cost: EffectCost, pixels: u64) -> Self {
+        let mut charge = Self::default();
+        charge.add(cost, pixels);
+        charge
+    }
+
+    pub(crate) fn add_cost(&mut self, other: Self) {
+        self.fetches += other.fetches;
+        self.transcendentals += other.transcendentals;
+        self.arithmetic += other.arithmetic;
+    }
 }
 
 /// How one frame was submitted, as the renderer planned it.
@@ -68,9 +81,73 @@ pub struct FrameSubmissions {
 pub(crate) struct PassPlacement {
     /// The current command buffer is finished before the pass.
     pub(crate) cut_before: bool,
-    /// Bands the pass is drawn in, each in a command buffer of its own.
-    pub(crate) bands: u32,
+    /// Pieces the pass is drawn in, each in a command buffer of its own.
+    pub(crate) pieces: Pieces,
     pub(crate) pilot: Option<u32>,
+}
+
+/// A pass's region cut into `rows` bands, each cut into `columns` tiles, on even edges so no
+/// 2x2 derivative quad straddles two pieces.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Pieces {
+    pub(crate) rows: u32,
+    pub(crate) columns: u32,
+}
+
+impl Pieces {
+    pub(crate) const ONE: Self = Self {
+        rows: 1,
+        columns: 1,
+    };
+
+    pub(crate) const fn count(self) -> u32 {
+        self.rows.saturating_mul(self.columns)
+    }
+
+    pub(crate) fn rect(self, index: u32, region: PixelRect) -> PixelRect {
+        let (y, height) = even_split(region.y, region.height, index / self.columns, self.rows);
+        let (x, width) = even_split(region.x, region.width, index % self.columns, self.columns);
+        PixelRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+/// One piece of a pass: its scissor, `None` for the whole target, and whether it is the pass's
+/// first piece, which alone may clear the target; later pieces load it.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct Piece {
+    pub(crate) scissor: Option<PixelRect>,
+    pub(crate) first: bool,
+}
+
+impl Piece {
+    pub(crate) const fn first(scissor: Option<PixelRect>) -> Self {
+        Self {
+            scissor,
+            first: true,
+        }
+    }
+}
+
+fn even_split(start: u32, length: u32, part: u32, parts: u32) -> (u32, u32) {
+    let end = start.saturating_add(length);
+    let edge = |index: u32| -> u32 {
+        if index == 0 {
+            return start;
+        }
+        if index >= parts {
+            return end;
+        }
+        let offset = u64::from(length) * u64::from(index) / u64::from(parts);
+        let edge = start.saturating_add(u32::try_from(offset).unwrap_or(length)) & !1;
+        edge.clamp(start, end)
+    };
+    let first = edge(part);
+    (first, edge(part + 1).saturating_sub(first))
 }
 
 #[derive(Debug)]
@@ -120,55 +197,55 @@ impl SubmissionPlanner {
         self.pilot_rows = Some(rows);
     }
 
-    /// Charges a pass of `cost` over `pixels` and places it, at the rate measured for `pass` when
-    /// that is slower than the device. A pass that is not `bandable` only gets its own command
-    /// buffer.
+    /// Charges a pass doing `work` and places it, at the rate measured for `pass` when that is
+    /// slower than the device. A pass that is not `bandable` only gets its own command buffer.
     pub(crate) fn pass(
         &mut self,
-        cost: EffectCost,
-        pixels: u64,
+        work: FrameCost,
         bandable: bool,
         pass: Option<alpha2_gpu::PassKey>,
     ) -> PassPlacement {
-        self.cost.add(cost, pixels);
+        self.cost.add_cost(work);
         if let (Some(rows), true) = (self.pilot_rows, bandable) {
             return PassPlacement {
                 cut_before: false,
-                bands: 1,
+                pieces: Pieces::ONE,
                 pilot: Some(rows),
             };
         }
         let Some(plan) = &self.plan else {
             return PassPlacement {
                 cut_before: false,
-                bands: 1,
+                pieces: Pieces::ONE,
                 pilot: None,
             };
         };
         let budget = plan.budget_ms;
         let rate = plan.rate.planning_rate(plan.ms_per_unit_pixel, pass);
-        #[allow(clippy::cast_precision_loss)]
-        let ms = cost.units() as f64 * pixels as f64 * rate;
+        let ms = work.unit_pixels() * rate;
         self.place(ms, budget, bandable)
     }
 
     fn place(&mut self, ms: f64, budget: f64, bandable: bool) -> PassPlacement {
         if ms > budget {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let bands = if bandable {
-                ((ms / budget).ceil() as u32).clamp(1, MAX_BANDS)
+            let pieces = if bandable {
+                Pieces {
+                    rows: ((ms / budget).ceil() as u32).clamp(1, MAX_BANDS),
+                    columns: 1,
+                }
             } else {
-                1
+                Pieces::ONE
             };
             let cut_before = self.current_ms > 0.0;
             if cut_before {
                 self.finish_buffer();
             }
-            self.band_ms = ms / f64::from(bands);
+            self.band_ms = ms / f64::from(pieces.count());
             self.current_ms = self.band_ms;
             return PassPlacement {
                 cut_before,
-                bands,
+                pieces,
                 pilot: None,
             };
         }
@@ -180,7 +257,7 @@ impl SubmissionPlanner {
         self.current_ms += ms;
         PassPlacement {
             cut_before,
-            bands: 1,
+            pieces: Pieces::ONE,
             pilot: None,
         }
     }
@@ -399,20 +476,6 @@ impl crate::Renderer {
     }
 }
 
-/// Scissor rows of band `band` of `bands` over `height` rows. Edges are on even rows so no 2x2
-/// derivative quad straddles two bands.
-pub(crate) fn band_rows(band: u32, bands: u32, height: u32) -> (u32, u32) {
-    let edge = |index: u32| -> u32 {
-        if index >= bands {
-            return height;
-        }
-        let row = u64::from(height) * u64::from(index) / u64::from(bands);
-        u32::try_from(row).unwrap_or(height) & !1
-    };
-    let top = edge(band);
-    (top, edge(band + 1).saturating_sub(top))
-}
-
 fn names(name: &str, effect: &crate::EffectId) -> bool {
     name.strip_prefix(effect.as_str())
         .and_then(|rest| rest.strip_prefix('@'))
@@ -423,10 +486,10 @@ fn names(name: &str, effect: &crate::EffectId) -> bool {
 mod tests {
     use super::*;
 
-    fn placed(cut_before: bool, bands: u32) -> PassPlacement {
+    fn placed(cut_before: bool, rows: u32) -> PassPlacement {
         PassPlacement {
             cut_before,
-            bands,
+            pieces: Pieces { rows, columns: 1 },
             pilot: None,
         }
     }
@@ -439,20 +502,38 @@ mod tests {
             transcendentals: 0,
             arithmetic: 10,
         };
-        assert_eq!(planner.pass(pass, 100, true, None).bands, 1);
+        assert_eq!(
+            planner.pass(FrameCost::of(pass, 100), true, None).pieces,
+            Pieces::ONE
+        );
         assert_eq!(planner.buffer_ms(), None);
         planner.plan(std::sync::Arc::default(), 1.0, 2_500.0);
         // 1000 ms each: two fit, the third starts a new buffer.
-        assert!(!planner.pass(pass, 100, true, None).cut_before);
-        assert!(!planner.pass(pass, 100, true, None).cut_before);
-        assert!(planner.pass(pass, 100, true, None).cut_before);
+        assert!(
+            !planner
+                .pass(FrameCost::of(pass, 100), true, None)
+                .cut_before
+        );
+        assert!(
+            !planner
+                .pass(FrameCost::of(pass, 100), true, None)
+                .cut_before
+        );
+        assert!(
+            planner
+                .pass(FrameCost::of(pass, 100), true, None)
+                .cut_before
+        );
         // 10,000 ms: four bands of 2,500 after a cut.
-        let placement = planner.pass(pass, 1_000, true, None);
+        let placement = planner.pass(FrameCost::of(pass, 1_000), true, None);
         assert_eq!(placement, placed(true, 4));
-        for _ in 1..placement.bands {
+        for _ in 1..placement.pieces.count() {
             planner.next_band();
         }
-        assert_eq!(planner.pass(pass, 1_000, false, None), placed(true, 1));
+        assert_eq!(
+            planner.pass(FrameCost::of(pass, 1_000), false, None),
+            placed(true, 1)
+        );
         assert_eq!(
             planner.buffer_ms(),
             Some(vec![
@@ -473,11 +554,11 @@ mod tests {
             arithmetic: 10,
         };
         let blur = crate::EffectId::from_static("blur", 2);
-        let _ = planner.pass(pass, 100, false, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), false, None);
         planner.name_placed(Some(&blur));
-        let _ = planner.pass(pass, 100, false, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), false, None);
         planner.name_placed(Some(&blur));
-        let _ = planner.pass(pass, 10_000, false, None);
+        let _ = planner.pass(FrameCost::of(pass, 10_000), false, None);
         planner.name_placed(Some(&blur));
         let buffers = planner.buffer_effects();
         assert!(buffers.len() > 1, "{buffers:?}");
@@ -497,17 +578,17 @@ mod tests {
         };
         let blur = crate::EffectId::from_static("blur", 2);
         let grain = crate::EffectId::from_static("grain", 1);
-        let _ = planner.pass(pass, 100, true, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), true, None);
         planner.name_placed(Some(&blur));
-        let _ = planner.pass(pass, 100, false, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), false, None);
         planner.name_placed(None);
-        let placement = planner.pass(pass, 1_000, true, None);
+        let placement = planner.pass(FrameCost::of(pass, 1_000), true, None);
         assert_eq!(placement, placed(true, 4));
         planner.name_placed(Some(&grain));
-        for _ in 1..placement.bands {
+        for _ in 1..placement.pieces.count() {
             planner.next_band();
         }
-        let _ = planner.pass(pass, 100, true, None);
+        let _ = planner.pass(FrameCost::of(pass, 100), true, None);
         planner.name_placed(Some(&blur));
         let names = |names: &[&str]| -> Vec<String> {
             names.iter().map(|name| (*name).to_owned()).collect()
@@ -538,9 +619,12 @@ mod tests {
             transcendentals: 0,
             arithmetic: 10,
         };
-        assert_eq!(planner.pass(pass, 100, true, None), placed(false, 1));
         assert_eq!(
-            planner.pass(pass, 100, true, Some(scattered)),
+            planner.pass(FrameCost::of(pass, 100), true, None),
+            placed(false, 1)
+        );
+        assert_eq!(
+            planner.pass(FrameCost::of(pass, 100), true, Some(scattered)),
             placed(true, 4)
         );
     }
@@ -551,28 +635,77 @@ mod tests {
         planner.mark_pilot(6);
         let pass = EffectCost::fixed(1, 0);
         assert_eq!(
-            planner.pass(pass, 100, true, None),
+            planner.pass(FrameCost::of(pass, 100), true, None),
             PassPlacement {
                 cut_before: false,
-                bands: 1,
+                pieces: Pieces::ONE,
                 pilot: Some(6)
             }
         );
-        assert_eq!(planner.pass(pass, 100, false, None), placed(false, 1));
+        assert_eq!(
+            planner.pass(FrameCost::of(pass, 100), false, None),
+            placed(false, 1)
+        );
         assert_eq!(planner.buffer_ms(), None);
     }
 
     #[test]
-    fn bands_cover_every_row_once_on_even_edges() {
-        for (bands, height) in [(1, 7), (3, 288), (7, 101), (64, 4320)] {
-            let mut next = 0;
-            for band in 0..bands {
-                let (top, rows) = band_rows(band, bands, height);
-                assert_eq!(top, next);
-                assert_eq!(top % 2, 0);
-                next = top + rows;
+    fn pieces_cover_every_pixel_of_their_region_once_on_even_edges() {
+        for (pieces, region) in [
+            (Pieces::ONE, (0, 0, 7, 7)),
+            (
+                Pieces {
+                    rows: 3,
+                    columns: 1,
+                },
+                (0, 0, 512, 288),
+            ),
+            (
+                Pieces {
+                    rows: 7,
+                    columns: 1,
+                },
+                (0, 0, 64, 101),
+            ),
+            (
+                Pieces {
+                    rows: 64,
+                    columns: 1,
+                },
+                (0, 0, 8, 4320),
+            ),
+            (
+                Pieces {
+                    rows: 4,
+                    columns: 5,
+                },
+                (3, 9, 101, 77),
+            ),
+        ] {
+            let region = PixelRect {
+                x: region.0,
+                y: region.1,
+                width: region.2,
+                height: region.3,
+            };
+            let mut covered = vec![0_u32; (region.width * region.height) as usize];
+            for index in 0..pieces.count() {
+                let piece = pieces.rect(index, region);
+                for (edge, start, end) in [
+                    (piece.x, region.x, region.x + region.width),
+                    (piece.y, region.y, region.y + region.height),
+                    (piece.x + piece.width, region.x, region.x + region.width),
+                    (piece.y + piece.height, region.y, region.y + region.height),
+                ] {
+                    assert!(edge == start || edge == end || edge % 2 == 0, "{piece:?}");
+                }
+                for y in piece.y..piece.y + piece.height {
+                    for x in piece.x..piece.x + piece.width {
+                        covered[((y - region.y) * region.width + x - region.x) as usize] += 1;
+                    }
+                }
             }
-            assert_eq!(next, height);
+            assert!(covered.iter().all(|count| *count == 1), "{pieces:?}");
         }
     }
 }

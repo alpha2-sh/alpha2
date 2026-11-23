@@ -179,22 +179,66 @@ impl RenderEncoder {
         &mut self.planner
     }
 
-    /// Charges a pass to the plan and places it, finishing the command buffer first when the plan
-    /// says so; `effect` names the pass in each command buffer it is encoded into.
+    /// Charges a pass doing `work` to the plan and places it, finishing the command buffer first
+    /// when the plan says so; `effect` names the pass in each command buffer it is encoded into.
     pub(crate) fn place_pass(
         &mut self,
-        cost: crate::effect_cost::EffectCost,
-        pixels: u64,
+        work: crate::FrameCost,
         bandable: bool,
         pass: Option<alpha2_gpu::PassKey>,
         effect: Option<&crate::EffectId>,
     ) -> crate::submission_planner::PassPlacement {
-        let placement = self.planner.pass(cost, pixels, bandable, pass);
+        let placement = self.planner.pass(work, bandable, pass);
+        self.apply(placement, effect);
+        placement
+    }
+
+    pub(crate) fn apply(
+        &mut self,
+        placement: crate::submission_planner::PassPlacement,
+        effect: Option<&crate::EffectId>,
+    ) {
         if placement.cut_before {
             self.cut();
         }
         self.planner.name_placed(effect);
-        placement
+    }
+
+    pub(crate) fn encode_pieces(
+        &mut self,
+        placement: crate::submission_planner::PassPlacement,
+        region: crate::composite::PixelRect,
+        mut encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
+    ) {
+        use crate::submission_planner::Piece;
+        if let Some(rows) = placement.pilot {
+            let rows = crate::composite::PixelRect {
+                height: rows.min(region.height),
+                ..region
+            };
+            encode(&mut self.encoder, Piece::first(Some(rows)));
+            return;
+        }
+        let pieces = placement.pieces;
+        if pieces.count() <= 1 {
+            encode(&mut self.encoder, Piece::first(None));
+            return;
+        }
+        for index in 0..pieces.count() {
+            if index > 0 {
+                self.next_band();
+            }
+            let scissor = pieces.rect(index, region);
+            if index == 0 || scissor.area() > 0 {
+                encode(
+                    &mut self.encoder,
+                    Piece {
+                        scissor: Some(scissor),
+                        first: index == 0,
+                    },
+                );
+            }
+        }
     }
 
     pub(crate) fn next_band(&mut self) {
@@ -212,6 +256,56 @@ impl RenderEncoder {
         let done = std::mem::replace(&mut self.encoder, next);
         self.finished.push(done.finish());
     }
+}
+
+pub(crate) trait PassEncoder {
+    fn commands(&mut self) -> &mut wgpu::CommandEncoder;
+
+    fn placed_pass(
+        &mut self,
+        work: crate::FrameCost,
+        region: crate::composite::PixelRect,
+        encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
+    );
+
+    fn place_whole(&mut self, work: crate::FrameCost);
+}
+
+impl PassEncoder for RenderEncoder {
+    fn commands(&mut self) -> &mut wgpu::CommandEncoder {
+        &mut self.encoder
+    }
+
+    fn placed_pass(
+        &mut self,
+        work: crate::FrameCost,
+        region: crate::composite::PixelRect,
+        encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
+    ) {
+        let placement = self.place_pass(work, true, None, None);
+        self.encode_pieces(placement, region, encode);
+    }
+
+    fn place_whole(&mut self, work: crate::FrameCost) {
+        self.place_pass(work, false, None, None);
+    }
+}
+
+impl PassEncoder for wgpu::CommandEncoder {
+    fn commands(&mut self) -> &mut wgpu::CommandEncoder {
+        self
+    }
+
+    fn placed_pass(
+        &mut self,
+        _work: crate::FrameCost,
+        _region: crate::composite::PixelRect,
+        mut encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
+    ) {
+        encode(self, crate::submission_planner::Piece::first(None));
+    }
+
+    fn place_whole(&mut self, _work: crate::FrameCost) {}
 }
 
 #[derive(Debug)]

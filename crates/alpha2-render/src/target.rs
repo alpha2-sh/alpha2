@@ -198,4 +198,8 @@ impl RenderSize {
             Ok(Self { width, height })
         }
     }
+
+    pub(crate) const fn pixels(self) -> u64 {
+        self.width as u64 * self.height as u64
+    }
 }

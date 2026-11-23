@@ -81,6 +81,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A GPU frame's source conversions (charged by the output pixels and the samples their filter
+  takes), its YUV or NV12 pack and its texel copy are charged to its plan and count toward the
+  planning threshold: a frame that only converts large sources is now planned, and a conversion
+  or pack predicted past the submission budget is cut into bands like an effect pass.
 - A pass that writes more uniform data than its frame reserved fails that frame with the new
   `RenderError::UniformArenaOverrun`, coded `INTERNAL` (a new engine code, class `DEFECT`),
   instead of panicking the rendering thread. A frame also resolves each effect's registration once,

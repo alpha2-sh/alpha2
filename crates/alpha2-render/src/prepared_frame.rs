@@ -88,6 +88,20 @@ impl PreparedFrame {
     }
 }
 
+impl FramePack {
+    pub(crate) fn work(self, size: RenderSize) -> crate::FrameCost {
+        match self {
+            Self::Nothing => crate::FrameCost::default(),
+            Self::Yuv420p | Self::Nv12 => {
+                let mut work = crate::readback::pack_luma_work(size);
+                work.add_cost(crate::readback::pack_chroma_work(size));
+                work
+            }
+            Self::Texels => crate::readback::texel_copy_work(size),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FramePack {
     Nothing,

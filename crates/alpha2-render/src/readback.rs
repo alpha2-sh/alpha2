@@ -4,6 +4,9 @@ use std::sync::mpsc;
 
 use crate::bind_group::OffsetBindGroup;
 use crate::canary::{CANARY_BYTES, Canary};
+use crate::composite::PixelRect;
+use crate::renderer::PassEncoder;
+use crate::submission_planner::Piece;
 use crate::{
     ReadbackFailure, RenderError, RenderSize, RenderedTexture, Renderer,
     pipeline::{CachedPipeline, CachedYuvReadbackPipeline},
@@ -464,7 +467,7 @@ impl Renderer {
         target: &RenderedTexture,
         encoding: YuvEncoding,
         layout: PixelLayout,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl PassEncoder,
     ) -> Result<EncodedLayoutReadback, RenderError> {
         self.ensure_gpu_runs_work()?;
         self.validate_size(target.size)?;
@@ -488,6 +491,8 @@ impl Renderer {
         let buffer =
             self.readback_buffers
                 .acquire(self.gpu.device(), buffer_size, "alpha2 texel readback");
+        encoder.place_whole(texel_copy_work(target.size));
+        let encoder = encoder.commands();
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &target.texture,
@@ -575,7 +580,7 @@ impl Renderer {
         &self,
         target: &RenderedTexture,
         encoding: YuvEncoding,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl PassEncoder,
         uniforms: &mut UniformArenaLease,
     ) -> Result<EncodedYuv420pReadback, RenderError> {
         self.ensure_gpu_runs_work()?;
@@ -630,6 +635,7 @@ impl Renderer {
             uniforms,
             uniform,
         )?;
+        let encoder = encoder.commands();
         encode_plane_copy(
             encoder,
             y_texture.texture(),
@@ -750,7 +756,7 @@ impl Renderer {
         target: &RenderedTexture,
         planes: Nv12PlaneTargets<'_>,
         encoding: YuvEncoding,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl PassEncoder,
         uniforms: &mut UniformArenaLease,
     ) -> Result<(), RenderError> {
         // A pack has no canary of its own; an earlier failed readback canary applies.
@@ -771,19 +777,20 @@ impl Renderer {
         let uniform = uniforms.write(bytemuck::cast_slice(&yuv_uniform(encoding)))?;
         let cached = self.yuv_readback_pipeline()?;
         let bind_group = self.yuv_pack_bind_group(target, cached, uniforms, uniform);
-        encode_yuv_render_pass(
+        encode_pack_passes(
             encoder,
-            "alpha2 GPU NV12 Y pack pass",
-            &cached.y_pipeline,
             &bind_group,
-            planes.luma,
-        );
-        encode_yuv_render_pass(
-            encoder,
-            "alpha2 GPU NV12 UV pack pass",
-            &cached.uv_nv12_pipeline,
-            &bind_group,
-            planes.chroma,
+            target.size,
+            (
+                "alpha2 GPU NV12 Y pack pass",
+                &cached.y_pipeline,
+                &[planes.luma],
+            ),
+            (
+                "alpha2 GPU NV12 UV pack pass",
+                &cached.uv_nv12_pipeline,
+                &[planes.chroma],
+            ),
         );
         Ok(())
     }
@@ -819,26 +826,23 @@ impl Renderer {
         &self,
         target: &RenderedTexture,
         plane_views: [&wgpu::TextureView; 3],
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl PassEncoder,
         uniforms: &crate::uniform::UniformArenaLease,
         uniform: crate::uniform::UniformSlice,
     ) -> Result<(), RenderError> {
         let cached = self.yuv_readback_pipeline()?;
         let bind_group = self.yuv_pack_bind_group(target, cached, uniforms, uniform);
         let [y_view, u_view, v_view] = plane_views;
-        encode_yuv_render_pass(
+        encode_pack_passes(
             encoder,
-            "alpha2 GPU Y pack pass",
-            &cached.y_pipeline,
             &bind_group,
-            y_view,
-        );
-        encode_yuv_render_pass_pair(
-            encoder,
-            "alpha2 GPU UV pack pass",
-            &cached.uv_pipeline,
-            &bind_group,
-            [u_view, v_view],
+            target.size,
+            ("alpha2 GPU Y pack pass", &cached.y_pipeline, &[y_view]),
+            (
+                "alpha2 GPU UV pack pass",
+                &cached.uv_pipeline,
+                &[u_view, v_view],
+            ),
         );
         Ok(())
     }
@@ -1795,52 +1799,76 @@ fn yuv_render_pipeline(
     })
 }
 
+type PackPass<'a> = (
+    &'static str,
+    &'a wgpu::RenderPipeline,
+    &'a [&'a wgpu::TextureView],
+);
+
+fn encode_pack_passes(
+    encoder: &mut impl PassEncoder,
+    bind_group: &OffsetBindGroup<1>,
+    size: RenderSize,
+    luma: PackPass<'_>,
+    chroma: PackPass<'_>,
+) {
+    let chroma_size = RenderSize {
+        width: size.width.div_ceil(2),
+        height: size.height.div_ceil(2),
+    };
+    for ((label, pipeline, targets), work, size) in [
+        (luma, pack_luma_work(size), size),
+        (chroma, pack_chroma_work(size), chroma_size),
+    ] {
+        encoder.placed_pass(work, PixelRect::whole(size), |encoder, piece| {
+            encode_yuv_render_pass(encoder, label, pipeline, bind_group, targets, piece);
+        });
+    }
+}
+
+pub(crate) fn pack_luma_work(size: RenderSize) -> crate::FrameCost {
+    crate::FrameCost::of(PACK_SAMPLE_COST, size.pixels())
+}
+
+pub(crate) fn pack_chroma_work(size: RenderSize) -> crate::FrameCost {
+    let chroma = u64::from(size.width.div_ceil(2)) * u64::from(size.height.div_ceil(2));
+    crate::FrameCost::of(PACK_SAMPLE_COST.times(4), chroma)
+}
+
+pub(crate) fn texel_copy_work(size: RenderSize) -> crate::FrameCost {
+    crate::FrameCost::of(PACK_SAMPLE_COST, size.pixels())
+}
+
+const PACK_SAMPLE_COST: crate::effect_cost::EffectCost =
+    crate::effect_cost::EffectCost::fixed(1, 0);
+
 fn encode_yuv_render_pass(
     encoder: &mut wgpu::CommandEncoder,
     label: &'static str,
     pipeline: &wgpu::RenderPipeline,
     bind_group: &OffsetBindGroup<1>,
-    target: &wgpu::TextureView,
+    targets: &[&wgpu::TextureView],
+    Piece { scissor, first }: Piece,
 ) {
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some(label),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: target,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    pass.set_pipeline(pipeline);
-    bind_group.set(&mut pass, 0);
-    pass.draw(0..3, 0..1);
-}
-
-fn encode_yuv_render_pass_pair(
-    encoder: &mut wgpu::CommandEncoder,
-    label: &'static str,
-    pipeline: &wgpu::RenderPipeline,
-    bind_group: &OffsetBindGroup<1>,
-    targets: [&wgpu::TextureView; 2],
-) {
-    let attachments = targets.map(|target| {
-        Some(wgpu::RenderPassColorAttachment {
-            view: target,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
+    let load = if first {
+        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+    } else {
+        wgpu::LoadOp::Load
+    };
+    let attachments = targets
+        .iter()
+        .map(|target| {
+            Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })
         })
-    });
+        .collect::<arrayvec::ArrayVec<_, 2>>();
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &attachments,
@@ -1849,6 +1877,12 @@ fn encode_yuv_render_pass_pair(
         occlusion_query_set: None,
         multiview_mask: None,
     });
+    if let Some(scissor) = scissor {
+        if scissor.area() == 0 {
+            return;
+        }
+        pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+    }
     pass.set_pipeline(pipeline);
     bind_group.set(&mut pass, 0);
     pass.draw(0..3, 0..1);

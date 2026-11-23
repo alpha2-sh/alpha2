@@ -464,3 +464,175 @@ fn each_submission_of_a_split_frame_names_the_effect_encoded_into_it() {
         .collect();
     assert_eq!(named, expected, "{frame:?}");
 }
+
+fn seeded_at(gpu: &GpuContext, unit_pixels: f64, budgets: f64) {
+    let budget = f64::from(alpha2_gpu::submission_budget_ms());
+    gpu.rate()
+        .seed(budgets * budget / unit_pixels / alpha2_gpu::MARGIN);
+}
+
+const OVER_ROUNDING: f64 = 1.0 + 1e-9;
+
+fn assert_within_the_budget(longest: f64, planned: crate::FrameSubmissions, what: &str) {
+    let budget = f64::from(alpha2_gpu::submission_budget_ms());
+    assert!(
+        longest <= budget * OVER_ROUNDING,
+        "{what} went in {} submission(s), the longest predicted at {longest:.0} ms against a \
+         budget of {budget:.0} ms: {planned:?}",
+        planned.submissions
+    );
+}
+
+fn yuv_source(
+    renderer: &Renderer,
+    size: RenderSize,
+    output: RenderSize,
+) -> crate::PreparedSourceTexture {
+    let (width, height) = (size.width as usize, size.height as usize);
+    let y = (0..width * height)
+        .map(|index| u8::try_from(16 + (index % width) * 200 / width).unwrap_or(16))
+        .collect::<Vec<_>>();
+    let u = vec![96_u8; width / 2 * height / 2];
+    let v = vec![160_u8; width / 2 * height / 2];
+    renderer
+        .prepare_yuv420p_presented(
+            Yuv420Frame {
+                y: &y,
+                u: &u,
+                v: &v,
+                y_stride: size.width,
+                chroma_stride: size.width / 2,
+                size,
+                alpha: 1.0,
+                color: Some(ColorMetadata::default()),
+            },
+            SourcePresentation {
+                visible_rect: alpha2_media::Rect {
+                    x: 0,
+                    y: 0,
+                    width: size.width,
+                    height: size.height,
+                },
+                ..SourcePresentation::identity(output)
+            },
+            ColorPolicy::RejectHdr,
+        )
+        .expect("prepared YUV source")
+        .0
+}
+
+fn converted_frame(
+    renderer: &Renderer,
+    source: RenderSize,
+    output: RenderSize,
+    convert_in_frame: bool,
+) -> (crate::FrameSubmissions, Vec<u8>) {
+    let (texture, pending) = yuv_source(renderer, source, output).into_parts();
+    let pending = pending.expect("the conversion is pending");
+    if !convert_in_frame {
+        assert!(renderer.submit_pending_source(&pending));
+    }
+    let mut graph = RenderGraph::new(output);
+    let input = graph.add_source(SourceView::from_wgpu(texture.view()));
+    let composite = graph
+        .add_composite(vec![GraphLayer {
+            source: input,
+            visual: visual([1.0, 1.0], 1.0),
+            blend_mode: BlendMode::Normal,
+        }])
+        .expect("source exists");
+    graph.set_output(composite).expect("output exists");
+    let result = renderer
+        .render_graph(&graph, &[&pending])
+        .expect("the frame renders");
+    let submissions = renderer
+        .take_frame_submissions()
+        .expect("the frame's submissions");
+    (submissions, read_rgba8(renderer, &result))
+}
+
+#[test]
+fn source_conversion_is_charged_to_the_frame_that_runs_it() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let (converted_before, _) = converted_frame(&renderer, size, size, false);
+    let (converted_in_frame, _) = converted_frame(&renderer, size, size, true);
+    assert!(
+        converted_in_frame.cost.unit_pixels() > converted_before.cost.unit_pixels(),
+        "a frame that also converts its source is charged {converted_in_frame:?}, the same frame \
+         without the conversion {converted_before:?}"
+    );
+}
+
+#[test]
+fn a_pack_is_charged_to_the_frame_it_packs() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let view = flat_source(&renderer, size);
+    let (effect, _) = registered(
+        &renderer,
+        runtime_tint_effect(
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
+        ),
+    );
+    let graph = effect_graph(&view, &effect, size);
+    drop(renderer.execute_graph(&graph).expect("the graph renders"));
+    let unpacked = renderer
+        .take_frame_submissions()
+        .expect("the frame's submissions");
+    renderer
+        .render_graph_yuv420p(&graph, &[], centred(ColorMetadata::default()))
+        .expect("the frame renders")
+        .wait_ready()
+        .expect("the readback maps");
+    let packed = renderer
+        .take_frame_submissions()
+        .expect("the frame's submissions");
+    assert!(
+        packed.cost.unit_pixels() > unpacked.cost.unit_pixels(),
+        "a packed frame is charged {packed:?}, the same frame unpacked {unpacked:?}"
+    );
+}
+
+#[test]
+fn a_frame_whose_conversions_pass_the_planning_threshold_is_planned() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let source = RenderSize::new(2048, 2048).expect("size");
+    let output = RenderSize::new(256, 256).expect("size");
+    let (planned, _) = converted_frame(&renderer, source, output, true);
+    let (unplanned, _) = converted_frame(&renderer, source, output, false);
+    assert!(
+        planned.predicted_ms.is_some() && unplanned.predicted_ms.is_none(),
+        "with its conversion {planned:?}, without {unplanned:?}"
+    );
+}
+
+#[test]
+fn a_frame_cut_after_its_conversions_draws_what_one_submission_draws() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let source = RenderSize::new(2048, 2048).expect("size");
+    let output = RenderSize::new(256, 256).expect("size");
+    let (whole, _) = with_watchdog(UNSPLIT_WATCHDOG_MS, || {
+        converted_frame(&renderer, source, output, true)
+    });
+    assert_eq!(whole.submissions, 1, "{whole:?}");
+    let (_, whole_picture) = converted_frame(&renderer, source, output, true);
+    seeded_at(&gpu, whole.cost.unit_pixels(), 8.0);
+    let _ = renderer.take_gpu_submission_stats();
+    let (cut, cut_picture) = converted_frame(&renderer, source, output, true);
+    let longest = renderer
+        .take_gpu_submission_stats()
+        .max_predicted_ms
+        .expect("the frame is planned");
+    assert!(cut.submissions >= 8, "{cut:?}");
+    assert_within_the_budget(longest, cut, "a frame predicted at eight budgets");
+    assert!(
+        whole_picture == cut_picture,
+        "the cut frame drew other bytes"
+    );
+}

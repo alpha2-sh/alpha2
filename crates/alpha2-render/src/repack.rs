@@ -49,6 +49,9 @@ impl RepackSource<'_> {
     }
 }
 
+const REPACK_SAMPLE_COST: crate::effect_cost::EffectCost =
+    crate::effect_cost::EffectCost::fixed(1, 0);
+
 impl Renderer {
     /// Copies the `visible` part of a decoded 8-bit 4:2:0 picture into same-size NV12 targets,
     /// sample for sample, in one submission. Counted as a repack in diagnostics.
@@ -153,6 +156,14 @@ impl Renderer {
                 uniform: origin.clone(),
                 sampler: None,
                 output_view: target.clone(),
+                output_size: RenderSize {
+                    width: target.texture().width(),
+                    height: target.texture().height(),
+                },
+                work: crate::FrameCost::of(
+                    REPACK_SAMPLE_COST,
+                    u64::from(target.texture().width()) * u64::from(target.texture().height()),
+                ),
                 uploads,
                 external_leases,
             })

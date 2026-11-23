@@ -151,12 +151,6 @@ impl Renderer {
             self.gpu.device(),
             prepared.uniform_capacity(sources, &plan.order, pack, self.uniform_alignment()),
         );
-        for work in sources {
-            work.encode(self, encoder, &mut uniforms)?;
-        }
-        if let Some(sample) = sample {
-            sample.graph_start(encoder);
-        }
         let mut outputs: Vec<Option<RenderedTexture>> =
             (0..graph.nodes.len()).map(|_| None).collect();
         let blend_space = graph.blend_space.unwrap_or(self.blend_space).shader_value();
@@ -167,18 +161,27 @@ impl Renderer {
                 .iter()
                 .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
         };
-        let predicted = drawn().fold(crate::FrameCost::default(), |mut total, node| {
+        let mut predicted = pack.work(graph.size);
+        for work in sources {
+            predicted.add_cost(work.work());
+        }
+        for node in drawn() {
             if let Some(cost) = node_cost(&graph.nodes[node.index], prepared.node(*node)) {
-                total.add(cost, pixels);
+                predicted.add(cost, pixels);
             }
-            total
-        });
+        }
         self.plan_submissions(encoder, predicted);
         if encoder.planner().is_planned() {
             self.pilot_passes(
                 drawn().map(|node| (&graph.nodes[node.index], prepared.registration(*node))),
                 graph.size,
             );
+        }
+        for work in sources {
+            work.encode(self, encoder, &mut uniforms)?;
+        }
+        if let Some(sample) = sample {
+            sample.graph_start(encoder);
         }
         let mut pending_timings = Vec::<PendingEffectTiming>::new();
         let mut encoded_nodes = 0_u64;
@@ -333,8 +336,7 @@ impl Renderer {
                 }
                 RenderNode::Vector { scene } => {
                     encoder.place_pass(
-                        crate::submission_planner::VECTOR_COST,
-                        pixels,
+                        crate::FrameCost::of(crate::submission_planner::VECTOR_COST, pixels),
                         false,
                         None,
                         None,
@@ -361,9 +363,11 @@ impl Renderer {
                         .composite(node_id)
                         .ok_or(GraphError::Render(crate::RenderError::InvalidGraph))?;
                     encoder.place_pass(
-                        crate::submission_planner::COMPOSITE_LAYER_COST
-                            .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
-                        pixels,
+                        crate::FrameCost::of(
+                            crate::submission_planner::COMPOSITE_LAYER_COST
+                                .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
+                            pixels,
+                        ),
                         false,
                         None,
                         None,

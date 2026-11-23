@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::submission_planner::Piece;
 use crate::{
     EffectId, EffectKind, EffectParams, EffectResources, EffectRuntime, GraphError, ParamSpec,
     ParamType, ParamValue, RenderError, RenderGraph, RenderSize, RenderedTexture, Renderer,
@@ -197,34 +198,18 @@ impl Renderer {
         };
         let pixels = u64::from(size.width) * u64::from(size.height);
         let placement = encoder.place_pass(
-            registered.cost,
-            pixels,
+            crate::FrameCost::of(registered.cost, pixels),
             true,
             Some(alpha2_gpu::PassKey::new(registered.pass_id, pixels)),
             Some(id),
         );
-        if let Some(rows) = placement.pilot {
-            encode_pass(
-                encoder,
-                &drawn.pipeline,
-                &bind_group,
-                &self.linear_sampler,
-                output,
-                None,
-                Some((0, 0, size.width, rows)),
-            );
-            return Ok(None);
-        }
-        let bands = placement.bands;
-        if bands > 1 {
-            // Bands read only the pass's sources, never its target, so pixels match an unbanded
+        if placement.pilot.is_some() || placement.pieces.count() > 1 {
+            // Pieces read only the pass's sources, never its target, so pixels match an undivided
             // pass.
-            for band in 0..bands {
-                if band > 0 {
-                    encoder.next_band();
-                }
-                let (top, rows) = crate::submission_planner::band_rows(band, bands, size.height);
-                if rows > 0 {
+            encoder.encode_pieces(
+                placement,
+                crate::composite::PixelRect::whole(size),
+                |encoder, piece| {
                     encode_pass(
                         encoder,
                         &drawn.pipeline,
@@ -232,10 +217,10 @@ impl Renderer {
                         &self.linear_sampler,
                         output,
                         None,
-                        Some((band, top, size.width, rows)),
+                        piece,
                     );
-                }
-            }
+                },
+            );
             return Ok(None);
         }
         // One reusable probe: a query set per pass exhausts Metal counter buffers, and the failed
@@ -256,7 +241,7 @@ impl Renderer {
             &self.linear_sampler,
             output,
             probe.map(|(_, probe)| &probe.queries),
-            None,
+            Piece::first(None),
         );
         if let Some((_, probe)) = probe {
             encoder.resolve_query_set(&probe.queries, 0..2, &probe.resolve, 0);
@@ -497,8 +482,6 @@ pub(crate) fn render_scale_fixed(scale: f32) -> u32 {
     (f64::from(scale) * 65_536.0).round() as u32
 }
 
-/// Encodes one full-target draw, or with `band` (index, top row, width, rows) one band; the
-/// first band clears the target, later ones load it.
 fn encode_pass(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
@@ -506,11 +489,12 @@ fn encode_pass(
     sampler: &crate::bind_group::LinearSampler,
     output: &wgpu::TextureView,
     timestamp_queries: Option<&wgpu::QuerySet>,
-    band: Option<(u32, u32, u32, u32)>,
+    Piece { scissor, first }: Piece,
 ) {
-    let load = match band {
-        Some((index, ..)) if index > 0 => wgpu::LoadOp::Load,
-        _ => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+    let load = if first {
+        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+    } else {
+        wgpu::LoadOp::Load
     };
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("alpha2 runtime effect pass"),
@@ -535,8 +519,8 @@ fn encode_pass(
     pass.set_pipeline(pipeline);
     bind_group.set(&mut pass, 0);
     sampler.set(&mut pass);
-    if let Some((_, top, width, rows)) = band {
-        pass.set_scissor_rect(0, top, width, rows);
+    if let Some(scissor) = scissor {
+        pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
     }
     pass.draw(0..3, 0..1);
 }

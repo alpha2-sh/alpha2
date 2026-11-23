@@ -732,7 +732,7 @@ impl PixelRect {
         height: 0,
     };
 
-    const fn whole(size: RenderSize) -> Self {
+    pub(crate) const fn whole(size: RenderSize) -> Self {
         Self {
             x: 0,
             y: 0,
