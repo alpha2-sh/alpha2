@@ -574,6 +574,55 @@
       }
     },
     {
+      "name": "GPU memory exhaustion at the smallest profile moves to the CPU renderer",
+      "history": [
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "render",
+            "frameIndex": 0,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "render",
+            "frameIndex": 0,
+            "resource": "gpu"
+          },
+          "profile": "reduced",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "render",
+            "frameIndex": 0,
+            "resource": "gpu"
+          },
+          "profile": "minimal",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "maxAttempts": 5,
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": true,
+        "delayMs": 4000,
+        "profile": "minimal",
+        "renderer": "cpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
       "name": "memory exhaustion while encoding steps down before switching encoders",
       "history": [
         {

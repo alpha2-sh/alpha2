@@ -181,6 +181,14 @@ impl Renderer {
             }
             predicted.add_cost(work);
         }
+        let needed = self.texture_need(graph, &plan, &prepared, &cached, sources, pack);
+        if let Some(budget) = self.gpu_memory_budget()
+            && needed > budget
+        {
+            return Err(GraphError::Render(
+                crate::RenderError::FrameExceedsGpuMemory { needed, budget },
+            ));
+        }
         let submission_plan = self.plan_submissions(predicted);
         if submission_plan.is_some() {
             self.pilot_passes(
@@ -539,6 +547,59 @@ fn node_work(node: &RenderNode<'_>, prepared: &PreparedNode, pixels: u64) -> cra
             },
         ) => scene.work(),
         _ => crate::FrameCost::default(),
+    }
+}
+
+impl Renderer {
+    fn texture_need(
+        &self,
+        graph: &RenderGraph<'_>,
+        plan: &crate::RenderPlan,
+        prepared: &crate::prepared_frame::PreparedFrame,
+        cached: &CachedResults,
+        sources: &[SourceWorkTicket<'_>],
+        pack: FramePack,
+    ) -> u64 {
+        let texel_bytes = match self.intermediate_format() {
+            wgpu::TextureFormat::Rgba16Float => 8,
+            _ => 4,
+        };
+        let frame = graph.size.pixels() * texel_bytes;
+        let fixed = sources
+            .iter()
+            .map(|work| work.output_size().pixels() * texel_bytes)
+            .sum::<u64>()
+            + match pack {
+                FramePack::Yuv420p | FramePack::Nv12 => graph.size.pixels() * 3 / 2,
+                FramePack::Nothing | FramePack::Texels => 0,
+            };
+        let mut held = vec![0_u64; graph.nodes.len()];
+        let (mut alive, mut peak) = (0_u64, 0_u64);
+        for (position, node) in plan.order.iter().enumerate() {
+            let index = node.index;
+            if matches!(graph.nodes[index], RenderNode::Source(_)) {
+                continue;
+            }
+            if cached.hits[index].is_some() || cached.needed[index] {
+                let scratch = match prepared.node(*node) {
+                    PreparedNode::Composite(composite) if composite.batches.len() > 1 => frame,
+                    PreparedNode::Vector {
+                        scene: Some(Ok(scene)),
+                        ..
+                    } => scene.texture_bytes(graph.size, texel_bytes),
+                    _ => 0,
+                };
+                peak = peak.max(alive + frame + scratch);
+                held[index] = frame;
+                alive += frame;
+            }
+            for dependency in graph.nodes[index].dependencies() {
+                if plan.last_use[dependency.index] == Some(position) {
+                    alive -= std::mem::take(&mut held[dependency.index]);
+                }
+            }
+        }
+        fixed + peak
     }
 }
 

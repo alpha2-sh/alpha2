@@ -84,6 +84,14 @@ pub enum RenderError {
     /// A pass wrote more uniform data than its frame reserved, a defect in the renderer. The
     /// frame fails; the renderer stays usable.
     UniformArenaOverrun,
+    /// The textures one frame holds at once need more than the GPU memory budget the adapter
+    /// reports, so the frame was not drawn. Freeing idle textures cannot make it fit.
+    FrameExceedsGpuMemory {
+        /// Bytes of textures the frame holds at its peak.
+        needed: u64,
+        /// The adapter's memory budget, in bytes.
+        budget: u64,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -148,31 +156,12 @@ impl fmt::Display for RenderError {
                 measured,
                 watchdog_ms,
                 ..
-            } => {
-                formatter.write_str("GPU device hung: ")?;
-                let ran = if *measured { "ran" } else { "ran up to" };
-                let within = if *measured { "in" } else { "within" };
-                match (frame, *submissions) {
-                    (Some(frame), 0 | 1) => {
-                        write!(formatter, "frame {frame} {ran} {gpu_ms} ms in one submission")?;
-                    }
-                    (None, 0 | 1) => write!(formatter, "a submission {ran} {gpu_ms} ms")?,
-                    (Some(frame), submissions) => write!(
-                        formatter,
-                        "{submissions} submissions from frame {frame} on completed together \
-                         {within} {gpu_ms} ms"
-                    )?,
-                    (None, submissions) => write!(
-                        formatter,
-                        "{submissions} submissions completed together {within} {gpu_ms} ms"
-                    )?,
-                }
-                write!(
-                    formatter,
-                    " against a {watchdog_ms} ms watchdog; this work stops the GPU, so it is not \
-                     retried on the GPU"
-                )
-            }
+            } => device_hung(
+                formatter,
+                *frame,
+                (*gpu_ms, *submissions, *measured),
+                *watchdog_ms,
+            ),
             Self::UnsupportedHdr => {
                 formatter.write_str("the color policy refuses HDR (PQ or HLG) sources")
             }
@@ -186,6 +175,9 @@ impl fmt::Display for RenderError {
                 color.primaries, color.transfer
             ),
             Self::UniformArenaOverrun => formatter.write_str(UNIFORM_ARENA_OVERRUN_MESSAGE),
+            Self::FrameExceedsGpuMemory { needed, budget } => {
+                frame_exceeds_memory(formatter, *needed, *budget)
+            }
         }
     }
 }
@@ -239,6 +231,52 @@ impl fmt::Display for ReadbackFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
+}
+
+fn device_hung(
+    formatter: &mut fmt::Formatter<'_>,
+    frame: Option<u64>,
+    (gpu_ms, submissions, measured): (u32, u32, bool),
+    watchdog_ms: u32,
+) -> fmt::Result {
+    formatter.write_str("GPU device hung: ")?;
+    let ran = if measured { "ran" } else { "ran up to" };
+    let within = if measured { "in" } else { "within" };
+    match (frame, submissions) {
+        (Some(frame), 0 | 1) => {
+            write!(
+                formatter,
+                "frame {frame} {ran} {gpu_ms} ms in one submission"
+            )?;
+        }
+        (None, 0 | 1) => write!(formatter, "a submission {ran} {gpu_ms} ms")?,
+        (Some(frame), submissions) => write!(
+            formatter,
+            "{submissions} submissions from frame {frame} on completed together \
+                 {within} {gpu_ms} ms"
+        )?,
+        (None, submissions) => write!(
+            formatter,
+            "{submissions} submissions completed together {within} {gpu_ms} ms"
+        )?,
+    }
+    write!(
+        formatter,
+        " against a {watchdog_ms} ms watchdog; this work stops the GPU, so it is not \
+             retried on the GPU"
+    )
+}
+
+fn frame_exceeds_memory(
+    formatter: &mut fmt::Formatter<'_>,
+    needed: u64,
+    budget: u64,
+) -> fmt::Result {
+    write!(
+        formatter,
+        "GPU out of memory: one frame needs {needed} bytes of textures, more than the \
+         {budget}-byte GPU memory budget"
+    )
 }
 
 const UNIFORM_ARENA_OVERRUN_MESSAGE: &str =

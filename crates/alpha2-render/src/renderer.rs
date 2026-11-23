@@ -1115,7 +1115,8 @@ impl Renderer {
     }
 
     /// Records the adapter's memory budget (`None` if unreported) and caps idle pools at a quarter
-    /// of it. Returns whether a pool budget was lowered.
+    /// of it. A frame whose own textures need more than the budget fails before it draws, with
+    /// [`RenderError::FrameExceedsGpuMemory`]. Returns whether a pool budget was lowered.
     pub fn set_gpu_memory_budget(&self, budget_bytes: Option<u64>) -> bool {
         self.gpu_memory_budget.store(
             budget_bytes.unwrap_or(0),

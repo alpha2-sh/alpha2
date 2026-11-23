@@ -503,3 +503,51 @@ fn a_texture_budget_the_gpu_memory_cap_lowers_is_reported() {
     renderer.set_texture_budget_bytes(64 * mib);
     assert_eq!(texture_budget(), Vec::new());
 }
+
+#[test]
+fn a_frame_whose_textures_exceed_the_gpu_memory_budget_fails_before_it_draws() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(
+        "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
+    )))
+    .expect("tint compiles");
+    let size = RenderSize::new(256, 128).expect("size");
+    let source = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut graph = RenderGraph::new(size);
+    let mut node = graph.add_source(SourceView::from_wgpu(&view));
+    for _ in 0..3 {
+        node = graph
+            .add_effect(
+                tint.clone(),
+                node,
+                EffectParams::new(),
+                EffectRuntime::default(),
+            )
+            .expect("effect");
+    }
+    graph.set_output(node).expect("output");
+    let texel_bytes = match renderer.intermediate_format() {
+        wgpu::TextureFormat::Rgba16Float => 8,
+        _ => 4,
+    };
+    let two_targets = 2 * size.pixels() * texel_bytes;
+    renderer.set_gpu_memory_budget(Some(two_targets - 1));
+    let created = renderer.texture_pool_stats().created;
+    let refused = renderer.execute_graph(&graph).map(drop);
+    assert_eq!(
+        refused,
+        Err(GraphError::Render(RenderError::FrameExceedsGpuMemory {
+            needed: two_targets,
+            budget: two_targets - 1,
+        }))
+    );
+    assert_eq!(
+        renderer.texture_pool_stats().created,
+        created,
+        "nothing drawn"
+    );
+    renderer.set_gpu_memory_budget(Some(two_targets));
+    drop(renderer.execute_graph(&graph).expect("the frame fits now"));
+}

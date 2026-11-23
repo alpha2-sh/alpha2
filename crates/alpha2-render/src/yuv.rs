@@ -208,6 +208,13 @@ impl SourceWorkTicket<'_> {
         u64::try_from(work.uniform.len()).unwrap_or(u64::MAX)
     }
 
+    pub(crate) fn output_size(&self) -> RenderSize {
+        self.work
+            .as_ref()
+            .expect("live source work ticket")
+            .output_size
+    }
+
     pub(crate) fn work(&self) -> crate::FrameCost {
         self.work.as_ref().expect("live source work ticket").work
     }

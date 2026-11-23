@@ -251,10 +251,10 @@ fn backoff(failed: usize) -> u64 {
 ///
 /// An export is retried whole on a fresh device; attempts change the in-flight budget, the
 /// renderer and the video encoder, never the output settings. A GPU that hangs on the export's
-/// own work moves to the CPU renderer; memory exhaustion steps down a profile; an encode failure
-/// retries once in software; a busy resource waits; an engine fault (`DEFECT`) retries once,
-/// unchanged and at once; anything else transient retries unchanged and steps down only when it
-/// recurs at the same point.
+/// own work moves to the CPU renderer; memory exhaustion steps down a profile, then GPU memory
+/// exhaustion moves to the CPU renderer; an encode failure retries once in software; a busy
+/// resource waits; an engine fault (`DEFECT`) retries once, unchanged and at once; anything else
+/// transient retries unchanged and steps down only when it recurs at the same point.
 // One rule after another, in the reference policy's order.
 #[allow(clippy::too_many_lines)]
 #[must_use]
@@ -377,6 +377,23 @@ pub fn decide_retry(history: &[AttemptOutcome], options: RetryOptions) -> RetryD
                 None,
                 None,
             ),
+            None if code == FailureClass::OutOfMemory
+                && last.renderer == AttemptRenderer::Gpu
+                && options.cpu_renderer =>
+            {
+                retry(
+                    format!(
+                        "{code} with the smallest profile ({}): the GPU cannot hold the export; \
+                         retrying on the CPU renderer",
+                        last.profile.name
+                    ),
+                    note,
+                    None,
+                    Some(AttemptRenderer::Cpu),
+                    None,
+                    None,
+                )
+            }
             None => stop(
                 format!(
                     "{code} with the smallest profile ({}): nothing left to reduce",

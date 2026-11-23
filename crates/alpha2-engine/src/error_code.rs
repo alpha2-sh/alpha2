@@ -133,6 +133,7 @@ impl ErrorCode {
 pub fn gpu_error_of(error: &(dyn Error + 'static)) -> Option<alpha2_gpu::GpuErrorKind> {
     let render = |error: &RenderError| match error {
         RenderError::Gpu { kind } => Some(*kind),
+        RenderError::FrameExceedsGpuMemory { .. } => Some(alpha2_gpu::GpuErrorKind::OutOfMemory),
         _ => None,
     };
     let mut cause = Some(error);
@@ -310,6 +311,15 @@ mod tests {
             );
         }
         assert_eq!(gpu_error_of(&RenderError::GpuWorkDropped), None);
+        let oversized = RenderError::FrameExceedsGpuMemory {
+            needed: 2,
+            budget: 1,
+        };
+        assert_eq!(
+            gpu_error_of(&oversized),
+            Some(alpha2_gpu::GpuErrorKind::OutOfMemory)
+        );
+        assert_eq!(ErrorCode::of(&oversized), Some(ErrorCode::Alpha2Error));
         assert_eq!(
             ErrorCode::of(&RenderError::GpuTimeout),
             Some(ErrorCode::GpuTimeout)

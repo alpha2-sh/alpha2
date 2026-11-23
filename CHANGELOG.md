@@ -85,6 +85,11 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A GPU frame whose own textures need more than the GPU memory budget the adapter reports fails
+  before it draws with the new `RenderError::FrameExceedsGpuMemory`, classed `OUT_OF_MEMORY`,
+  instead of evicting idle textures it could not do without; the quarter-of-the-budget cap bounds
+  only idle textures no recent frame used. An export that runs out of GPU memory at the smallest
+  in-flight profile now moves to the CPU renderer when the client allows it, where it stopped.
 - Layer composites, vector scenes, source conversions and packs get pass rates of their own, as
   effect passes did: a planned frame pilots each kind it draws past the planning threshold once per
   device and frame size, and plans it at what the pilot measured when that is slower than the

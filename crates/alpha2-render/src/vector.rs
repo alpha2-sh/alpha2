@@ -294,6 +294,29 @@ impl PreparedVector {
         total
     }
 
+    pub(crate) fn texture_bytes(&self, size: RenderSize, format_bytes: u64) -> u64 {
+        let frame = size.pixels();
+        let mut depth = 0_u64;
+        let mut deepest = 0_u64;
+        for step in &self.steps {
+            match step {
+                Step::Push => {
+                    depth += 1;
+                    deepest = deepest.max(depth);
+                }
+                Step::Pop { .. } => depth = depth.saturating_sub(1),
+                Step::Fill(_) => {}
+            }
+        }
+        let layer_bytes = if self.linear { 8 } else { format_bytes };
+        let pages = u64::try_from(self.pages.len()).unwrap_or(u64::MAX)
+            * u64::from(ATLAS_WIDTH)
+            * u64::from(self.page_rows)
+            * 16;
+        let linear = if self.linear { frame * 8 } else { 0 };
+        linear + deepest * frame * layer_bytes + pages
+    }
+
     pub(crate) fn uniform_bytes(&self, alignment: u64) -> u64 {
         let slices = self
             .steps
