@@ -46,7 +46,7 @@ use alpha2_engine::{
     FramesWithText, QualityProfile, TextTextures,
 };
 use alpha2_gpu::CapabilityTier;
-use alpha2_media::{CancelToken, ColorMetadata, EncodeEvent};
+use alpha2_media::{CancelToken, EncodeEvent};
 use alpha2_model::{MediaFingerprint, MediaKind, Project};
 use alpha2_native::{
     AvEncodeConfig, ExistingOutput, NativeAvEncodeSink, NativeVideoCodec, NativeVideoEncodeSink,
@@ -2389,7 +2389,7 @@ impl Host {
             width: size.width,
             height: size.height,
             frame_rate: rate,
-            color: ColorMetadata::EXPORT,
+            color: exporter.encoding().color,
             rate_control: video_rate.control,
             codec: video_codec,
             display: alpha2_native::VideoDisplay::default(),

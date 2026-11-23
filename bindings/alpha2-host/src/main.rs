@@ -421,6 +421,7 @@ fn render_gpu_encode_slice(
         .preferred_capability()
         .map_err(|error| HostError::new("ENCODE_ERROR", error))?
         .codec;
+    let encoding = alpha2_media::YuvEncoding::export(codec.model());
     let (mut session, mut input) = device
         .open(&alpha2_native::HardwareEncodeRequest {
             width,
@@ -432,7 +433,7 @@ fn render_gpu_encode_slice(
                 mode: alpha2_media::BitrateMode::Variable,
                 quantizer: None,
             },
-            color: alpha2_media::ColorMetadata::EXPORT,
+            color: encoding.color,
             output: &alpha2_native::OutputTarget::from(std::path::Path::new(path)),
             container: alpha2_media::Container::Mp4,
             audio: None,
@@ -453,7 +454,7 @@ fn render_gpu_encode_slice(
             .encode_nv12_pack(
                 &target,
                 Nv12PlaneTargets { luma, chroma },
-                alpha2_media::YuvEncoding::export(codec.model()),
+                encoding,
                 &mut encoder,
             )
             .map_err(|error| HostError::new("GPU_ERROR", format!("{error:?}")))?;

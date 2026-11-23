@@ -22,9 +22,9 @@ use wasm_bindgen::prelude::*;
 use crate::effect::EffectRequest;
 use crate::error::{BindingError, Code, EngineTyped};
 use crate::interop::{
-    DeviceHealth, diagnostics_to_js, export_readback_promise, export_status, frame_upload_receipt,
-    gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved, set, texture_byte_len,
-    validate_texture_extent, watch_device,
+    DeviceHealth, ReadbackFrame, diagnostics_to_js, export_readback_promise, export_status,
+    frame_upload_receipt, gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved,
+    set, texture_byte_len, validate_texture_extent, watch_device,
 };
 use crate::present::{
     UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult, present_texture,
@@ -2551,6 +2551,7 @@ impl WebEffectRegistry {
             time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
             frame_index: Some(exporter.progress().completed),
         }));
+        let color = exporter.encoding().color;
         let step = exporter
             .render_next(
                 project,
@@ -2585,8 +2586,11 @@ impl WebEffectRegistry {
             self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
-            Some(index),
-            time,
+            ReadbackFrame {
+                index: Some(index),
+                time,
+                color,
+            },
         );
         Ok(readback)
     }
@@ -2619,6 +2623,7 @@ impl WebEffectRegistry {
             time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
             frame_index: Some(exporter.progress().completed),
         }));
+        let color = exporter.encoding().color;
         let step = exporter
             .render_next(
                 project,
@@ -2651,8 +2656,11 @@ impl WebEffectRegistry {
             self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
-            Some(index),
-            time,
+            ReadbackFrame {
+                index: Some(index),
+                time,
+                color,
+            },
         );
         let result = web_sys::js_sys::Object::new();
         set(&result, "kind", &JsValue::from_str("rendered"))?;
@@ -2818,10 +2826,11 @@ impl WebEffectRegistry {
             time_ticks,
             frame_index: None,
         }));
+        let encoding = YuvEncoding::export(codec);
         let (readback, missing) = if pixels.is_yuv420p() {
             let attempt = self
                 .renderer
-                .render_frame_yuv420p(size, &frame, &provider, YuvEncoding::export(codec))
+                .render_frame_yuv420p(size, &frame, &provider, encoding)
                 .map_err(|error| typed_error(&error))?;
             (attempt.readback, attempt.report.missing_sources)
         } else {
@@ -2831,11 +2840,8 @@ impl WebEffectRegistry {
             let readback = render
                 .texture
                 .map(|texture| {
-                    self.renderer.begin_layout_readback(
-                        &texture,
-                        YuvEncoding::export(codec),
-                        pixels,
-                    )
+                    self.renderer
+                        .begin_layout_readback(&texture, encoding, pixels)
                 })
                 .transpose()
                 .map_err(|error| typed_error(&error))?;
@@ -2852,8 +2858,11 @@ impl WebEffectRegistry {
             self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
-            None,
-            time,
+            ReadbackFrame {
+                index: None,
+                time,
+                color: encoding.color,
+            },
         );
         let result = web_sys::js_sys::Object::new();
         set(&result, "kind", &JsValue::from_str("rendered"))?;

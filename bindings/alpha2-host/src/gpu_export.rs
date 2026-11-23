@@ -29,7 +29,7 @@ use alpha2_audio::TransportState;
 use alpha2_engine::{
     AudioRenderer, EngineProject, ExportStepTimings, Exporter, FramesWithText, QualityProfile,
 };
-use alpha2_media::{ColorMetadata, EncodeEvent};
+use alpha2_media::EncodeEvent;
 use alpha2_native::{
     AudioStreamConfig, HardwareEncodeCapability, HardwareEncodeDevice, HardwareEncodeOpenError,
     HardwareEncodeRequest, NativeAudioCodec,
@@ -320,7 +320,7 @@ impl Host {
                 codec: capability.codec,
                 frame_rate: rate,
                 rate_control: video_rate.control,
-                color: ColorMetadata::EXPORT,
+                color: exporter.encoding().color,
                 output,
                 container,
                 audio: has_audio.then_some(AudioStreamConfig {

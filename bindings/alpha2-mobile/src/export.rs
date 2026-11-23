@@ -23,8 +23,8 @@ use alpha2_host_core::stills::{decode_still, still_format};
 use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends, VideoStream};
 use alpha2_host_core::{DecodePolicy, ProjectAudioRequest};
 use alpha2_media::{
-    AudioBlock, AudioBlockSink, CancelToken, ColorMetadata, Container, EncodeError, OutputPixels,
-    QualityLevel, SourceId, SpeakerLayout,
+    AudioBlock, AudioBlockSink, CancelToken, Container, EncodeError, OutputPixels, QualityLevel,
+    SourceId, SpeakerLayout,
 };
 use alpha2_model::{MediaKind, MediaSource, Project};
 use alpha2_render::{CpuRenderer, Renderer};
@@ -332,7 +332,7 @@ fn attempt(
             QualityLevel::default(),
         )
         .map_err(|error| Alpha2Error::invalid(error.to_string()))?,
-        color: ColorMetadata::EXPORT,
+        color: exporter.encoding().color,
         keyframe_interval: u32::try_from(alpha2_host_core::encode_policy::keyframe_interval(rate))
             .unwrap_or(1),
         software,
