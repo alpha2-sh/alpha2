@@ -3236,7 +3236,8 @@ const fn size_of<T>() -> usize {
 /// A reusable `FFmpeg` YUV420P frame the caller writes into directly.
 ///
 /// Avoids [`yuv420p_frame`]'s per-frame allocation and copy. [`Yuv420pFrameBuffer::begin_write`]
-/// returns plane memory only once `FFmpeg` no longer shares the buffer, copying it if needed.
+/// returns plane memory only once `FFmpeg` no longer shares the buffer; a shared buffer is left to
+/// its holder and replaced by zeroed memory, without the old picture.
 pub struct Yuv420pFrameBuffer {
     frame: AVFrame,
     width: usize,
@@ -3327,25 +3328,25 @@ impl Yuv420pFrameBuffer {
         Ok(written)
     }
 
+    /// Whether another reference, such as an encoder's, still holds this frame's memory.
+    ///
+    /// # Errors
+    /// Returns an error when `FFmpeg` cannot tell.
+    pub fn is_shared(&self) -> Result<bool, BridgeError> {
+        Ok(!self.frame.is_writable().map_err(BridgeError::Ffmpeg)?)
+    }
+
     fn make_writable(&mut self) -> Result<(), BridgeError> {
-        // Not `av_frame_make_writable`: it leaves SIMD row padding unwritten under slices that span
-        // it.
-        if !self.frame.is_writable().map_err(BridgeError::Ffmpeg)? {
-            let mut copy = zeroed_frame(self.frame.width, self.frame.height, self.frame.format)?;
-            // SAFETY: both frames are live with one size and format; `copy` is unshared and
-            // `self.frame` is only read.
-            let status = unsafe {
-                let copied = ffi::av_frame_copy(copy.as_mut_ptr(), self.frame.as_ptr());
-                if copied < 0 {
-                    copied
-                } else {
-                    ffi::av_frame_copy_props(copy.as_mut_ptr(), self.frame.as_ptr())
-                }
-            };
+        if self.is_shared()? {
+            let mut replacement =
+                zeroed_frame(self.frame.width, self.frame.height, self.frame.format)?;
+            // SAFETY: both frames are live, `replacement` unshared and `self.frame` only read.
+            let status =
+                unsafe { ffi::av_frame_copy_props(replacement.as_mut_ptr(), self.frame.as_ptr()) };
             if status < 0 {
                 return Err(BridgeError::FfmpegCode(status));
             }
-            self.frame = copy;
+            self.frame = replacement;
         }
         Ok(())
     }

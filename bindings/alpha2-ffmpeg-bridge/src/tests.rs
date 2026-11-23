@@ -187,23 +187,28 @@ fn plane_sum(plane: &[u8]) -> u64 {
 }
 
 /// A frame an encoder still references keeps its pixels; the next write goes to fresh, fully
-/// written memory with the same layout.
+/// written memory with the same layout, without the old picture.
 #[test]
-fn a_frame_buffer_an_encoder_still_holds_is_copied_away_before_it_is_rewritten() {
+fn a_frame_buffer_an_encoder_still_holds_is_moved_away_before_it_is_rewritten() {
     let mut buffer = Yuv420pFrameBuffer::new(6, 4).expect("buffer");
     let fill = |buffer: &mut Yuv420pFrameBuffer, value: u8| {
         let planes = buffer.begin_write().expect("writable planes");
         let strides = (planes.y_stride, planes.chroma_stride);
+        let mut before = 0;
         for plane in [planes.y, planes.u, planes.v] {
-            assert_eq!(plane_sum(plane), plane_sum(plane), "every byte written");
+            before += plane_sum(plane);
             plane.fill(value);
         }
-        strides
+        (strides, before)
     };
-    let first = fill(&mut buffer, 1);
+    let (first, _) = fill(&mut buffer, 1);
+    assert!(!buffer.is_shared().expect("shared"));
     let held = buffer.frame().clone();
     let held_planes = held.data;
-    let second = fill(&mut buffer, 9);
+    assert!(buffer.is_shared().expect("shared"));
+    let (second, carried) = fill(&mut buffer, 9);
+    assert_eq!(carried, 0, "the old picture was copied into the new memory");
+    assert!(!buffer.is_shared().expect("shared"));
     assert_eq!(first, (6, 3));
     assert_eq!(
         second, first,

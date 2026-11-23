@@ -58,9 +58,13 @@ impl Drop for PooledFrame {
     }
 }
 
-/// Encoder frames reused across the export, one per pipeline slot
-/// ([`crate::metrics::readback_encode_frame_bound`]), so frames cost no allocation or page faults.
-/// A miss allocates rather than blocking, because a frame is cheaper than a stalled coordinator.
+/// Encoder frames reused across the export, so frames cost no allocation or page faults.
+///
+/// A frame goes back to the pool when the encoder's call returns, but a frame-threaded `FFmpeg`
+/// encoder keeps its own reference until it has coded the picture. [`FramePool::take`] hands out
+/// only frames nothing else references, so the pool grows to one per pipeline slot
+/// ([`crate::metrics::readback_encode_frame_bound`]) plus the encoder's delay. A miss allocates
+/// rather than blocking, because a frame is cheaper than a stalled coordinator.
 #[derive(Debug)]
 pub struct FramePool {
     pixels: alpha2_media::PixelLayout,
@@ -85,14 +89,28 @@ impl FramePool {
         }))
     }
 
+    /// A frame nothing else references, written where it is.
+    ///
     /// # Errors
     /// Returns an error when `FFmpeg` cannot allocate the frame.
     pub fn take(self: &Arc<Self>) -> Result<PooledFrame, String> {
-        let idle = self
-            .idle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .pop();
+        let idle = {
+            let mut idle = self
+                .idle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut unshared = None;
+            for (index, frame) in idle.iter().enumerate() {
+                let shared = frame
+                    .is_shared()
+                    .map_err(|error| encode_failure("reusing an encoder frame", error))?;
+                if !shared {
+                    unshared = Some(index);
+                    break;
+                }
+            }
+            unshared.map(|index| idle.remove(index))
+        };
         let frame = if let Some(frame) = idle {
             frame
         } else {
@@ -118,7 +136,7 @@ impl FramePool {
         })
     }
 
-    /// One per pipeline slot is expected; more means frames are held longer than planned.
+    /// Every frame this pool allocated: one per pipeline slot plus the encoder's delay.
     pub fn allocated(&self) -> u64 {
         self.allocated.load(Ordering::Relaxed)
     }
@@ -758,8 +776,6 @@ fn run_encode_worker(state: &mut EncodeWorkerState) {
                     state
                         .sink
                         .write_prepared_video(frame.buffer_mut(), pts, &state.cancel);
-                // The encoder has read the frame by the time the call returns, so the loan goes
-                // back before the completion the coordinator is waiting on.
                 let _ = state.results.send(EncodeWorkerEvent::FrameReturned(frame));
                 if !span.end(state, written) {
                     return;

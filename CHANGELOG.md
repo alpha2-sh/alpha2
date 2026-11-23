@@ -66,6 +66,9 @@ All notable changes to this project are documented in this file.
   GPU-resident path, so encoders that write no color description (Media Foundation's H.264 on
   Windows) are tagged too, and frames reach the encoders tagged, so ProRes frame headers say BT.709
   instead of unspecified.
+- Exports whose encoder keeps a frame after taking it (ProRes) no longer allocate, zero and fill a
+  new encoder frame with the previous picture for every output frame; the frame pool grows to the
+  encoder's delay instead, and `encoderFramesAllocated` counts every frame it allocated.
 
 ## [0.6.1] - 2026-11-18
 

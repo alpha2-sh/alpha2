@@ -802,3 +802,37 @@ fn a_prores_export_keeps_its_readbacks_within_its_in_flight_budget() {
     }
     std::fs::remove_dir_all(&directory).ok();
 }
+
+#[test]
+fn a_frame_from_the_pool_is_written_in_place_while_the_encoder_holds_the_last_one() {
+    let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuv422p10le").expect("layout");
+    let pool = crate::encode::FramePool::new(64, 36, layout).expect("pool");
+    let mut first = pool.take().expect("frame");
+    for (plane, _) in first.buffer_mut().begin_write_planes().expect("planes") {
+        plane.fill(1);
+    }
+    let held = first.buffer_mut().frame().clone();
+    drop(first);
+    let mut second = pool.take().expect("frame");
+    let taken = second.buffer_mut().frame().data[0];
+    for (plane, _) in second.buffer_mut().begin_write_planes().expect("planes") {
+        plane.fill(2);
+    }
+    assert_eq!(
+        second.buffer_mut().frame().data[0],
+        taken,
+        "the frame the pool handed out was moved before it could be written"
+    );
+    assert_eq!(pool.allocated(), 2);
+    drop(second);
+    drop(held);
+    let mut third = pool.take().expect("frame");
+    let _ = third.buffer_mut().begin_write_planes().expect("planes");
+    let mut fourth = pool.take().expect("frame");
+    let _ = fourth.buffer_mut().begin_write_planes().expect("planes");
+    assert_eq!(
+        pool.allocated(),
+        2,
+        "frames the encoder released are reused"
+    );
+}
