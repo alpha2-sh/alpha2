@@ -2043,8 +2043,8 @@ impl WebEffectRegistry {
     }
 
     /// How frames rendered since the last call were split into GPU submissions to stay under
-    /// the watchdog budget, as JSON `{ frames, splitFrames, maxPerFrame, maxPredictedMs }` (the
-    /// native host's `performance.gpuSubmissions`). Resets the counts.
+    /// the watchdog budget, as JSON `{ frames, splitFrames, maxPerFrame, maxPredictedMs,
+    /// overBudget }` (the native host's `performance.gpuSubmissions`). Resets the counts.
     #[wasm_bindgen(js_name = takeGpuSubmissionStats)]
     pub fn take_gpu_submission_stats(&self) -> String {
         let stats = self.renderer.take_gpu_submission_stats();
