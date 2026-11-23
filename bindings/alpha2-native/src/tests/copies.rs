@@ -271,10 +271,29 @@ fn copied_audio_that_outlasts_the_video_is_not_copied() {
 /// A copy keeps the source's colour tags, so they must equal the output's exactly; a range-only tag
 /// is not copied, since the copy would be untagged where a render tags BT.709.
 #[test]
-fn a_copy_takes_only_a_source_tagged_exactly_as_the_output() {
+fn a_copy_takes_only_a_source_whose_container_and_stream_are_tagged_as_the_output() {
     let reason = copy_plan("h264-bt709-range-only.mp4", 0..60, MediaTime::ZERO, false)
         .expect_err("primaries, transfer and matrix are unspecified");
     assert!(reason.contains("tagged"), "{reason}");
+    let frame_times = copy_frame_times(0..15);
+    let plan = |name: &str| {
+        let source = corpus(name);
+        crate::plan_packet_copy(&crate::PacketCopyRequest {
+            source: &source,
+            frame_times: &frame_times,
+            width: 256,
+            height: 144,
+            codec: NativeVideoCodec::H264,
+            color: alpha2_media::ColorMetadata::EXPORT,
+            output_start: MediaTime::ZERO,
+            audio: None,
+            container: alpha2_media::Container::Mp4,
+        })
+    };
+    plan("h264-bt709-transcode.mp4").expect("the stream the next is made from is copied");
+    let reason = plan("h264-bt709-transcode-vui-bt601.mp4")
+        .expect_err("the stream declares BT.601 under a BT.709 container");
+    assert!(reason.contains("stream declares"), "{reason}");
 }
 
 #[test]

@@ -10,6 +10,9 @@ All notable changes to this project are documented in this file.
   longer fails with "a decoded picture is ..., not the output's ...". The YUV transcode is planned
   from the color the stream itself declares (the H.264 or HEVC VUI), and a picture that still
   differs from the output is rendered instead of failing the export.
+- A packet copy (`strategy` `prefer-copy` or `require-copy`) also compares the color the H.264 or
+  HEVC stream itself declares with the output's, and no longer copies a stream whose VUI contradicts
+  its container's `colr` box: such a copy kept the stream's own tags under a BT.709 container.
 
 ### Changed
 
