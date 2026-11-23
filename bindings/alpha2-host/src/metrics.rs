@@ -319,12 +319,12 @@ pub struct ExportPipelineLimits {
 /// is a configuration error rather than backpressure.
 pub fn export_pipeline_limits(
     size: RenderSize,
-    (format, layout): (wgpu::TextureFormat, alpha2_media::PixelLayout),
+    layout: alpha2_media::PixelLayout,
     budget: crate::memory::InFlightBudget,
     requested_depth: usize,
     requested_encode_depth: Option<usize>,
 ) -> Result<ExportPipelineLimits, String> {
-    let staging_bytes_per_frame = estimated_staging_bytes(size, format, layout);
+    let staging_bytes_per_frame = estimated_staging_bytes(size, layout);
     let packed_bytes_per_frame = layout.frame_bytes(size.width, size.height);
     let least = staging_bytes_per_frame.saturating_add(
         packed_bytes_per_frame

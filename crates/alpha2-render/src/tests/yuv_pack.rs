@@ -946,3 +946,145 @@ fn cpu_planes_read_back_as_the_picture_under_the_tag_they_were_packed_for() {
         }
     }
 }
+
+fn varied_halves(size: RenderSize) -> Vec<[u16; 4]> {
+    let mut state = 0x9e37_79b9_u32;
+    let mut unit = move || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        f32::from(u16::try_from(state >> 16).unwrap_or(0)) / 65_535.0
+    };
+    (0..size.width * size.height)
+        .map(|index| {
+            let alpha = match index % 5 {
+                0 => 0.0,
+                1 | 2 => 1.0,
+                _ => unit(),
+            };
+            let [red, green, blue] = [unit(), unit(), unit()];
+            [red, green, blue, 1.0].map(|value| crate::cpu::half::store_nearest(value * alpha))
+        })
+        .collect()
+}
+
+fn plane_codes(
+    layout: alpha2_media::PixelLayout,
+    size: RenderSize,
+    fill: impl FnOnce(&mut [PlaneTarget<'_>]) -> Result<(), RenderError>,
+) -> Vec<Vec<u16>> {
+    let shapes = layout.planes(size.width, size.height);
+    let mut planes = shapes
+        .iter()
+        .map(|&(width, rows, sample)| vec![0_u8; (width * sample * rows) as usize])
+        .collect::<Vec<_>>();
+    let mut targets = planes
+        .iter_mut()
+        .zip(&shapes)
+        .map(|(plane, &(width, _, sample))| PlaneTarget::new(plane, (width * sample) as usize))
+        .collect::<Vec<_>>();
+    fill(&mut targets).expect("packs");
+    drop(targets);
+    let shift = if layout.planes == alpha2_media::PlaneLayout::P010 {
+        6
+    } else {
+        0
+    };
+    planes
+        .iter()
+        .zip(&shapes)
+        .map(|(plane, &(_, _, sample))| {
+            if sample == 1 {
+                plane.iter().map(|&code| u16::from(code)).collect()
+            } else {
+                plane
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| u16::from_le_bytes(*pair) >> shift)
+                    .collect()
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn the_gpu_layout_pack_writes_the_cpu_packs_codes_but_at_rounding_ties() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 36).expect("size");
+    let texels = varied_halves(size);
+    let upload = renderer
+        .upload_linear_rgba16f(size, texels.as_flattened())
+        .expect("upload");
+    let target = crate::RenderedTexture::owned(
+        size,
+        wgpu::TextureFormat::Rgba16Float,
+        upload.texture().clone(),
+    );
+    let row = |y: usize, out: &mut [[f32; 4]]| {
+        let line = &texels[y * size.width as usize..][..out.len()];
+        for (value, bits) in out.iter_mut().zip(line) {
+            *value = crate::cpu::half::load4(*bits);
+        }
+    };
+    let picture = crate::layout_pack::Picture {
+        width: size.width as usize,
+        height: size.height as usize,
+        row: &row,
+    };
+    let full_bt601 = ColorMetadata {
+        matrix: ColorMatrix::Bt601,
+        range: ColorRange::Full,
+        ..ColorMetadata::EXPORT
+    };
+    for name in [
+        "yuva420p",
+        "yuv420p10le",
+        "p010le",
+        "yuv422p10le",
+        "yuva444p10le",
+    ] {
+        let layout = alpha2_media::PixelLayout::from_ffmpeg_name(name).expect("layout");
+        for color in [ColorMetadata::EXPORT, full_bt601] {
+            for siting in [
+                ChromaLocation::Center,
+                ChromaLocation::Left,
+                ChromaLocation::TopLeft,
+            ] {
+                let encoding = alpha2_media::YuvEncoding::new(color, siting);
+                let readback = renderer
+                    .begin_layout_readback(&target, encoding, layout)
+                    .expect("a GPU layout pack");
+                readback.wait_ready().expect("maps");
+                let device =
+                    plane_codes(layout, size, |targets| readback.finish_into_planes(targets));
+                let host = plane_codes(layout, size, |targets| {
+                    crate::layout_pack::pack_with(
+                        &picture,
+                        encoding,
+                        layout,
+                        targets,
+                        &crate::CpuRenderer::new(1).workers,
+                    )
+                });
+                for (plane, (device, host)) in device.iter().zip(&host).enumerate() {
+                    let differing = device.iter().zip(host).filter(|(a, b)| a != b).count();
+                    let largest = device
+                        .iter()
+                        .zip(host)
+                        .map(|(a, b)| a.abs_diff(*b))
+                        .max()
+                        .unwrap_or(0);
+                    // A device's FMA contraction and division may round a tie the other way.
+                    assert!(
+                        largest <= 1 && differing * 100 <= device.len(),
+                        "{name} {color:?} {siting:?} plane {plane}: {differing} of {} codes \
+                         differ from the CPU pack's, by up to {largest}",
+                        device.len()
+                    );
+                }
+            }
+        }
+    }
+}

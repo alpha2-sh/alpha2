@@ -220,7 +220,7 @@ pub(crate) fn pack_yuv420p(
 
 impl super::CpuRenderer {
     /// Packs `picture` into `layout`, one target per plane in storage order
-    /// ([`alpha2_media::PixelLayout::planes`]), as the GPU texel readback does
+    /// ([`alpha2_media::PixelLayout::planes`]), as the GPU layout readback does
     /// ([`crate::Yuv420pReadback::finish_into_planes`]), on this renderer's threads.
     ///
     /// # Errors

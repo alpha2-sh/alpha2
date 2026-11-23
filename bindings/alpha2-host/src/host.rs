@@ -1156,7 +1156,7 @@ impl Host {
         };
         crate::memory::admit(
             crate::memory::LeastWorkingSet::estimate(
-                (size, self.renderer.intermediate_format(), pixels),
+                (size, pixels),
                 (videos, threads.decoder_threads),
                 largest.bytes,
                 renderer,
@@ -2083,8 +2083,8 @@ impl Host {
             ))
         } else if !pixels.is_yuv420p() {
             Err(crate::gpu_output::GpuOutputRefusal::unavailable(
-                "alpha and 10-bit pictures are packed on the CPU; the GPU-resident path writes \
-                 8-bit 4:2:0",
+                "alpha and 10-bit pictures are read back from integer planes; the GPU-resident \
+                 path writes 8-bit 4:2:0",
             ))
         } else {
             candidate
@@ -2388,7 +2388,7 @@ impl Host {
             .transpose()?;
         let pipeline_limits = export_pipeline_limits(
             size,
-            (self.renderer.intermediate_format(), pixels),
+            pixels,
             self.memory.in_flight_budget(),
             configured_frame_depth(),
             configured_encode_channel_depth(),

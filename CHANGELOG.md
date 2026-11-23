@@ -22,14 +22,14 @@ All notable changes to this project are documented in this file.
 - **Breaking:** `alpha2-render` no longer exports `SdrOutputTransfer` or `encode_linear_rgb`.
   Nothing outside tests called them, and the export path never applied either curve: it writes
   the working space's sRGB-coded values and tags them BT.709.
-- **Breaking:** effect and composite passes round their results to the nearest half float, ties
-  to even, before the intermediate stores them, and full edge coverage is computed exactly (one
-  minus what the edges cut off). Stored values no longer drift down with every composite, blur,
-  transition or edge-sampling effect, and unsharp masks no longer drift up: a pass that computes
-  a stored value to within half a step stores that value. Exported codes move by at most a few half steps per pass,
+- **Breaking:** effect and composite passes round their results to the nearest half float, ties to
+  even, before the intermediate stores them, and full edge coverage is computed exactly (one minus
+  what the edges cut off). Stored values no longer drift down with every composite, blur, transition
+  or edge-sampling effect, and unsharp masks no longer drift up: a pass that computes a stored value
+  to within half a step stores that value. Exported codes move by at most a few half steps per pass,
   mostly at bright levels; pictures at power-of-two canvas sizes drawn through canvas-size layers
-  are unchanged. The levels, lift-gamma-gain, alpha-adjust and color-controls shaders skip `pow`
-  at an exponent of one, as the CPU renderer does (alpha-adjust now does too).
+  are unchanged. The levels, lift-gamma-gain, alpha-adjust and color-controls shaders skip `pow` at
+  an exponent of one, as the CPU renderer does (alpha-adjust now does too).
 
 - A GPU frame writes its uniforms (each source's conversion, the graph's passes and the YUV or
   NV12 pack) into one buffer with one queue write, where each conversion and the pack had a buffer
@@ -57,11 +57,17 @@ All notable changes to this project are documented in this file.
   `lossReport` and `GpuLossReport`. A time that ends at a completion seen late is an upper bound,
   and the hung message then says "ran up to t ms in one submission" or "completed together within
   t ms".
-- GPU exports to layouts other than 8-bit 4:2:0 (10-bit, 4:2:2, 4:4:4, alpha) pack each frame on
-  threads kept for the process, one per core, instead of up to eight threads started per frame.
+- **Breaking:** GPU exports to layouts other than 8-bit 4:2:0 (`yuva420p`, `yuv420p10le`,
+  `p010le`, `yuv422p10le`, `yuva444p10le`) pack each frame on the GPU, in the frame's submission,
+  into integer planes of the output layout, and read back only those planes (2.5 to 8 bytes a
+  pixel instead of the intermediate's 8, which also shrinks `stagingBytesPerFrame`). Codes are the
+  CPU pack's within one at rounding ties; the CPU renderer keeps packing on the CPU. The readback
+  no longer packs on the caller's thread, so `readbackPackMs` is a plane copy; `gpuPackMsPerFrame`
+  covers the pack passes and their copy-out. Rust: `layout_staging_bytes` takes the `PixelLayout`
+  instead of the texture format, and `Yuv420pReadback::plane_layout` returns every plane (a `Vec`).
 - **Breaking:** GPU exports to those layouts render a frame and read it back in one submission
-  instead of two, sample its GPU time (`gpuRenderMsPerFrame`, `gpuPackMsPerFrame`, the pack being
-  the copy-out) and report the submit stages (`frameQueueSubmitMs` and the other stage fields).
+  instead of two, sample its GPU time (`gpuRenderMsPerFrame`, `gpuPackMsPerFrame`) and report the
+  submit stages (`frameQueueSubmitMs` and the other stage fields).
   `gpuTimeUnavailable` tells apart an export that drew no frame on the GPU, one that drew too few
   for one to be sampled, and one whose samples were not read back in time. Rust:
   `GpuFrameRenderer` gains the required `render_frame_layout_readback`, `Renderer` gains

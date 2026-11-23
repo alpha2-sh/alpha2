@@ -684,7 +684,6 @@ pub(crate) fn export_readback_promise(
         }
         let format = readback.pixel_layout().map_or("I420", webcodecs_format);
         let (layout, pixels) = if let Some(pixels) = readback.pixel_layout() {
-            // Other layouts are packed on the CPU into tight planes.
             let (mut memory, layout, offsets) = tight_planes(pixels, size)?;
             readback
                 .finish_into_planes(&mut plane_targets(&mut memory, &offsets))

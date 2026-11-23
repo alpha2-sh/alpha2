@@ -11,6 +11,7 @@ const ENTRY_POINTS: &[&str] = &[
     "canvas-present",
     "fullscreen-quad",
     "composite",
+    "layout-pack",
     "readback-pack",
     "rgba-present",
     "rgb-to-yuv420",

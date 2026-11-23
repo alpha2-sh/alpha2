@@ -154,9 +154,9 @@ impl Renderer {
         )
     }
 
-    /// Renders a graph and copies the result out as stored, for
-    /// [`Yuv420pReadback::finish_into_planes`] to pack into `layout`, in one command buffer with
-    /// its sources' pending work.
+    /// Renders a graph and packs the result into `layout`'s planes on the GPU for
+    /// [`Yuv420pReadback::finish_into_planes`], in one command buffer with its sources' pending
+    /// work.
     ///
     /// With `timings`, also writes every span after `graph_build` to them and samples the frame's
     /// GPU time ([`Renderer::take_frame_gpu_times`]).
@@ -175,7 +175,7 @@ impl Renderer {
             graph,
             sources,
             encoding,
-            ReadbackKind::Texels(layout),
+            ReadbackKind::Layout(layout),
             timings,
         )
     }
@@ -271,13 +271,13 @@ impl Renderer {
                 &source_work,
                 match readback {
                     ReadbackKind::PackedYuv420p => FramePack::Yuv420p,
-                    ReadbackKind::Texels(_) => FramePack::Texels,
+                    ReadbackKind::Layout(layout) => FramePack::Layout(layout),
                 },
             )
             .map_err(GraphError::into_render_error)?;
         let mut command_encoder = self.command_encoder(match readback {
             ReadbackKind::PackedYuv420p => "alpha2 render and YUV420P readback encoder",
-            ReadbackKind::Texels(_) => "alpha2 render and texel readback encoder",
+            ReadbackKind::Layout(_) => "alpha2 render and layout readback encoder",
         });
         // Only an export's timed frames are sampled.
         let sample = measure
@@ -297,15 +297,20 @@ impl Renderer {
             sample.graph_end(&mut command_encoder);
         }
         let (output, uniforms) = graph_work.output_and_uniforms();
-        let readback_work =
-            match readback {
-                ReadbackKind::Texels(layout) => EncodedReadback::Layout(
-                    self.encode_layout_readback(output, encoding, layout, &mut command_encoder)?,
-                ),
-                ReadbackKind::PackedYuv420p => EncodedReadback::Yuv420p(Box::new(
-                    self.encode_yuv420p_readback(output, encoding, &mut command_encoder, uniforms)?,
-                )),
-            };
+        let readback_work = match readback {
+            ReadbackKind::Layout(layout) => {
+                EncodedReadback::Layout(Box::new(self.encode_layout_readback(
+                    output,
+                    encoding,
+                    layout,
+                    &mut command_encoder,
+                    uniforms,
+                )?))
+            }
+            ReadbackKind::PackedYuv420p => EncodedReadback::Yuv420p(Box::new(
+                self.encode_yuv420p_readback(output, encoding, &mut command_encoder, uniforms)?,
+            )),
+        };
         if let Some(sample) = &sample {
             sample.pack_end(&mut command_encoder);
         }
@@ -333,7 +338,7 @@ impl Renderer {
                 false,
             ),
             EncodedReadback::Layout(work) => self.complete_layout_readback(
-                work,
+                *work,
                 #[cfg(not(target_arch = "wasm32"))]
                 submitted.submission,
                 false,
@@ -355,12 +360,12 @@ impl Renderer {
 #[derive(Copy, Clone)]
 enum ReadbackKind {
     PackedYuv420p,
-    Texels(PixelLayout),
+    Layout(PixelLayout),
 }
 
 enum EncodedReadback {
     Yuv420p(Box<crate::readback::EncodedYuv420pReadback>),
-    Layout(crate::readback::EncodedLayoutReadback),
+    Layout(Box<crate::readback::EncodedLayoutReadback>),
 }
 
 /// Stages external textures' native waits and signals on the submission about to sample them.

@@ -571,7 +571,10 @@ impl Renderer {
             .sum::<u64>()
             + match pack {
                 FramePack::Yuv420p | FramePack::Nv12 => graph.size.pixels() * 3 / 2,
-                FramePack::Nothing | FramePack::Texels => 0,
+                FramePack::Layout(layout) => {
+                    layout.frame_bytes(graph.size.width, graph.size.height)
+                }
+                FramePack::Nothing => 0,
             };
         let mut held = vec![0_u64; graph.nodes.len()];
         let (mut alive, mut peak) = (0_u64, 0_u64);

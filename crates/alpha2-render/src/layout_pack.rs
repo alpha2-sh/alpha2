@@ -1,8 +1,9 @@
 //! Packs a frame into output [`PixelLayout`]s other than 8-bit 4:2:0: 10-bit codes, 4:2:2 and
 //! 4:4:4 chroma, and alpha planes.
 //!
-//! Both the GPU readback and the CPU renderer pack here, so they write identical codes. 8-bit
-//! opaque 4:2:0 uses rgb-to-yuv420.wesl and `cpu::pack` instead.
+//! The CPU renderer packs here; the GPU renderer packs with layout-pack.wesl, which mirrors this
+//! coding ([`gpu_params`]) to within one code. 8-bit opaque 4:2:0 uses rgb-to-yuv420.wesl and
+//! `cpu::pack` instead.
 //!
 //! Opaque layouts keep premultiplied color, like the 8-bit pack. Layouts with alpha write
 //! straight color `rgb / a` (black at `a = 0`) and weight subsampled chroma taps by alpha so
@@ -13,7 +14,6 @@ use std::cell::Cell;
 
 use alpha2_media::{BitDepth, ChromaLocation, ColorMatrix, PixelLayout, PlaneLayout, YuvEncoding};
 
-use crate::cpu::Workers;
 use crate::{PlaneTarget, ReadbackFailure, RenderError};
 
 /// Picture rows a pack reads: `row(y, out)` writes row `y` as premultiplied RGBA.
@@ -98,6 +98,47 @@ impl Coding {
     }
 }
 
+pub(crate) const GPU_PARAMS_WORDS: usize = 16;
+
+/// Mirrors [`Coding`] and the taps into layout-pack.wesl's `LayoutParams`.
+pub(crate) fn gpu_params(encoding: YuvEncoding, layout: PixelLayout) -> [u32; GPU_PARAMS_WORDS] {
+    let coding = Coding::new(encoding, layout.bit_depth);
+    let (step_x, step_y) = layout.chroma.subsampling();
+    let (cosited_x, cosited_y) = siting(encoding.chroma);
+    let code_shift = match (layout.bit_depth, layout.planes) {
+        (BitDepth::Ten, PlaneLayout::P010) => P010_SHIFT,
+        _ => 0,
+    };
+    let floats = [
+        coding.kr,
+        coding.kg,
+        coding.kb,
+        coding.maximum,
+        coding.luma_black,
+        coding.luma_span,
+        coding.chroma_center,
+        coding.chroma_span,
+    ];
+    let words = [
+        step_x,
+        step_y,
+        u32::from(cosited_x),
+        u32::from(cosited_y),
+        u32::from(layout.alpha),
+        code_shift,
+        0,
+        0,
+    ];
+    let mut params = [0; GPU_PARAMS_WORDS];
+    for (slot, value) in params
+        .iter_mut()
+        .zip(floats.map(f32::to_bits).into_iter().chain(words))
+    {
+        *slot = value;
+    }
+    params
+}
+
 /// Weight of the luma sample `offset` from a chroma sample's even column or row, matching the
 /// 8-bit pack's `tap_weight`.
 fn tap_weight(offset: i64, cosited: bool) -> f32 {
@@ -158,11 +199,13 @@ impl Store for Word {
 /// `P010` keeps a 10-bit code in the high bits of a little-endian word.
 struct HighWord;
 
+const P010_SHIFT: u32 = 6;
+
 impl Store for HighWord {
     const BYTES: usize = 2;
 
     fn write(sample: &mut [u8], code: u16) {
-        sample.copy_from_slice(&(code << 6).to_le_bytes());
+        sample.copy_from_slice(&(code << P010_SHIFT).to_le_bytes());
     }
 }
 
@@ -179,44 +222,6 @@ pub(crate) trait Bands: Sync {
 
     /// Calls `job(index)` once for every index below `count`, in any order, possibly in parallel.
     fn run(&self, count: usize, job: &(dyn Fn(usize) + Sync));
-}
-
-struct KeptThreads(Workers);
-
-impl Bands for KeptThreads {
-    fn rows_per_band(&self, chroma_rows: usize, row_pixels: usize) -> usize {
-        if self.0.threads() > 1 {
-            self.0.band_rows(row_pixels)
-        } else {
-            chroma_rows
-        }
-    }
-
-    fn run(&self, count: usize, job: &(dyn Fn(usize) + Sync)) {
-        self.0.for_each(count, job);
-    }
-}
-
-fn readback_threads() -> &'static KeptThreads {
-    static THREADS: std::sync::OnceLock<KeptThreads> = std::sync::OnceLock::new();
-    THREADS.get_or_init(|| {
-        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-        KeptThreads(Workers::named(cores, "alpha2-pack"))
-    })
-}
-
-/// Packs `picture` into one target per plane of `layout`, in storage order
-/// ([`PixelLayout::planes`]), in bands on threads kept from one pack to the next, one per core.
-///
-/// # Errors
-/// As [`pack_with`].
-pub(crate) fn pack<R: Fn(usize, &mut [[f32; 4]]) + Sync>(
-    picture: &Picture<'_, R>,
-    encoding: YuvEncoding,
-    layout: PixelLayout,
-    targets: &mut [PlaneTarget<'_>],
-) -> Result<(), RenderError> {
-    pack_with(picture, encoding, layout, targets, readback_threads())
 }
 
 /// Packs `picture` into one target per plane of `layout`, in storage order

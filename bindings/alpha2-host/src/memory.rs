@@ -454,22 +454,17 @@ pub struct LeastWorkingSet {
 
 impl LeastWorkingSet {
     pub fn estimate(
-        (size, format, layout): (
-            alpha2_render::RenderSize,
-            wgpu::TextureFormat,
-            alpha2_media::PixelLayout,
-        ),
+        (size, layout): (alpha2_render::RenderSize, alpha2_media::PixelLayout),
         (videos, decoder_threads): (usize, i64),
         frame_bytes: u64,
         renderer: u64,
     ) -> Self {
         // One readback and two packed frames, in the output's layout.
-        let in_flight = crate::frames::estimated_staging_bytes(size, format, layout)
-            .saturating_add(
-                layout
-                    .frame_bytes(size.width, size.height)
-                    .saturating_mul(2),
-            );
+        let in_flight = crate::frames::estimated_staging_bytes(size, layout).saturating_add(
+            layout
+                .frame_bytes(size.width, size.height)
+                .saturating_mul(2),
+        );
         let sessions = u64::try_from(videos.min(crate::MAX_DECODER_SESSIONS)).unwrap_or(1);
         Self {
             in_flight,

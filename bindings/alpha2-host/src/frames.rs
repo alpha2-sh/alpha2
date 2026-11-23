@@ -1594,21 +1594,12 @@ impl FrameProvider for NativeFrames {
     }
 }
 
-/// The buffer one readback of a `layout` frame maps: 8-bit 4:2:0 is packed on the GPU, any other
-/// layout reads the intermediate's texels back and packs on the CPU.
-pub fn estimated_staging_bytes(
-    size: RenderSize,
-    format: wgpu::TextureFormat,
-    layout: alpha2_media::PixelLayout,
-) -> u64 {
+/// The buffer one readback of a `layout` frame maps: its planes, packed on the GPU, with padded
+/// rows.
+pub fn estimated_staging_bytes(size: RenderSize, layout: alpha2_media::PixelLayout) -> u64 {
     // Pack textures return to the pool once their copy is submitted; only the mapped buffer stays
     // with the readback.
-    if layout.is_yuv420p() {
-        alpha2_render::yuv420p_staging_bytes(size)
-    } else {
-        alpha2_render::layout_staging_bytes(size, format)
-    }
-    .unwrap_or(u64::MAX)
+    alpha2_render::layout_staging_bytes(size, layout).unwrap_or(u64::MAX)
 }
 
 /// Source of request scopes for result-cache keys; every request takes a new one.

@@ -16,15 +16,6 @@ mod execute;
 mod frames;
 pub(crate) mod half;
 
-/// The value a stored half float holds.
-pub(crate) fn half_value(bits: u16) -> f32 {
-    half::load(bits)
-}
-
-/// The value an 8-bit code samples as.
-pub(crate) fn unorm8_value(code: u8) -> f32 {
-    half::unorm8_value(code)
-}
 mod image;
 mod kernels;
 mod pack;
@@ -42,5 +33,4 @@ pub(crate) use vector::over as premultiplied_over;
 pub use image::CpuImage;
 pub use renderer::{CpuRenderStats, CpuRenderer};
 pub use source::{CpuSource, RgbaPixels, YuvPlanes};
-pub(crate) use workers::Workers;
 pub use workers::{BandProgress, report_band_progress};

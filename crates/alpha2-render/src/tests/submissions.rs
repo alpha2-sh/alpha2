@@ -631,6 +631,89 @@ fn a_pack_is_charged_to_the_frame_it_packs() {
 }
 
 #[test]
+fn a_layout_pack_is_charged_its_passes_and_plane_copies() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let view = flat_source(&renderer, size);
+    let (effect, _) = registered(
+        &renderer,
+        runtime_tint_effect(
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
+        ),
+    );
+    let graph = effect_graph(&view, &effect, size);
+    drop(renderer.execute_graph(&graph).expect("the graph renders"));
+    let unpacked = renderer
+        .take_frame_submissions()
+        .expect("the frame's submissions");
+    let half = renderer.intermediate_format() == wgpu::TextureFormat::Rgba16Float;
+    for name in ["yuva420p", "p010le", "yuv422p10le", "yuva444p10le"] {
+        let layout = alpha2_media::PixelLayout::from_ffmpeg_name(name).expect("layout");
+        if layout.bit_depth == alpha2_media::BitDepth::Ten && !half {
+            continue;
+        }
+        renderer
+            .render_graph_layout_readback(
+                &graph,
+                &[],
+                centred(ColorMetadata::default()),
+                layout,
+                None,
+            )
+            .expect("the frame renders")
+            .wait_ready()
+            .expect("the readback maps");
+        let packed = renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions");
+        let mut expected = unpacked.cost;
+        expected.add_cost(crate::readback::layout_pack_work(size, layout));
+        assert_eq!(
+            packed.cost.unit_pixels(),
+            expected.unit_pixels(),
+            "{name}: packed {packed:?}, unpacked {unpacked:?}"
+        );
+    }
+}
+
+#[test]
+fn a_layout_pack_writes_its_uniform_into_the_frames_arena() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let view = flat_source(&renderer, size);
+    let (effect, _) = registered(
+        &renderer,
+        runtime_tint_effect(
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
+        ),
+    );
+    let graph = effect_graph(&view, &effect, size);
+    let leased = || {
+        let stats = renderer.diagnostics().uniform_buffers;
+        stats.created + stats.reused
+    };
+    let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuva420p").expect("layout");
+    let before = leased();
+    renderer
+        .render_graph_layout_readback(&graph, &[], centred(ColorMetadata::default()), layout, None)
+        .expect("the frame renders")
+        .wait_ready()
+        .expect("the readback maps");
+    assert_eq!(leased() - before, 1);
+    let plan = graph.compile().expect("plan");
+    let prepared = renderer.prepare_frame(&graph, &plan.order);
+    let capacity =
+        |pack| prepared.uniform_capacity(&[], &plan.order, pack, renderer.uniform_alignment());
+    assert!(
+        capacity(crate::prepared_frame::FramePack::Layout(layout))
+            >= capacity(crate::prepared_frame::FramePack::Nothing)
+                + crate::readback::LAYOUT_PACK_UNIFORM_BYTES
+    );
+}
+
+#[test]
 fn a_frame_whose_conversions_pass_the_planning_threshold_is_planned() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());

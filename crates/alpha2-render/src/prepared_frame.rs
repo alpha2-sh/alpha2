@@ -136,10 +136,15 @@ impl PreparedFrame {
                 }
             });
         match pack {
-            FramePack::Nothing | FramePack::Texels => cursor,
+            FramePack::Nothing => cursor,
             FramePack::Yuv420p | FramePack::Nv12 => {
                 aligned_uniform_end(cursor, crate::readback::YUV_PACK_UNIFORM_BYTES, alignment)
             }
+            FramePack::Layout(_) => aligned_uniform_end(
+                cursor,
+                crate::readback::LAYOUT_PACK_UNIFORM_BYTES,
+                alignment,
+            ),
         }
     }
 }
@@ -153,7 +158,7 @@ impl FramePack {
                 work.add_cost(crate::readback::pack_chroma_work(size));
                 work
             }
-            Self::Texels => crate::readback::texel_copy_work(size),
+            Self::Layout(layout) => crate::readback::layout_pack_work(size, layout),
         }
     }
 }
@@ -163,7 +168,7 @@ pub(crate) enum FramePack {
     Nothing,
     Yuv420p,
     Nv12,
-    Texels,
+    Layout(alpha2_media::PixelLayout),
 }
 
 pub(crate) fn composite_uniform_capacity(composite: &PreparedComposite, alignment: u64) -> u64 {

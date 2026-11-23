@@ -92,10 +92,7 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     let size = RenderSize::new(3_840, 2_160).expect("4K size");
     let limits = export_pipeline_limits(
         size,
-        (
-            wgpu::TextureFormat::Rgba16Float,
-            alpha2_media::PixelLayout::YUV420P,
-        ),
+        alpha2_media::PixelLayout::YUV420P,
         InFlightBudget::requested(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -124,10 +121,7 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
 
     let pinned = export_pipeline_limits(
         size,
-        (
-            wgpu::TextureFormat::Rgba16Float,
-            alpha2_media::PixelLayout::YUV420P,
-        ),
+        alpha2_media::PixelLayout::YUV420P,
         InFlightBudget::requested(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         Some(2),
@@ -137,10 +131,7 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
 
     let tight = export_pipeline_limits(
         size,
-        (
-            wgpu::TextureFormat::Rgba16Float,
-            alpha2_media::PixelLayout::YUV420P,
-        ),
+        alpha2_media::PixelLayout::YUV420P,
         InFlightBudget::requested(12_718_080 + 16 + 12_441_600 * 3),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -152,10 +143,7 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     let least = 12_718_080 + 16 + 12_441_600 * 2;
     let rendezvous = export_pipeline_limits(
         size,
-        (
-            wgpu::TextureFormat::Rgba16Float,
-            alpha2_media::PixelLayout::YUV420P,
-        ),
+        alpha2_media::PixelLayout::YUV420P,
         InFlightBudget::requested(least),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -165,10 +153,7 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     assert_eq!(rendezvous.encode_channel_depth, 0);
     let error = export_pipeline_limits(
         size,
-        (
-            wgpu::TextureFormat::Rgba16Float,
-            alpha2_media::PixelLayout::YUV420P,
-        ),
+        alpha2_media::PixelLayout::YUV420P,
         InFlightBudget::requested(least - 1),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -186,10 +171,7 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     assert!(
         export_pipeline_limits(
             size,
-            (
-                wgpu::TextureFormat::Rgba16Float,
-                alpha2_media::PixelLayout::YUV420P
-            ),
+            alpha2_media::PixelLayout::YUV420P,
             InFlightBudget::requested(1),
             1,
             Some(0)
@@ -212,10 +194,7 @@ fn a_retry_scale_holds_the_least_an_export_needs() {
     .expect("policy");
     let limits = export_pipeline_limits(
         size,
-        (
-            wgpu::TextureFormat::Rgba16Float,
-            alpha2_media::PixelLayout::YUV420P,
-        ),
+        alpha2_media::PixelLayout::YUV420P,
         minimal.in_flight_budget(),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -232,10 +211,7 @@ fn a_retry_scale_holds_the_least_an_export_needs() {
     .expect("policy");
     let refused = export_pipeline_limits(
         size,
-        (
-            wgpu::TextureFormat::Rgba16Float,
-            alpha2_media::PixelLayout::YUV420P,
-        ),
+        alpha2_media::PixelLayout::YUV420P,
         small.in_flight_budget(),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -499,10 +475,9 @@ fn a_rendezvous_export_waits_only_for_the_encoder() {
     let directory = scratch_directory("rendezvous-export");
     let size = RenderSize::new(640, 360).expect("size");
     let layout = alpha2_media::PixelLayout::YUV420P;
-    let least =
-        crate::frames::estimated_staging_bytes(size, wgpu::TextureFormat::Rgba16Float, layout)
-            + layout.frame_bytes(size.width, size.height)
-                * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
+    let least = crate::frames::estimated_staging_bytes(size, layout)
+        + layout.frame_bytes(size.width, size.height)
+            * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
     let end = 2 * alpha2_time::TICKS_PER_SECOND;
     crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
     let request = json!({
@@ -671,64 +646,25 @@ fn default_budget(bytes: u64) -> InFlightBudget {
 }
 
 #[test]
-fn the_in_flight_plan_prices_readbacks_and_frames_in_the_output_layout() {
-    let format = wgpu::TextureFormat::Rgba16Float;
+fn a_readback_maps_no_more_than_the_frame_its_encoder_takes() {
     let size = RenderSize::new(3_840, 2_160).expect("4K");
-    for (name, packed) in [
-        ("yuv422p10le", 3_840 * 2_160 * 4),
-        ("yuva444p10le", 3_840 * 2_160 * 8),
+    for name in [
+        "yuv420p",
+        "yuva420p",
+        "yuv420p10le",
+        "p010le",
+        "yuv422p10le",
+        "yuva444p10le",
     ] {
         let layout = alpha2_media::PixelLayout::from_ffmpeg_name(name).expect("layout");
-        let limits = export_pipeline_limits(
-            size,
-            (format, layout),
-            default_budget(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
-            MAX_IN_FLIGHT_VIDEO_FRAMES,
-            None,
-        )
-        .expect("the default budget holds a 4K layout export");
-        assert_eq!(limits.packed_bytes_per_frame, packed, "{name}");
-        // The intermediate's 8-byte texels, one aligned row per row, then the 16-byte canary.
-        assert_eq!(
-            limits.staging_bytes_per_frame,
-            3_840 * 8 * 2_160 + 16,
-            "{name}"
+        let staging = crate::frames::estimated_staging_bytes(size, layout);
+        let packed = layout.frame_bytes(size.width, size.height);
+        // A tenth covers rows padded to the copy alignment, plane placement and the canary.
+        assert!(
+            staging <= packed + packed / 10,
+            "{name}: {staging} bytes mapped for a {packed}-byte frame"
         );
-        let reserved = limits.staging_bytes_per_frame
-            * u64::try_from(limits.readback_depth).expect("depth")
-            + limits.packed_bytes_per_frame
-                * u64::try_from(crate::metrics::readback_encode_frame_bound(
-                    limits.encode_channel_depth,
-                ))
-                .expect("depth");
-        assert!(reserved <= limits.byte_budget, "{name}: {limits:?}");
     }
-
-    let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuv422p10le").expect("layout");
-    let size = RenderSize::new(7_680, 4_320).expect("8K");
-    let least = 7_680 * 8 * 4_320 + 16 + 7_680 * 4_320 * 4 * 2;
-    let limits = export_pipeline_limits(
-        size,
-        (format, layout),
-        default_budget(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
-        MAX_IN_FLIGHT_VIDEO_FRAMES,
-        None,
-    )
-    .expect("a default budget never refuses the least an export needs");
-    assert_eq!((limits.readback_depth, limits.encode_channel_depth), (1, 0));
-    assert_eq!(limits.byte_budget, least);
-    let refused = export_pipeline_limits(
-        size,
-        (format, layout),
-        InFlightBudget::requested(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
-        MAX_IN_FLIGHT_VIDEO_FRAMES,
-        None,
-    )
-    .expect_err("an explicit budget still refuses");
-    assert!(
-        refused.contains("two packed 7680x4320 yuv422p10le frames"),
-        "{refused}"
-    );
 }
 
 #[test]
@@ -738,8 +674,7 @@ fn a_prores_export_keeps_its_readbacks_within_its_in_flight_budget() {
     let directory = scratch_directory("prores-in-flight");
     let size = RenderSize::new(640, 360).expect("size");
     let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuv422p10le").expect("layout");
-    let staging =
-        crate::frames::estimated_staging_bytes(size, host.renderer.intermediate_format(), layout);
+    let staging = crate::frames::estimated_staging_bytes(size, layout);
     let packed = layout.frame_bytes(640, 360);
     let least = staging
         + packed * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
@@ -885,7 +820,7 @@ fn a_4k_alpha_prores_export_keeps_two_frames_in_flight_under_the_default_budget(
     let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuva444p10le").expect("layout");
     let limits = export_pipeline_limits(
         size,
-        (wgpu::TextureFormat::Rgba16Float, layout),
+        layout,
         default_budget(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
         crate::DEFAULT_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -906,7 +841,7 @@ fn a_4k_alpha_prores_export_keeps_two_frames_in_flight_under_the_default_budget(
 
     let pinned = export_pipeline_limits(
         size,
-        (wgpu::TextureFormat::Rgba16Float, layout),
+        layout,
         default_budget(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
         crate::DEFAULT_IN_FLIGHT_VIDEO_FRAMES,
         Some(1),
