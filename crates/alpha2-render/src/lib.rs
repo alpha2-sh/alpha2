@@ -41,6 +41,7 @@ mod masking;
 mod paint_wgsl;
 mod pipeline;
 mod pool;
+mod prepared_frame;
 mod present;
 mod readback;
 mod recent_use;

@@ -64,14 +64,12 @@ impl Renderer {
     pub(crate) fn encode_effect_pass(
         &self,
         encoder: &mut crate::renderer::RenderEncoder,
+        registered: Option<&crate::Shared<crate::registry::RegisteredEffect>>,
         pass: EffectPass<'_>,
         uniforms: &mut UniformArenaLease,
     ) -> Result<Option<PendingEffectTiming>, RenderError> {
-        let registered = self
-            .effects()
-            .get(pass.id)
-            .ok_or(RenderError::UnknownEffect)?;
-        self.encode_registered_pass(encoder, &registered, pass, uniforms)
+        let registered = registered.ok_or(RenderError::UnknownEffect)?;
+        self.encode_registered_pass(encoder, registered, pass, uniforms)
     }
 
     #[allow(clippy::too_many_lines)]

@@ -478,6 +478,54 @@ fn every_uniform_a_graph_writes_fits_the_arena_at_the_adapters_own_alignment() {
     }
 }
 
+#[test]
+fn an_effect_registered_while_a_frame_encodes_never_overruns_the_frames_uniform_arena() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let compiled = pollster::block_on(
+        renderer
+            .compile_effect(effect_with_float_params("test.registered-late", 64))
+            .expect("valid")
+            .compiled(),
+    )
+    .expect("compiles");
+    let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut graph = RenderGraph::new(RenderSize::new(4, 4).expect("size"));
+    let source = graph.add_source(SourceView::from_wgpu(&view));
+    let effect = graph
+        .add_effect(
+            compiled.id().clone(),
+            source,
+            EffectParams::new(),
+            EffectRuntime::default(),
+        )
+        .expect("effect");
+    graph.set_output(effect).expect("output");
+    graph
+        .set_cache_intent(effect, crate::CacheIntent::Auto)
+        .expect("known node");
+    let (shared, graph) = (&renderer, &graph);
+    let frame = std::thread::scope(|scope| {
+        let result_cache = shared.lock_result_cache();
+        let frame = scope.spawn(move || shared.execute_graph(graph).map(drop));
+        while shared.uniform_buffers.stats().active == 0 && !frame.is_finished() {
+            std::thread::yield_now();
+        }
+        shared.register_compiled(compiled).expect("registers");
+        drop(result_cache);
+        frame.join()
+    });
+    let frame = frame.map_err(|panic| panic.downcast_ref::<&str>().copied());
+    assert!(
+        matches!(
+            frame,
+            Ok(Ok(()) | Err(GraphError::Render(RenderError::UnknownEffect)))
+        ),
+        "{frame:?}"
+    );
+}
+
 fn effect_with_float_params(id: &str, count: usize) -> EffectDef {
     EffectDef {
         id: id.into(),

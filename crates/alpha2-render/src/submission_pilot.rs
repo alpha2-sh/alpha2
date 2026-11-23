@@ -28,12 +28,17 @@ pub(crate) fn pilot_rows(height: u32, unit_pixels_per_row: f64, ms_per_unit_pixe
 impl crate::Renderer {
     pub(crate) fn pilot_passes<'a>(
         &self,
-        nodes: impl IntoIterator<Item = &'a crate::graph::RenderNode<'a>>,
+        nodes: impl IntoIterator<
+            Item = (
+                &'a crate::graph::RenderNode<'a>,
+                Option<&'a crate::Shared<crate::registry::RegisteredEffect>>,
+            ),
+        >,
         size: crate::RenderSize,
     ) {
         let pixels = u64::from(size.width) * u64::from(size.height);
         let mut piloted = Vec::new();
-        for node in nodes {
+        for (node, registered) in nodes {
             let (effect, kind, params, resources, runtime) = match node {
                 crate::graph::RenderNode::Effect {
                     effect,
@@ -75,7 +80,7 @@ impl crate::Renderer {
                 ),
                 _ => continue,
             };
-            let Some(registered) = self.effects().get(effect) else {
+            let Some(registered) = registered else {
                 continue;
             };
             #[expect(
@@ -92,7 +97,7 @@ impl crate::Renderer {
             }
             piloted.push(key);
             let piloted_pass = self.pilot(
-                &registered,
+                registered,
                 key,
                 crate::runtime_effect::EffectPass {
                     id: effect,
@@ -135,7 +140,7 @@ impl crate::Renderer {
         );
         let band_unit_pixels = unit_pixels_per_row * f64::from(rows);
         let alignment = u64::from(self.limits.min_uniform_buffer_offset_alignment.max(1));
-        let uniform_bytes = crate::graph_execute::effect_uniform_capacity(
+        let uniform_bytes = crate::prepared_frame::effect_uniform_capacity(
             registered.definition.params.len(),
             alignment,
         );

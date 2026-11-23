@@ -4,11 +4,9 @@ use web_time::Instant;
 use crate::composite::CompositeTarget;
 use crate::graph::{GraphError, RenderCacheKey, RenderGraph, RenderNode, RenderNodeId};
 use crate::graph_cache::{renderer_cache_key, renderer_node_key};
+use crate::prepared_frame::PreparedNode;
 use crate::runtime_effect::{EffectPass, PendingEffectTiming};
-use crate::uniform::{
-    BATCH_UNIFORM_FLOATS, RUNTIME_UNIFORM_WORDS, UniformArenaLease, aligned_uniform_end,
-    float_uniform_bytes, param_uniform_bytes,
-};
+use crate::uniform::UniformArenaLease;
 use crate::{
     CompositeLayer, EffectId, EffectKind, RenderedTexture, Renderer, ShaderDiagnostics,
     WarmupReport,
@@ -142,33 +140,32 @@ impl Renderer {
             return Err(GraphError::SourceOutput);
         }
         let format = self.intermediate_format();
+        let prepared = self.prepare_frame(graph, &plan.order);
         let uniform_alignment = u64::from(self.limits.min_uniform_buffer_offset_alignment.max(1));
-        let uniform_capacity = graph_uniform_capacity(self, graph, &plan.order, uniform_alignment);
-        let mut uniforms = self
-            .uniform_buffers
-            .acquire(self.gpu.device(), uniform_capacity);
+        let mut uniforms = self.uniform_buffers.acquire(
+            self.gpu.device(),
+            prepared.uniform_capacity(&plan.order, uniform_alignment),
+        );
         let mut outputs: Vec<Option<RenderedTexture>> =
             (0..graph.nodes.len()).map(|_| None).collect();
         let blend_space = graph.blend_space.unwrap_or(self.blend_space).shader_value();
         let cached = self.cached_results(graph, &plan.order, plan.output, blend_space);
         let pixels = u64::from(graph.size.width) * u64::from(graph.size.height);
-        let predicted = plan
-            .order
-            .iter()
-            .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
-            .fold(crate::FrameCost::default(), |mut total, node| {
-                if let Some(cost) = self.node_cost(&graph.nodes[node.index]) {
-                    total.add(cost, pixels);
-                }
-                total
-            });
+        let drawn = || {
+            plan.order
+                .iter()
+                .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
+        };
+        let predicted = drawn().fold(crate::FrameCost::default(), |mut total, node| {
+            if let Some(cost) = node_cost(&graph.nodes[node.index], prepared.node(*node)) {
+                total.add(cost, pixels);
+            }
+            total
+        });
         self.plan_submissions(encoder, predicted);
         if encoder.planner().is_planned() {
             self.pilot_passes(
-                plan.order
-                    .iter()
-                    .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
-                    .map(|node| &graph.nodes[node.index]),
+                drawn().map(|node| (&graph.nodes[node.index], prepared.registration(*node))),
                 graph.size,
             );
         }
@@ -199,9 +196,9 @@ impl Renderer {
                     resources,
                     runtime,
                 } => {
-                    if self
-                        .effect_definition(effect)
-                        .is_some_and(|definition| definition.kind != EffectKind::Effect)
+                    let registered = prepared.registration(node_id);
+                    if registered
+                        .is_some_and(|registered| registered.definition.kind != EffectKind::Effect)
                     {
                         return Err(GraphError::EffectKindMismatch);
                     }
@@ -218,6 +215,7 @@ impl Renderer {
                     );
                     if let Some(pending) = self.encode_effect_pass(
                         encoder,
+                        registered,
                         EffectPass {
                             id: effect,
                             kind: crate::RenderNodeKind::Effect,
@@ -245,10 +243,10 @@ impl Renderer {
                     resources,
                     runtime,
                 } => {
-                    if self
-                        .effect_definition(effect)
-                        .is_some_and(|definition| definition.kind != EffectKind::Transition)
-                    {
+                    let registered = prepared.registration(node_id);
+                    if registered.is_some_and(|registered| {
+                        registered.definition.kind != EffectKind::Transition
+                    }) {
                         return Err(GraphError::EffectKindMismatch);
                     }
                     let from_view = graph_view(graph, &outputs, *from)?;
@@ -261,6 +259,7 @@ impl Renderer {
                     );
                     if let Some(pending) = self.encode_effect_pass(
                         encoder,
+                        registered,
                         EffectPass {
                             id: effect,
                             kind: crate::RenderNodeKind::Transition,
@@ -286,10 +285,10 @@ impl Renderer {
                     resources,
                     runtime,
                 } => {
-                    if self
-                        .effect_definition(effect)
-                        .is_some_and(|definition| definition.kind != EffectKind::Generator)
-                    {
+                    let registered = prepared.registration(node_id);
+                    if registered.is_some_and(|registered| {
+                        registered.definition.kind != EffectKind::Generator
+                    }) {
                         return Err(GraphError::EffectKindMismatch);
                     }
                     let target = self.textures.acquire(
@@ -301,6 +300,7 @@ impl Renderer {
                     // A generator samples nothing, but its bindings still need a texture.
                     if let Some(pending) = self.encode_effect_pass(
                         encoder,
+                        registered,
                         EffectPass {
                             id: effect,
                             kind: crate::RenderNodeKind::Generator,
@@ -346,6 +346,9 @@ impl Renderer {
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
                 RenderNode::Composite { layers, background } => {
+                    let prepared_composite = prepared
+                        .composite(node_id)
+                        .ok_or(GraphError::Render(crate::RenderError::InvalidGraph))?;
                     encoder.place_pass(
                         crate::submission_planner::COMPOSITE_LAYER_COST
                             .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
@@ -378,6 +381,7 @@ impl Renderer {
                             encoder,
                             graph.size,
                             &composite_layers,
+                            prepared_composite,
                             CompositeTarget {
                                 background: *background,
                                 blend_space: graph.blend_space.unwrap_or(self.blend_space),
@@ -425,23 +429,6 @@ impl Renderer {
         })
     }
 
-    /// Predicted per-pixel cost of drawing `node`; `None` for sources.
-    fn node_cost(&self, node: &RenderNode<'_>) -> Option<crate::effect_cost::EffectCost> {
-        match node {
-            RenderNode::Effect { effect, .. }
-            | RenderNode::Transition { effect, .. }
-            | RenderNode::Generator { effect, .. } => {
-                self.effects().get(effect).map(|registered| registered.cost)
-            }
-            RenderNode::Composite { layers, .. } => Some(
-                crate::submission_planner::COMPOSITE_LAYER_COST
-                    .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
-            ),
-            RenderNode::Vector { .. } => Some(crate::submission_planner::VECTOR_COST),
-            RenderNode::Source(_) => None,
-        }
-    }
-
     pub(crate) fn complete_graph_work(
         &self,
         encoded: EncodedGraph,
@@ -479,68 +466,21 @@ impl Renderer {
     }
 }
 
-fn graph_uniform_capacity(
-    renderer: &Renderer,
-    graph: &RenderGraph<'_>,
-    order: &[RenderNodeId],
-    alignment: u64,
-) -> u64 {
-    let mut capacity = 0_u64;
-    for node in order {
-        match &graph.nodes[node.index] {
-            RenderNode::Effect { effect, .. }
-            | RenderNode::Transition { effect, .. }
-            | RenderNode::Generator { effect, .. } => {
-                let params = renderer
-                    .effects()
-                    .get(effect)
-                    .map_or(0, |registered| registered.definition.params.len());
-                capacity = effect_uniform_end(capacity, params, alignment);
-            }
-            RenderNode::Composite { layers, .. } => {
-                let passes = renderer
-                    .composite_batch_count(layers.iter().map(|layer| layer.visual), graph.size);
-                for _ in 0..passes {
-                    capacity = aligned_uniform_end(
-                        capacity,
-                        float_uniform_bytes(BATCH_UNIFORM_FLOATS),
-                        alignment,
-                    );
-                }
-            }
-            RenderNode::Vector { scene } => {
-                let slices = scene
-                    .ops
-                    .iter()
-                    .filter(|op| !matches!(op, alpha2_geometry::VectorOp::PushLayer { .. }))
-                    .count()
-                    + 1;
-                for _ in 0..slices {
-                    capacity = aligned_uniform_end(
-                        capacity,
-                        crate::vector::VECTOR_UNIFORM_BYTES,
-                        alignment,
-                    );
-                }
-            }
-            RenderNode::Source(_) => {}
+fn node_cost(
+    node: &RenderNode<'_>,
+    prepared: &PreparedNode,
+) -> Option<crate::effect_cost::EffectCost> {
+    match (node, prepared) {
+        (_, PreparedNode::Effect(registered)) => {
+            registered.as_ref().map(|registered| registered.cost)
         }
+        (RenderNode::Composite { layers, .. }, _) => Some(
+            crate::submission_planner::COMPOSITE_LAYER_COST
+                .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
+        ),
+        (RenderNode::Vector { .. }, _) => Some(crate::submission_planner::VECTOR_COST),
+        _ => None,
     }
-    capacity
-}
-
-fn effect_uniform_end(cursor: u64, params: usize, alignment: u64) -> u64 {
-    let parameter_bytes = u64::try_from(param_uniform_bytes(params)).unwrap_or(u64::MAX);
-    let cursor = aligned_uniform_end(cursor, parameter_bytes, alignment);
-    aligned_uniform_end(
-        cursor,
-        float_uniform_bytes(RUNTIME_UNIFORM_WORDS),
-        alignment,
-    )
-}
-
-pub(crate) fn effect_uniform_capacity(params: usize, alignment: u64) -> u64 {
-    effect_uniform_end(0, params, alignment)
 }
 
 /// The texture a dependency is drawn from; `None` for a CPU source.

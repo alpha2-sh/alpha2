@@ -95,6 +95,7 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         size: RenderSize,
         layers: &[CompositeLayer<'_>],
+        prepared: &crate::prepared_frame::PreparedComposite,
         target: CompositeTarget<'_>,
         uniforms: &mut UniformArenaLease,
     ) -> Result<u64, RenderError> {
@@ -108,8 +109,8 @@ impl Renderer {
             validate_visual(layer.visual)?;
         }
         let format = self.intermediate_format();
-        let drawn = self.drawn_layers(layers.iter().map(|layer| layer.visual), size);
-        let drawn = drawn
+        let drawn = prepared
+            .drawn
             .iter()
             .map(|(index, bounds, tier)| (&layers[*index], *bounds, *tier))
             .collect::<Vec<_>>();
@@ -130,9 +131,10 @@ impl Renderer {
             output_size: size,
             background,
         };
-        let batches = composite_batches(&drawn, self.composite_batch_layers())
-            .into_iter()
-            .map(|(range, bounds)| (&drawn[range], bounds))
+        let batches = prepared
+            .batches
+            .iter()
+            .map(|(range, bounds)| (&drawn[range.clone()], *bounds))
             .collect::<Vec<_>>();
         let bounded = |bounds: &PixelRect| under_half(*bounds, size);
         let ((first, first_bounds), rest) = batches.split_first().expect("a layer is drawn");
@@ -403,16 +405,6 @@ impl Renderer {
                 }
             })
             .collect()
-    }
-
-    /// Passes (and batch uniforms) a composite of these layers encodes, not counting a clear.
-    pub(crate) fn composite_batch_count(
-        &self,
-        visuals: impl Iterator<Item = LayerTransform>,
-        size: RenderSize,
-    ) -> usize {
-        let drawn = self.drawn_layers(visuals, size);
-        composite_batches(&drawn, self.composite_batch_layers()).len()
     }
 
     pub(crate) fn warm_composite(&self, layers: usize) -> Result<(), RenderError> {
