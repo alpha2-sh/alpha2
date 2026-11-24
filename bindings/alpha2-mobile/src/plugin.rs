@@ -136,13 +136,14 @@ impl Alpha2 {
                         manifest: &plugin.manifest,
                         manifest_sha256: &plugin.manifest_sha256,
                         params: &run.params,
+                        supplied: &std::collections::BTreeMap::new(),
                     },
                     &plugin.policy,
                     &mut bundled,
                     cancel,
                 )
                 .map_err(plugin_error)?;
-                let made_by = extractor.made_by().clone();
+                let made_by = extractor.made_by();
                 Ok(RunExtractor {
                     extractor: Box::new(extractor),
                     plugin: Some(made_by),

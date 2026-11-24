@@ -575,7 +575,7 @@ pub fn handle(
             set.made_from.clone_from(&original);
         }
         if let (Some(plugin), Some(made_by)) = (&plugin, set.made_by.as_mut()) {
-            made_by.plugin = Some(plugin.made_by().clone());
+            made_by.plugin = Some(plugin.made_by());
         }
     }
     let total = started.elapsed();
@@ -616,6 +616,7 @@ fn load_plugin(
         force_wasm: plugin.force_wasm,
         memory_bytes: options.plugin_memory_bytes,
         call_deadline: options.plugin_call_deadline,
+        resource_root: plugins::ResourceRoot::None,
     };
     let mut fetcher = crate::plugin_fetch::Fetcher::new(
         base,
@@ -629,6 +630,7 @@ fn load_plugin(
             manifest: &manifest,
             manifest_sha256: &plugin.sha256,
             params: &request.params,
+            supplied: &std::collections::BTreeMap::new(),
         },
         &policy,
         &mut fetcher,

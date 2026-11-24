@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -20,8 +21,8 @@ pub(super) const MANIFEST_SHA256: &str =
 struct Built {
     /// The directory test manifests lie in; their URLs are relative to it.
     dir: PathBuf,
-    wasm: [PathBuf; 2],
-    native: [PathBuf; 2],
+    wasm: [PathBuf; 3],
+    native: [PathBuf; 3],
 }
 
 fn built() -> &'static Built {
@@ -40,6 +41,8 @@ fn built() -> &'static Built {
                     "alpha2-plugin-fixture-digest",
                     "-p",
                     "alpha2-plugin-fixture-scripted",
+                    "-p",
+                    "alpha2-plugin-fixture-supplied",
                 ])
                 .env_remove("CARGO_TARGET_DIR")
                 .env(
@@ -53,6 +56,7 @@ fn built() -> &'static Built {
         let names = [
             "alpha2_plugin_fixture_digest",
             "alpha2_plugin_fixture_scripted",
+            "alpha2_plugin_fixture_supplied",
         ];
         let native = |name: &str| {
             let file = if TARGET.contains("windows") {
@@ -107,13 +111,14 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn descriptor_of(plugin: usize) -> Value {
-    let file = ["digest", "scripted"][plugin];
+    let file = ["digest", "scripted", "supplied"][plugin];
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../../plugins/fixtures/{file}/descriptor.json"));
     serde_json::from_slice(&std::fs::read(path).expect("descriptor")).expect("json")
 }
 
-/// A manifest for fixture `plugin` (0 digest, 1 scripted) offering wasm, native or both.
+/// A manifest for fixture `plugin` (0 digest, 1 scripted, 2 supplied) offering wasm, native or
+/// both; the supplied fixture's declares its slots.
 fn manifest(plugin: usize, wasm: bool, native: bool) -> Value {
     let built = built();
     let mut artifacts = Vec::new();
@@ -130,8 +135,15 @@ fn manifest(plugin: usize, wasm: bool, native: bool) -> Value {
         artifacts.push(artifact);
     }
     let descriptor = descriptor_of(plugin);
-    json!({ "id": descriptor["id"], "version": "1.2.3", "abi": "alpha2-plugin/1", "kind": "extractor",
-            "artifacts": artifacts, "descriptor": descriptor })
+    let mut manifest = json!({ "id": descriptor["id"], "version": "1.2.3", "abi": "alpha2-plugin/1",
+                               "kind": "extractor", "artifacts": artifacts, "descriptor": descriptor });
+    if plugin == 2 {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/fixtures/supplied/resources.json");
+        manifest["resources"] =
+            serde_json::from_slice(&std::fs::read(path).expect("resources")).expect("json");
+    }
+    manifest
 }
 
 fn loaded(
@@ -145,6 +157,28 @@ fn loaded(
             manifest: &manifest,
             manifest_sha256: MANIFEST_SHA256,
             params: &params.as_object().cloned().unwrap_or_default(),
+            supplied: &BTreeMap::new(),
+        },
+        policy,
+        &mut Local,
+        &CancelToken::default(),
+    )
+}
+
+/// Loads `manifest` filling `supplied` under `policy`.
+fn loaded_with(
+    manifest: &Value,
+    params: &Value,
+    supplied: &BTreeMap<String, PathBuf>,
+    policy: &Policy,
+) -> Result<PluginExtractor, PluginError> {
+    let manifest = parse_manifest(&manifest.to_string())?;
+    load(
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: params.as_object().expect("params"),
+            supplied,
         },
         policy,
         &mut Local,
@@ -539,7 +573,7 @@ fn manifests_of_other_abis_are_refused_by_code() {
         parse_manifest("{}").expect_err("invalid").code,
         codes::LOAD_FAILED
     );
-    assert_eq!(PLUGIN_CODES.len(), 11);
+    assert_eq!(PLUGIN_CODES.len(), 12);
     let digest: Descriptor = serde_json::from_value(descriptor_of(0)).expect("descriptor");
     assert_eq!(
         digest,
@@ -683,7 +717,7 @@ fn instantiated(module: &[u8], memory_bytes: u64) -> Result<wasm::WasmTransport,
         "test",
         module,
         &sha256_hex(module),
-        HashMap::new(),
+        resources::ResourceReader::new(resources::ResourceSet::default(), CancelToken::default()),
         Vec::new(),
         &policy,
         CancelToken::default(),
@@ -927,6 +961,7 @@ fn a_native_library_is_prepared_once_and_outlives_threads_it_left_running() {
             manifest: &manifest,
             manifest_sha256: MANIFEST_SHA256,
             params: &params.clone().unwrap_or_default(),
+            supplied: &BTreeMap::new(),
         },
         &native_allowed(),
         &mut fetch,
@@ -943,6 +978,7 @@ fn a_native_library_is_prepared_once_and_outlives_threads_it_left_running() {
             manifest: &manifest,
             manifest_sha256: MANIFEST_SHA256,
             params: &params.unwrap_or_default(),
+            supplied: &BTreeMap::new(),
         },
         &native_allowed(),
         &mut fetch,
@@ -988,6 +1024,7 @@ fn load_a_native_library_by_bare_name() {
             manifest: &manifest,
             manifest_sha256: MANIFEST_SHA256,
             params: &serde_json::Map::new(),
+            supplied: &BTreeMap::new(),
         },
         &native_allowed(),
         &mut Bare(PathBuf::from(file)),
@@ -1049,6 +1086,7 @@ fn a_cancel_stops_a_wasm_call_before_its_deadline_and_the_deadline_is_wall_clock
             manifest: &parse_manifest(&manifest.to_string()).expect("manifest"),
             manifest_sha256: MANIFEST_SHA256,
             params: &params.as_object().cloned().unwrap_or_default(),
+            supplied: &BTreeMap::new(),
         },
         &policy,
         &mut Local,
@@ -1078,6 +1116,7 @@ fn a_cancel_stops_a_wasm_call_before_its_deadline_and_the_deadline_is_wall_clock
             manifest: &parse_manifest(&manifest.to_string()).expect("manifest"),
             manifest_sha256: MANIFEST_SHA256,
             params: &serde_json::Map::new(),
+            supplied: &BTreeMap::new(),
         },
         &Policy::default(),
         &mut Local,
@@ -1214,4 +1253,205 @@ fn bounded_text_cuts_at_a_character_boundary() {
         budget.line(&line).map(|line| line.len()),
         Some(MAX_LOG_BYTES)
     );
+}
+
+/// The words the supplied fixture emits for `params`, and what its data records.
+fn supplied_words(
+    policy: &Policy,
+    supplied: &BTreeMap<String, PathBuf>,
+    params: &Value,
+) -> Result<(Vec<String>, MadeByPlugin), PluginError> {
+    let mut plugin = loaded_with(&manifest(2, true, true), params, supplied, policy)?;
+    let sets = run(&mut plugin, params).map_err(|error| PluginError {
+        code: match &error {
+            alpha2_engine::extract::DriveError::Extractor(error) => {
+                error.code.unwrap_or("EXTRACTOR_FAILED")
+            }
+            _ => "INTERNAL",
+        },
+        message: error.to_string(),
+        details: match error {
+            alpha2_engine::extract::DriveError::Extractor(error) => error.details,
+            _ => None,
+        },
+    })?;
+    let words = match &sets[0].values {
+        alpha2_model::DataValues::Words(words) => {
+            words.iter().map(|word| word.text.clone()).collect()
+        }
+        other => panic!("{other:?}"),
+    };
+    Ok((words, plugin.made_by()))
+}
+
+fn supplied_policy(native: bool) -> Policy {
+    Policy {
+        allow_native: native,
+        resource_root: ResourceRoot::Any,
+        ..Policy::default()
+    }
+}
+
+#[test]
+fn supplied_files_reach_both_transports_and_their_hashes_reach_the_data() {
+    let dir = scratch("supplied-both");
+    let model = dir.join("model.bin");
+    std::fs::write(&model, b"\x01\x02\x03weights").expect("model");
+    std::fs::create_dir_all(dir.join("extra/sub")).expect("dir");
+    std::fs::write(dir.join("extra/sub/a.txt"), b"alpha").expect("file");
+    std::fs::write(dir.join("extra/.hidden"), b"x").expect("file");
+    let supplied = BTreeMap::from([
+        ("model".to_owned(), model.clone()),
+        ("extra".to_owned(), dir.join("extra")),
+    ]);
+    let params =
+        json!({ "read": ["model", "extra/sub/a.txt", "extra/.hidden", "vocab"], "context": true });
+    for native in [false, true] {
+        let (words, made_by) =
+            supplied_words(&supplied_policy(native), &supplied, &params).expect("runs");
+        assert_eq!(
+            words,
+            [
+                "model 10 0102037765696768",
+                "extra/sub/a.txt 5 616c706861",
+                "extra/.hidden none",
+                "vocab none",
+                r#"context {"extra":{"files":[{"bytes":5,"name":"extra/sub/a.txt"}]},"model":{"files":[{"bytes":10,"name":"model"}]}}"#,
+            ],
+            "native {native}"
+        );
+        assert_eq!(made_by.manifest_sha256, MANIFEST_SHA256);
+        assert_eq!(
+            made_by
+                .supplied
+                .iter()
+                .map(|file| (file.name.as_str(), file.sha256.as_str(), file.bytes))
+                .collect::<Vec<_>>(),
+            [
+                ("extra/sub/a.txt", sha256_hex(b"alpha").as_str(), 5),
+                ("model", sha256_hex(b"\x01\x02\x03weights").as_str(), 10),
+            ],
+            "native {native}"
+        );
+    }
+}
+
+#[test]
+fn a_native_plugin_gets_paths_and_a_wasm_one_none() {
+    let dir = scratch("supplied-paths");
+    let model = dir.join("model.bin");
+    std::fs::write(&model, b"w").expect("model");
+    std::fs::create_dir_all(dir.join("extra/onnx")).expect("dir");
+    std::fs::write(dir.join("extra/onnx/a"), b"a").expect("file");
+    std::fs::write(dir.join("extra/b"), b"b").expect("file");
+    let supplied = BTreeMap::from([
+        ("model".to_owned(), model.clone()),
+        ("extra".to_owned(), dir.join("extra")),
+    ]);
+    let params = json!({ "paths": ["model", "extra/onnx", "vocab"] });
+    let canonical = |path: &Path| std::fs::canonicalize(path).expect("canonical");
+    let (words, made_by) =
+        supplied_words(&supplied_policy(true), &supplied, &params).expect("native");
+    assert_eq!(
+        words,
+        [
+            format!("path model {}", canonical(&model).display()),
+            format!(
+                "path extra/onnx {}",
+                canonical(&dir.join("extra")).join("onnx").display()
+            ),
+            "path vocab none".to_owned(),
+        ]
+    );
+    assert_eq!(
+        made_by
+            .supplied
+            .iter()
+            .map(|file| file.name.as_str())
+            .collect::<Vec<_>>(),
+        ["extra/onnx/a", "model"]
+    );
+    let (words, made_by) =
+        supplied_words(&supplied_policy(false), &supplied, &params).expect("wasm");
+    assert_eq!(
+        words,
+        ["path model none", "path extra/onnx none", "path vocab none"]
+    );
+    assert_eq!(made_by.supplied, Vec::new());
+}
+
+#[test]
+fn slots_are_resolved_before_the_artifact_is_fetched_and_refused_with_details() {
+    struct Refusing;
+    impl Fetch for Refusing {
+        fn fetch(&mut self, url: &str, _: &str, _: u64) -> Result<Fetched, PluginError> {
+            panic!("fetched {url} before the slots were resolved")
+        }
+    }
+    let manifest = parse_manifest(&manifest(2, true, true).to_string()).expect("manifest");
+    let refused = load(
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: &serde_json::Map::new(),
+            supplied: &BTreeMap::new(),
+        },
+        &supplied_policy(false),
+        &mut Refusing,
+        &CancelToken::default(),
+    )
+    .expect_err("a required slot is empty");
+    assert_eq!(refused.code, codes::RESOURCE_INVALID);
+    assert_eq!(
+        refused.details,
+        json!({ "slot": "model", "reason": "missing" })
+            .as_object()
+            .cloned()
+    );
+    let model = scratch("supplied-refused").join("model.bin");
+    std::fs::write(&model, b"w").expect("model");
+    let refused = load(
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: &serde_json::Map::new(),
+            supplied: &BTreeMap::from([("model".to_owned(), model)]),
+        },
+        &Policy::default(),
+        &mut Refusing,
+        &CancelToken::default(),
+    )
+    .expect_err("the default policy takes no supplied files");
+    assert_eq!(refused.code, codes::REFUSED);
+}
+
+#[test]
+fn a_read_failure_ends_the_call_whatever_the_plugin_returns() {
+    let dir = scratch("supplied-latched");
+    let model = dir.join("model.bin");
+    std::fs::write(&model, b"w").expect("model");
+    std::fs::create_dir_all(dir.join("extra")).expect("dir");
+    std::fs::write(dir.join("extra/big"), b"123456").expect("file");
+    let mut capped = manifest(2, true, true);
+    capped["resources"][1]["supplied"]["max_bytes"] = json!(4);
+    let supplied = BTreeMap::from([
+        ("model".to_owned(), model),
+        ("extra".to_owned(), dir.join("extra")),
+    ]);
+    let params = json!({ "read": ["extra/big"] });
+    for native in [false, true] {
+        let mut plugin =
+            loaded_with(&capped, &params, &supplied, &supplied_policy(native)).expect("loads");
+        let error = run(&mut plugin, &params).expect_err("the read fails");
+        let alpha2_engine::extract::DriveError::Extractor(error) = error else {
+            panic!("{error:?}")
+        };
+        assert_eq!(error.code, Some(codes::RESOURCE_INVALID), "native {native}");
+        assert_eq!(
+            error.details,
+            json!({ "slot": "extra", "reason": "too_large" })
+                .as_object()
+                .cloned()
+        );
+    }
 }

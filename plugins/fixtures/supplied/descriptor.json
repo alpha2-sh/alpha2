@@ -1,0 +1,20 @@
+{
+  "id": "alpha2.test.supplied",
+  "version": 1,
+  "input": {
+    "media": "video",
+    "from": ["source", "timeline"],
+    "format": "luma8",
+    "max_size": 64
+  },
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "read": { "type": "array", "items": { "type": "string" } },
+      "paths": { "type": "array", "items": { "type": "string" } },
+      "context": { "type": "boolean" }
+    },
+    "additionalProperties": false
+  },
+  "outputs": [{ "name": "files", "kind": "words" }]
+}

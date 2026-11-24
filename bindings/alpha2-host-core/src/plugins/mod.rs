@@ -6,13 +6,16 @@
 //! The caller fetches: [`load`] asks a [`Fetch`] for each file by URL and hash.
 
 mod native;
+mod resources;
+#[cfg(test)]
+mod resources_tests;
 #[cfg(test)]
 mod silence_tests;
 #[cfg(test)]
 mod tests;
 mod wasm;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,7 +25,9 @@ use alpha2_engine::extract::{
     PassInfo, PluginArtifact, PluginManifest, RunContext, VideoFormat, VideoInput, WASM_TARGET,
 };
 use alpha2_media::CancelToken;
-use alpha2_model::{DataInterval, DataWord, MAX_DATA_CHANNELS, MAX_DATA_LABEL_BYTES, MadeByPlugin};
+use alpha2_model::{
+    DataInterval, DataWord, MAX_DATA_CHANNELS, MAX_DATA_LABEL_BYTES, MadeByPlugin, SuppliedFile,
+};
 use alpha2_plugin_abi::records::{Limits, Record, records};
 use alpha2_plugin_abi::{direction, status, video_format};
 use alpha2_time::MediaTime;
@@ -53,6 +58,9 @@ pub mod codes {
     pub const TRAPPED: &str = "PLUGIN_TRAPPED";
     /// The wasm module ran past its memory cap or table bound, or a call past its deadline.
     pub const LIMIT: &str = "PLUGIN_LIMIT";
+    /// A file the caller supplied for a resource slot does not fit the slot; `details` names the
+    /// slot and the reason.
+    pub const RESOURCE_INVALID: &str = "PLUGIN_RESOURCE_INVALID";
 }
 
 /// The code of a load or call that stopped because the caller's cancel token was set. It is not a
@@ -60,7 +68,7 @@ pub mod codes {
 pub const CANCELLED: &str = "CANCELLED";
 
 /// Every plugin error code.
-pub const PLUGIN_CODES: [&str; 11] = [
+pub const PLUGIN_CODES: [&str; 12] = [
     codes::FETCH_FAILED,
     codes::HASH_MISMATCH,
     codes::ABI_UNSUPPORTED,
@@ -72,6 +80,7 @@ pub const PLUGIN_CODES: [&str; 11] = [
     codes::LOAD_FAILED,
     codes::TRAPPED,
     codes::LIMIT,
+    codes::RESOURCE_INVALID,
 ];
 
 /// Why a plugin did not load.
@@ -81,6 +90,9 @@ pub struct PluginError {
     pub code: &'static str,
     /// What went wrong.
     pub message: String,
+    /// What a caller reads besides the code: `slot` and `reason` for
+    /// [`codes::RESOURCE_INVALID`], `exit`, `signal` or `wire` for an isolated child that failed.
+    pub details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl PluginError {
@@ -89,8 +101,56 @@ impl PluginError {
         Self {
             code,
             message: message.into(),
+            details: None,
         }
     }
+
+    /// The error with `details`.
+    #[must_use]
+    pub fn with_details(mut self, details: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    /// A [`codes::RESOURCE_INVALID`] error for `slot`, for one of [`slot_reasons`].
+    pub fn resource_invalid(slot: &str, reason: &str, message: impl Into<String>) -> Self {
+        let mut details = serde_json::Map::new();
+        details.insert("slot".to_owned(), slot.into());
+        details.insert("reason".to_owned(), reason.into());
+        Self::new(codes::RESOURCE_INVALID, message).with_details(details)
+    }
+
+    /// The error as a call's failure.
+    #[must_use]
+    pub fn into_call_error(self) -> ExtractorError {
+        let error = ExtractorError::with_code(self.code, self.message);
+        match self.details {
+            Some(details) => error.with_details(details),
+            None => error,
+        }
+    }
+}
+
+/// The `reason` of a [`codes::RESOURCE_INVALID`] error.
+pub mod slot_reasons {
+    /// A required slot was not filled.
+    pub const MISSING: &str = "missing";
+    /// The caller filled a slot the manifest does not declare.
+    pub const UNKNOWN_SLOT: &str = "unknown_slot";
+    /// A file where the slot takes a directory, or the other way round.
+    pub const SHAPE: &str = "shape";
+    /// A file longer than the slot's `max_bytes`, or than a wasm module can read.
+    pub const TOO_LARGE: &str = "too_large";
+    /// A directory with more files than a slot holds.
+    pub const TOO_MANY_FILES: &str = "too_many_files";
+    /// A directory deeper than a slot holds, or one that is its own ancestor.
+    pub const TOO_DEEP: &str = "too_deep";
+    /// A file whose resource name is longer than a slot's names may be.
+    pub const NAME_TOO_LONG: &str = "name_too_long";
+    /// A file whose name is not UTF-8.
+    pub const NOT_UTF8: &str = "not_utf8";
+    /// This loader fills no slots.
+    pub const UNSUPPORTED: &str = "unsupported";
 }
 
 impl fmt::Display for PluginError {
@@ -131,6 +191,20 @@ pub struct Policy {
     pub memory_bytes: u64,
     /// The longest one wasm call may run.
     pub call_deadline: Duration,
+    /// Where files the caller supplies for resource slots may lie.
+    pub resource_root: ResourceRoot,
+}
+
+/// Where files supplied for resource slots may lie, links resolved.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ResourceRoot {
+    /// Anywhere the caller names.
+    Any,
+    /// Nowhere: a load that fills a slot is refused.
+    #[default]
+    None,
+    /// Under this directory.
+    Dir(PathBuf),
 }
 
 /// Linear memory a wasm plugin may grow to when the caller sets no cap.
@@ -148,6 +222,7 @@ impl Default for Policy {
             force_wasm: false,
             memory_bytes: DEFAULT_MEMORY_BYTES,
             call_deadline: DEFAULT_CALL_DEADLINE,
+            resource_root: ResourceRoot::None,
         }
     }
 }
@@ -206,13 +281,7 @@ pub fn select<'m>(
 /// Hex SHA-256 of `bytes`.
 #[must_use]
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            use fmt::Write;
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+    hex(&Sha256::digest(bytes))
 }
 
 /// # Errors
@@ -277,6 +346,63 @@ pub trait Fetch {
         let _ = (bytes, sha256);
         Ok(verified.to_path_buf())
     }
+}
+
+/// Checks the file `fetch` gives for a pinned resource without keeping its bytes.
+fn check_pinned(
+    fetch: &mut dyn Fetch,
+    url: &str,
+    sha256: &str,
+    size: u64,
+) -> Result<resources::PinnedFile, PluginError> {
+    use std::io::Read;
+    let Fetched { path, local } = fetch.fetch(url, sha256, size)?;
+    let failed = |error: std::io::Error| {
+        PluginError::new(codes::FETCH_FAILED, format!("{}: {error}", path.display()))
+    };
+    let mut file = std::fs::File::open(&path)
+        .map_err(failed)?
+        .take(size.saturating_add(1));
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0; 1 << 20];
+    let mut total = 0_u64;
+    loop {
+        let read = file.read(&mut buffer).map_err(failed)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        total += read as u64;
+    }
+    let found = hex(&hasher.finalize());
+    if total != size || found != sha256 {
+        let message = if !local {
+            format!("{url} does not match the length and SHA-256 the manifest pins")
+        } else if total > size {
+            format!("{url} is longer than the {size} bytes the manifest pins")
+        } else if total != size {
+            format!("{url} is {total} bytes; the manifest pins {size}")
+        } else {
+            format!("{url} has SHA-256 {found}; the manifest pins {sha256}")
+        };
+        return Err(PluginError::new(codes::HASH_MISMATCH, message));
+    }
+    Ok(resources::PinnedFile {
+        path,
+        sha256: sha256.to_owned(),
+        bytes: size,
+        local,
+    })
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            use fmt::Write;
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
 }
 
 fn read_verified(
@@ -381,6 +507,8 @@ trait Transport {
     fn video(&mut self, time: i64, width: u32, height: u32, format: u32, data: &[u8]) -> Call;
     fn audio(&mut self, block: &AudioInput) -> Call;
     fn end(&mut self) -> Call;
+    /// The supplied files the plugin read so far, sorted by name.
+    fn supplied(&self) -> Vec<SuppliedFile>;
 }
 
 /// The most items a declared output takes in one call.
@@ -484,6 +612,8 @@ impl Collected {
 pub struct PluginExtractor {
     descriptor: Descriptor,
     params: serde_json::Map<String, serde_json::Value>,
+    /// The filled slots as `begin`'s context names them.
+    supplied: serde_json::Value,
     plugin: MadeByPlugin,
     transport: Box<dyn Transport>,
     native: bool,
@@ -509,12 +639,15 @@ pub struct LoadRequest<'a> {
     pub manifest_sha256: &'a str,
     /// The run's parameters.
     pub params: &'a serde_json::Map<String, serde_json::Value>,
+    /// The file or directory the caller names for each resource slot it fills, by slot name.
+    pub supplied: &'a BTreeMap<String, PathBuf>,
 }
 
-/// Loads the artifact `policy` picks from the request's manifest, fetching it and every resource
-/// through `fetch`. Once `cancel` is set, the load stops before the next file, and a wasm call of
-/// the plugin it returns stops within about 50 ms; a module compile and a native call run to
-/// their end.
+/// Loads the artifact `policy` picks from the request's manifest, fetching it and every pinned
+/// resource through `fetch`. The caller's slots are resolved first, so a missing model fails
+/// before a download; their files are read only when the plugin asks for them. Once `cancel` is
+/// set, the load stops before the next file, and a wasm call of the plugin it returns stops within
+/// about 50 ms; a module compile and a native call run to their end.
 ///
 /// # Errors
 /// A [`PluginError`] for the first check that fails, [`CANCELLED`] once `cancel` is set.
@@ -528,6 +661,7 @@ pub fn load(
         manifest,
         manifest_sha256,
         params,
+        supplied,
     } = request;
     let artifact = select(manifest, policy, TARGET)?;
     let stopped = || {
@@ -537,15 +671,21 @@ pub fn load(
             Ok(())
         }
     };
-    let mut resources = HashMap::new();
+    let mut resources = resources::ResourceSet::resolve(
+        manifest,
+        supplied,
+        &policy.resource_root,
+        artifact.kind == ArtifactKind::Wasm,
+    )?;
     for resource in &manifest.resources {
         stopped()?;
         let Some(pinned) = resource.pinned() else {
             continue;
         };
-        let (_, bytes) = read_verified(fetch, &pinned.url, &pinned.sha256, pinned.bytes)?;
-        resources.insert(resource.name.clone(), bytes);
+        let file = check_pinned(fetch, &pinned.url, &pinned.sha256, pinned.bytes)?;
+        resources.add_pinned(&resource.name, file);
     }
+    let supplied = resources.context();
     stopped()?;
     let (path, bytes) = read_verified(fetch, &artifact.url, &artifact.sha256, artifact.bytes)?;
     let caps = output_caps(&manifest.descriptor);
@@ -555,7 +695,7 @@ pub fn load(
             &manifest.id,
             &bytes,
             &artifact.sha256,
-            resources,
+            resources::ResourceReader::new(resources, cancel.clone()),
             caps,
             policy,
             cancel.clone(),
@@ -563,7 +703,7 @@ pub fn load(
         ArtifactKind::Cdylib => Box::new(native::NativeTransport::new(
             &artifact.sha256,
             || fetch.prepare_native(&path, &bytes, &artifact.sha256),
-            resources,
+            resources::ResourceReader::new(resources, cancel.clone()),
             caps,
         )?),
         ArtifactKind::Staticlib => {
@@ -591,6 +731,7 @@ pub fn load(
     Ok(PluginExtractor {
         descriptor: described,
         params: params.clone(),
+        supplied,
         plugin: MadeByPlugin {
             version: manifest.version.clone(),
             artifact_sha256: artifact.sha256.clone(),
@@ -610,10 +751,14 @@ impl PluginExtractor {
         self.native
     }
 
-    /// What `made_by.plugin` records for data this plugin makes.
+    /// What `made_by.plugin` records for data this plugin makes, with the supplied files read
+    /// so far; complete once the run has ended.
     #[must_use]
-    pub fn made_by(&self) -> &MadeByPlugin {
-        &self.plugin
+    pub fn made_by(&self) -> MadeByPlugin {
+        MadeByPlugin {
+            supplied: self.transport.supplied(),
+            ..self.plugin.clone()
+        }
     }
 
     fn deliver(&self, records: Vec<Record>, out: &mut Emitter) -> Result<(), ExtractorError> {
@@ -704,6 +849,7 @@ impl Extractor for PluginExtractor {
             })),
             "frame_rate": context.frame_rate,
             "params": self.params,
+            "supplied": self.supplied,
         });
         let records = self.transport.begin(context.to_string().as_bytes())?;
         nothing_emitted(&records, "begin")

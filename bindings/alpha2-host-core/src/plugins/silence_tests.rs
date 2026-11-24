@@ -171,6 +171,7 @@ fn extract(
             manifest: &manifest,
             manifest_sha256: MANIFEST_SHA256,
             params: &params.as_object().cloned().unwrap_or_default(),
+            supplied: &BTreeMap::new(),
         },
         policy,
         &mut Packed,

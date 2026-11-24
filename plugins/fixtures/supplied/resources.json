@@ -1,0 +1,4 @@
+[
+  { "name": "model", "supplied": { "shape": "file", "accept": [".bin"] } },
+  { "name": "extra", "supplied": { "shape": "directory", "required": false } }
+]

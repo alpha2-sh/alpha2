@@ -24,7 +24,7 @@ engine = ["dep:alpha2-engine", "dep:alpha2-eval", "dep:alpha2-model", "dep:alpha
 providers = ["engine", "dep:alpha2-extensions", "dep:bytemuck"]
 cpal-host = ["dep:cpal"]
 # Runs extractor plugins, wasm modules through wasmtime and native ones through the platform loader.
-plugins = ["engine", "dep:alpha2-plugin-abi", "dep:libloading", "dep:sha2", "dep:wasmtime"]
+plugins = ["engine", "dep:alpha2-plugin-abi", "dep:libloading", "dep:serde", "dep:sha2", "dep:wasmtime"]
 # The native host's protocol request parsing, without the host's media stack.
 requests = [
   "engine",
