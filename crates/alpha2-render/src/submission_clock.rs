@@ -436,13 +436,6 @@ impl PreviousCompletion {
 }
 
 thread_local! {
-    #[cfg_attr(
-        target_os = "android",
-        expect(
-            clippy::missing_const_for_thread_local,
-            reason = "clippy misreads the const initializer on Android's thread-local expansion"
-        )
-    )]
     static WAITING: Cell<Option<(usize, u64)>> = const { Cell::new(None) };
 }
 
