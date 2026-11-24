@@ -123,6 +123,15 @@ unsafe extern "C" fn resource(
     })
 }
 
+unsafe extern "C" fn resource_path(
+    _context: *mut c_void,
+    _name: *const u8,
+    _name_len: usize,
+    _len: *mut usize,
+) -> *const u8 {
+    std::ptr::null()
+}
+
 unsafe extern "C" fn fail(context: *mut c_void, message: *const u8, len: usize) {
     // SAFETY: the ABI's rules for the context and the message, borrowed for the call; only the
     // kept prefix is read.
@@ -232,6 +241,7 @@ impl NativeTransport {
                 resource,
                 fail,
                 log,
+                resource_path,
             },
             RefCell::new(State {
                 collected: Collected::default(),

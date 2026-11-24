@@ -9,6 +9,8 @@
 //! that many times with one interval of `quiet`. As a native library, `park_thread: true` starts a
 //! thread at `begin` that runs the library's code until the process exits. `log` (`text`, `lines`)
 //! makes `begin` log `text` that many times, and `fail_message` sets the `fail_at` message.
+//! `path` names a resource whose path, as the host hands it out, `end` emits as a word of
+//! `words`, or `none` when the host gives none.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
 use serde_json::Value;
@@ -24,6 +26,7 @@ pub struct Scripted {
     hog_at: Option<u64>,
     abort_at: Option<u64>,
     resource: Option<String>,
+    path: Option<String>,
     flood: Option<(u64, bool)>,
     delivered: u64,
 }
@@ -158,6 +161,14 @@ impl Extractor for Scripted {
             hog_at: index("hog_at"),
             abort_at: index("abort_at"),
             resource,
+            path: context
+                .params
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|name| {
+                    host.resource_path(name)
+                        .map_or_else(|| "none".to_owned(), |path| path.display().to_string())
+                }),
             flood: context.params.get("flood").map(|flood| {
                 (
                     flood.get("calls").and_then(Value::as_u64).unwrap_or(0),
@@ -214,6 +225,9 @@ impl Extractor for Scripted {
     fn end(&mut self, out: &mut Emitter) -> Result<(), Error> {
         if let Some(text) = &self.resource {
             out.word("words", 0, 1, text, None);
+        }
+        if let Some(path) = &self.path {
+            out.word("words", 1, 2, path, None);
         }
         self.at_end.iter().try_for_each(|item| emit(out, item))
     }

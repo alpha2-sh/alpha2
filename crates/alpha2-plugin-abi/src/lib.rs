@@ -58,7 +58,8 @@ pub const NATIVE_ENTRY: &[u8] = b"alpha2_plugin_v1\0";
 /// What a host gives a native plugin instance. Every function takes `context` first.
 ///
 /// Pointers passed to these functions are borrowed for the call alone. `/1` grows only by fields
-/// appended here; a plugin reads `abi` and `size` first and uses only the fields `size` covers.
+/// appended here; a plugin reads `abi` and `size` first, refuses a table shorter than
+/// [`HOST_V1_BASE_BYTES`] and uses only the fields `size` covers.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct HostV1 {
@@ -83,7 +84,20 @@ pub struct HostV1 {
     pub fail: unsafe extern "C" fn(context: *mut c_void, message: *const u8, len: usize),
     /// Writes a diagnostic (UTF-8) at a [`log_level`].
     pub log: unsafe extern "C" fn(context: *mut c_void, level: u32, message: *const u8, len: usize),
+    /// The absolute path (UTF-8) of the supplied file, filled directory slot or directory under
+    /// one named `name`, and its length; null for a pinned resource, an empty or undeclared name,
+    /// or a path that is not UTF-8. Valid until the instance is destroyed. Appended within `/1`.
+    pub resource_path: unsafe extern "C" fn(
+        context: *mut c_void,
+        name: *const u8,
+        name_len: usize,
+        len: *mut usize,
+    ) -> *const u8,
 }
+
+/// Bytes of [`HostV1`] as the first `/1` hosts filled it, before any appended field; every host
+/// table is at least this long.
+pub const HOST_V1_BASE_BYTES: usize = core::mem::offset_of!(HostV1, resource_path);
 
 /// The static table a native plugin's [`NATIVE_ENTRY`] returns, which outlives every instance.
 ///

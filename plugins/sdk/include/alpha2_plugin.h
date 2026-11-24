@@ -46,7 +46,9 @@ extern "C" {
 #define ALPHA2_RECORD_ABSENT 0xFFFFFFFFu
 
 /* Both tables grow within /1 only by fields appended at their end. Each side sets size to the
- * bytes of the table it knows; check abi and size before using a field added after the first /1. */
+ * bytes of the table it knows; check abi and size before using a field added after the first /1.
+ * A plugin refuses a host table shorter than ALPHA2_HOST_V1_BASE_SIZE and tests an appended field
+ * with ALPHA2_HOST_HAS. */
 
 /* What a host gives a native plugin instance; valid until destroy. Pointers passed to these
  * functions are borrowed for the call alone. */
@@ -64,7 +66,18 @@ typedef struct Alpha2HostV1 {
     /* Why the call about to return ALPHA2_FAILED failed (UTF-8). */
     void (*fail)(void *context, const uint8_t *message, size_t len);
     void (*log)(void *context, uint32_t level, const uint8_t *message, size_t len);
+    /* Appended: the absolute path (UTF-8) of the supplied file, filled directory slot or
+     * directory under one named name, valid until destroy; NULL for a pinned resource, an empty
+     * or undeclared name, or a path that is not UTF-8. */
+    const uint8_t *(*resource_path)(void *context, const uint8_t *name, size_t name_len,
+                                    size_t *len);
 } Alpha2HostV1;
+
+/* Bytes of Alpha2HostV1 before any appended field. */
+#define ALPHA2_HOST_V1_BASE_SIZE offsetof(Alpha2HostV1, resource_path)
+/* Whether the host table covers the appended field. */
+#define ALPHA2_HOST_HAS(host, field)                                                            \
+    ((size_t)(host)->size >= offsetof(Alpha2HostV1, field) + sizeof((host)->field))
 
 /* What alpha2_plugin_v1 returns: a static table in which every entry is required. Pointers
  * passed to the plugin are borrowed for the call alone. The host calls an instance from one

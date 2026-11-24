@@ -4,9 +4,10 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::path::PathBuf;
 
 use alpha2_plugin_abi::records::{Record, decode};
-use alpha2_plugin_abi::{ABI_MAJOR, HostV1, PluginV1, status};
+use alpha2_plugin_abi::{ABI_MAJOR, HOST_V1_BASE_BYTES, HostV1, PluginV1, status};
 
 /// What the plugin sent the host.
 #[derive(Debug, Default)]
@@ -21,9 +22,22 @@ pub struct Received {
     pub refused: usize,
 }
 
+/// What a test host offers a plugin.
+#[derive(Debug, Default)]
+pub struct Offered {
+    /// Resource bytes by name.
+    pub resources: HashMap<String, Vec<u8>>,
+    /// Paths `resource_path` hands out, by name.
+    pub paths: HashMap<String, PathBuf>,
+    /// A host table as long as the first `/1`'s, without appended entries.
+    pub base_table: bool,
+}
+
 struct State {
     received: Received,
-    resources: HashMap<String, Vec<u8>>,
+    offered: Offered,
+    /// Paths handed out, kept until the instance is destroyed.
+    handed: Vec<String>,
 }
 
 /// A plugin instance on a test host.
@@ -82,12 +96,38 @@ unsafe extern "C" fn resource(
     let state = state.borrow();
     let found = std::str::from_utf8(name)
         .ok()
-        .and_then(|name| state.resources.get(name));
+        .and_then(|name| state.offered.resources.get(name));
     match found {
         Some(bytes) => {
             // SAFETY: the plugin passes a writable length; the bytes live as long as the host.
             unsafe { len.write(bytes.len()) };
             bytes.as_ptr()
+        }
+        None => std::ptr::null(),
+    }
+}
+
+unsafe extern "C" fn resource_path(
+    context: *mut c_void,
+    name: *const u8,
+    name_len: usize,
+    len: *mut usize,
+) -> *const u8 {
+    // SAFETY: the ABI's rules for the context and the borrowed name.
+    let (state, name) = unsafe { (state(context), bytes(name, name_len)) };
+    let mut state = state.borrow_mut();
+    let found = std::str::from_utf8(name)
+        .ok()
+        .and_then(|name| state.offered.paths.get(name))
+        .and_then(|path| path.to_str())
+        .map(str::to_owned);
+    match found {
+        Some(path) => {
+            state.handed.push(path);
+            let kept = state.handed.last().expect("just pushed");
+            // SAFETY: the plugin passes a writable length; the string lives as long as the host.
+            unsafe { len.write(kept.len()) };
+            kept.as_ptr()
         }
         None => std::ptr::null(),
     }
@@ -116,6 +156,28 @@ impl Instance {
     /// When the table is null, of another ABI, or `create` returns null.
     #[must_use]
     pub unsafe fn new(table: *const PluginV1, resources: HashMap<String, Vec<u8>>) -> Self {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            Self::offering(
+                table,
+                Offered {
+                    resources,
+                    ..Offered::default()
+                },
+            )
+        }
+    }
+
+    /// Creates an instance, offering what `offered` holds, of the plugin whose entry returned
+    /// `table`.
+    ///
+    /// # Safety
+    /// `table` is what a plugin's `alpha2_plugin_v1` returned.
+    ///
+    /// # Panics
+    /// When the table is null, of another ABI, or `create` returns null.
+    #[must_use]
+    pub unsafe fn offering(table: *const PluginV1, offered: Offered) -> Self {
         assert!(!table.is_null(), "null plugin table");
         // SAFETY: the caller passes the static table a plugin's entry returned.
         let table = unsafe { *table };
@@ -124,19 +186,26 @@ impl Instance {
             table.size as usize >= size_of::<PluginV1>(),
             "plugin table shorter than alpha2-plugin/1"
         );
+        let size = if offered.base_table {
+            HOST_V1_BASE_BYTES
+        } else {
+            size_of::<HostV1>()
+        };
         let state = RefCell::new(State {
             received: Received::default(),
-            resources,
+            offered,
+            handed: Vec::new(),
         });
         let mut host = Box::new((
             HostV1 {
                 abi: ABI_MAJOR,
-                size: u32::try_from(size_of::<HostV1>()).expect("a small table"),
+                size: u32::try_from(size).expect("a small table"),
                 context: std::ptr::null_mut(),
                 emit,
                 resource,
                 fail,
                 log,
+                resource_path,
             },
             state,
         ));

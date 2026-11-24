@@ -18,6 +18,7 @@
       "hog_at": { "type": "integer" },
       "abort_at": { "type": "integer" },
       "resource": { "type": "string" },
+      "path": { "type": "string" },
       "flood": { "type": "object" }
     },
     "additionalProperties": false
