@@ -744,11 +744,14 @@ export interface BrowserBridge {
   /**
    * Adds or replaces a source whose provider reads no file, such as `{ format: "latex", ... }`,
    * in one undoable `asset.put`. With an existing `id` its clips keep showing it with the new
-   * settings. The source is opened first, so its bin thumbnail and size are known.
+   * settings. The source is opened first, so its bin thumbnail and size are known. `then` runs in
+   * the same undo step after the `asset.put`, such as the commands that place a clip of it; as a
+   * function it is called with the source's ID and the size it opened at (`null` without one).
    *
    * Rejects with `EditorError` `unsupported_media` for a provider that reads a file (use
-   * {@link BrowserBridge.importFiles}), `unreadable_media` when the source does not open, and
-   * `stale_import` when the session loads another project meanwhile.
+   * {@link BrowserBridge.importFiles}), `unreadable_media` when the source does not open,
+   * `stale_import` when the session loads another project meanwhile, and with the refusal of a
+   * `then` command (nothing is committed).
    */
   putProviderSource(
     source: {
@@ -756,7 +759,16 @@ export interface BrowserBridge {
       readonly name?: string;
       readonly provider: import("alpha2/project").ProviderSource;
     },
-    options?: { signal?: AbortSignal },
+    options?: {
+      signal?: AbortSignal;
+      then?:
+        | readonly import("../core/commands.js").Command[]
+        | ((opened: {
+            readonly assetId: string;
+            readonly width: number | null;
+            readonly height: number | null;
+          }) => readonly import("../core/commands.js").Command[]);
+    },
   ): Promise<{ assetId: string }>;
   /**
    * Shows another animation of a dotLottie source, keeping its clips. Throws `EditorError`

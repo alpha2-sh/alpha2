@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- `bridge.putProviderSource` takes `then`: commands, or a function of the new source's ID and
+  opened size returning them, committed in the same undo step as the source, such as the clip that
+  places it.
 - `failureClassOfHttpStatus` in `alpha2/export-failure` classifies an export service's HTTP error
   status: 413 `RESOURCE_LIMIT`, 429 and 503 `RESOURCE_BUSY`, 507 `STORAGE_QUOTA_EXCEEDED`.
 

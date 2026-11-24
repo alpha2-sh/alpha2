@@ -148,6 +148,62 @@ test(
 );
 
 test(
+  "a source added with the clip that shows it is one undo step, sized as it opened",
+  { skip },
+  async () => {
+    const { editor, bridge } = await session(
+      createDocument({
+        ...createEditor().document.project,
+        timeline: {
+          tracks: [{ id: "v", kind: "video", name: "V", clips: [] }],
+        },
+      }),
+    );
+    const before = editor.getSnapshot().revision;
+    let opened;
+    const { assetId } = await bridge.putProviderSource(
+      { provider: latex("x^2") },
+      {
+        then: (source) => {
+          opened = source;
+          return [
+            {
+              type: "clip.insert",
+              trackId: "v",
+              clip: {
+                id: "c",
+                source_id: source.assetId,
+                timeline_range: { start: 0, end: 120000 },
+                source_range: { start: 0, end: 120000 },
+                time_map: { type: "forward" },
+              },
+            },
+          ];
+        },
+      },
+    );
+    assert.equal(opened.assetId, assetId);
+    assert.equal(opened.width, bridge.getAsset(assetId).width);
+    assert.ok(opened.width > 0 && opened.height > 0);
+    assert.equal(editor.getSnapshot().revision, before + 1);
+    assert.equal(editor.query().clips.get("c").clip.source_id, assetId);
+    editor.undo();
+    assert.equal(sourceOf(editor, assetId), undefined);
+    assert.equal(editor.query().clips.get("c"), undefined);
+
+    await assert.rejects(
+      bridge.putProviderSource(
+        { id: "eq", provider: latex("y") },
+        { then: [{ type: "clip.delete", id: "nothing" }] },
+      ),
+    );
+    assert.equal(sourceOf(editor, "eq"), undefined, "nothing committed");
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
   "a provider that reads a file, or a source that does not open, is refused and changes nothing",
   { skip },
   async () => {

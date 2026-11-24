@@ -2790,7 +2790,7 @@ export function createBrowserBridge(options) {
       importFiles([file], { ...options, relinkId: id }),
     importSequence,
     relinkSequence,
-    async putProviderSource({ id, name, provider }, { signal } = {}) {
+    async putProviderSource({ id, name, provider }, { signal, then } = {}) {
       if (providerReadsFile(provider))
         throw new EditorError(
           "unsupported_media",
@@ -2818,7 +2818,7 @@ export function createBrowserBridge(options) {
         (candidate) => candidate.id === assetId,
       );
       const kind = providerKind(provider);
-      const result = editor.dispatch({
+      const put = {
         type: "asset.put",
         asset: {
           ...(descriptor ?? { contentRevision: 0 }),
@@ -2834,7 +2834,20 @@ export function createBrowserBridge(options) {
           locator: "",
           provider,
         },
-      });
+      };
+      const following =
+        typeof then === "function"
+          ? then({
+              assetId,
+              width: read.report?.width ?? null,
+              height: read.report?.height ?? null,
+            })
+          : (then ?? []);
+      const result = editor.dispatch(
+        following.length
+          ? { type: "transaction", commands: [put, ...following] }
+          : put,
+      );
       if (!result.ok) throw result.error;
       const runtime = filelessRuntime(editor.document, assetId);
       if (runtime) describe(runtime, provider, read);
