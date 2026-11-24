@@ -189,8 +189,8 @@ impl Renderer {
                 crate::RenderError::FrameExceedsGpuMemory { needed, budget },
             ));
         }
-        let submission_plan = self.plan_submissions(predicted);
-        if submission_plan.is_some() {
+        let mut submission_plan = self.plan_submissions(predicted);
+        if let Some(submission_plan) = &mut submission_plan {
             self.pilot_passes(
                 drawn().map(|node| (&graph.nodes[node.index], prepared.registration(*node))),
                 graph.size,
@@ -208,6 +208,7 @@ impl Renderer {
                     let _ = self.pilot_vector(scene, graph.size);
                 }
             }
+            submission_plan.predict(planned_passes(graph, drawn(), &prepared, sources, pack));
         }
         Ok(FrameStart {
             plan,
@@ -531,6 +532,39 @@ impl Renderer {
         }
         texture
     }
+}
+
+fn planned_passes<'a>(
+    graph: &RenderGraph<'_>,
+    drawn: impl Iterator<Item = &'a crate::graph::RenderNodeId>,
+    prepared: &crate::prepared_frame::PreparedFrame,
+    sources: &[SourceWorkTicket<'_>],
+    pack: FramePack,
+) -> Vec<(crate::FrameCost, Option<alpha2_gpu::PassKey>)> {
+    let frame_pixels = graph.size.pixels();
+    let mut passes = vec![(
+        pack.work(graph.size),
+        Some(PassKind::Pack.key(frame_pixels)),
+    )];
+    passes.extend(sources.iter().map(|work| {
+        (
+            work.work(),
+            Some(PassKind::Conversion.key(work.output_size().pixels())),
+        )
+    }));
+    passes.extend(drawn.filter_map(|node| match prepared.node(*node) {
+        PreparedNode::Effect(Some(registered)) => Some((
+            crate::FrameCost::of(registered.cost, frame_pixels),
+            Some(alpha2_gpu::PassKey::new(registered.pass_id, frame_pixels)),
+        )),
+        PreparedNode::Composite(composite) => Some((composite.work(), Some(composite.pass))),
+        PreparedNode::Vector {
+            scene: Some(Ok(scene)),
+            ..
+        } => Some((scene.work(), Some(PassKind::Vector.key(frame_pixels)))),
+        _ => None,
+    }));
+    passes
 }
 
 fn node_work(node: &RenderNode<'_>, prepared: &PreparedNode, pixels: u64) -> crate::FrameCost {

@@ -315,7 +315,7 @@ fn a_frame_predicted_past_its_most_submissions_still_lowers_the_rate() {
     let gpu = own_device();
     let renderer = Renderer::new(gpu.clone());
     let (effect, _) = registered(&renderer, heavy_effect());
-    let size = RenderSize::new(512, 288).expect("size");
+    let size = RenderSize::new(64, 36).expect("size");
     let view = flat_source(&renderer, size);
     let graph = heavy_chain(&view, &effect, size, 5);
     let polled = || {
@@ -375,19 +375,33 @@ fn a_frame_under_a_one_millisecond_watchdog_keeps_to_its_most_submissions_and_it
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(own_device());
     let (effect, _) = registered(&renderer, heavy_effect());
-    let size = RenderSize::new(512, 288).expect("size");
-    let view = flat_source(&renderer, size);
-    let graph = heavy_chain(&view, &effect, size, 6);
-    let draw = || {
-        let result = renderer.execute_graph(&graph).expect("the graph renders");
+    let draw = |graph: &RenderGraph<'_>| {
+        let result = renderer.execute_graph(graph).expect("the graph renders");
         let submissions = renderer
             .take_frame_submissions()
             .expect("the frame's submissions");
         (submissions, read_rgba8(&renderer, &result))
     };
-    let (whole, whole_picture) = with_watchdog(UNSPLIT_WATCHDOG_MS, draw);
+    let past_the_most_ms = 2.0
+        * f64::from(crate::submission_planner::MAX_FRAME_SUBMISSIONS)
+        * with_watchdog(1.0, alpha2_gpu::submission_budget_ms);
+    let sizes = [(64, 36), (128, 72), (256, 144), (512, 288), (1024, 576)];
+    let (view, size, whole, whole_picture) = sizes
+        .iter()
+        .enumerate()
+        .find_map(|(index, &(width, height))| {
+            let size = RenderSize::new(width, height).expect("size");
+            let view = flat_source(&renderer, size);
+            let (whole, picture) = with_watchdog(UNSPLIT_WATCHDOG_MS, || {
+                draw(&heavy_chain(&view, &effect, size, 6))
+            });
+            (index + 1 == sizes.len() || whole.predicted_ms.is_some_and(|ms| ms > past_the_most_ms))
+                .then_some((view, size, whole, picture))
+        })
+        .expect("a size");
     assert_eq!(whole.submissions, 1, "{whole:?}");
-    let (capped, capped_picture) = with_watchdog(1.0, draw);
+    let graph = heavy_chain(&view, &effect, size, 6);
+    let (capped, capped_picture) = with_watchdog(1.0, || draw(&graph));
     assert!(
         capped.submissions > 1
             && capped.submissions <= crate::submission_planner::MAX_FRAME_SUBMISSIONS,
@@ -513,21 +527,46 @@ fn frame_planned_at(
     graph: &RenderGraph<'_>,
     budgets: f64,
 ) -> (crate::FrameSubmissions, f64, Vec<u8>) {
-    let draw = || {
+    planned_at(gpu, renderer, budgets, || {
         let result = renderer.execute_graph(graph).expect("the graph renders");
         let submissions = renderer
             .take_frame_submissions()
             .expect("the frame's submissions");
         (submissions, read_rgba8(renderer, &result))
-    };
-    seeded_at(gpu, draw().0.cost.unit_pixels(), budgets);
-    let _ = renderer.take_gpu_submission_stats();
-    let (submissions, pixels) = draw();
-    let longest = renderer
-        .take_gpu_submission_stats()
-        .max_predicted_ms
+    })
+}
+
+fn planned_at<T>(
+    gpu: &GpuContext,
+    renderer: &Renderer,
+    budgets: f64,
+    draw: impl Fn() -> (crate::FrameSubmissions, T),
+) -> (crate::FrameSubmissions, f64, T) {
+    let unit_pixels = draw().0.cost.unit_pixels();
+    seeded_at(gpu, unit_pixels, budgets);
+    let piloted_ms = draw()
+        .0
+        .predicted_ms
         .expect("a frame over the planning threshold is planned");
-    (submissions, longest, pixels)
+    let watchdog_ms = f64::from(alpha2_gpu::watchdog_ms());
+    let wanted_ms = budgets * alpha2_gpu::submission_budget_ms();
+    seeded_at(gpu, unit_pixels, budgets);
+    with_watchdog(
+        (watchdog_ms * piloted_ms / wanted_ms).max(watchdog_ms),
+        || {
+            let _ = renderer.take_gpu_submission_stats();
+            let (submissions, drawn) = draw();
+            let longest = renderer
+                .take_gpu_submission_stats()
+                .max_predicted_ms
+                .expect("a frame over the planning threshold is planned");
+            (
+                submissions,
+                longest / alpha2_gpu::submission_budget_ms(),
+                drawn,
+            )
+        },
+    )
 }
 
 fn seeded_at(gpu: &GpuContext, unit_pixels: f64, budgets: f64) {
@@ -538,12 +577,11 @@ fn seeded_at(gpu: &GpuContext, unit_pixels: f64, budgets: f64) {
 
 const OVER_ROUNDING: f64 = 1.0 + 1e-9;
 
-fn assert_within_the_budget(longest: f64, planned: crate::FrameSubmissions, what: &str) {
-    let budget = alpha2_gpu::submission_budget_ms();
+fn assert_within_the_budget(longest_budgets: f64, planned: crate::FrameSubmissions, what: &str) {
     assert!(
-        longest <= budget * OVER_ROUNDING,
-        "{what} went in {} submission(s), the longest predicted at {longest:.0} ms against a \
-         budget of {budget:.0} ms: {planned:?}",
+        longest_budgets <= OVER_ROUNDING,
+        "{what} went in {} submission(s), the longest predicted at {longest_budgets:.2} budgets: \
+         {planned:?}",
         planned.submissions
     );
 }
@@ -770,13 +808,9 @@ fn a_frame_cut_after_its_conversions_draws_what_one_submission_draws() {
     });
     assert_eq!(whole.submissions, 1, "{whole:?}");
     let (_, whole_picture) = converted_frame(&renderer, source, output, true);
-    seeded_at(&gpu, whole.cost.unit_pixels(), 8.0);
-    let _ = renderer.take_gpu_submission_stats();
-    let (cut, cut_picture) = converted_frame(&renderer, source, output, true);
-    let longest = renderer
-        .take_gpu_submission_stats()
-        .max_predicted_ms
-        .expect("the frame is planned");
+    let (cut, longest, cut_picture) = planned_at(&gpu, &renderer, 8.0, || {
+        converted_frame(&renderer, source, output, true)
+    });
     assert!(cut.submissions >= 8, "{cut:?}");
     assert_within_the_budget(longest, cut, "a frame predicted at eight budgets");
     assert!(
@@ -1038,10 +1072,7 @@ fn a_pass_past_the_most_bands_is_cut_across_too_and_not_submitted_over_the_budge
     assert_within_the_budget(
         longest,
         planned,
-        &format!(
-            "a pass predicted at {past_the_bands} budgets (watchdog {} ms)",
-            alpha2_gpu::watchdog_ms()
-        ),
+        &format!("a pass predicted at {past_the_bands} budgets"),
     );
     assert!(whole == cut, "the tiles drew other bytes than the one pass");
 }
