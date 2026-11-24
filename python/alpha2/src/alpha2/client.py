@@ -150,6 +150,10 @@ class ExtractPlugin(TypedDict, total=False):
     """Lets a native artifact run, with the host process's rights."""
     force_wasm: bool
     """The wasm artifact even where a native one is allowed."""
+    supplied: Mapping[str, str | os.PathLike[str]]
+    """The file or directory that fills each resource slot the manifest declares, by slot name;
+    relative paths resolve against the working directory. The host takes them only within its
+    ``resource_root``."""
 
 
 class PluginHostPolicy(TypedDict, total=False):
@@ -165,6 +169,12 @@ class PluginHostPolicy(TypedDict, total=False):
     root: str | os.PathLike[str]
     """``"any"`` (the default), ``"none"`` for no local manifest, or the directory local manifests
     must lie under, resolved against the working directory when relative."""
+    isolation: Literal["process", "in-process"]
+    """Where a native artifact runs: ``process`` (the host's default), a worker process per run, so
+    a crash or a hang fails the request and not the host; ``in-process``, inside the host."""
+    resource_root: str | os.PathLike[str]
+    """Where files a request supplies for resource slots may lie: ``"none"`` (the host's default),
+    ``"any"``, or a directory, resolved against the working directory when relative."""
 
 
 class LoudnessTarget(TypedDict):
@@ -268,7 +278,7 @@ def _plugin_flags(policy: object) -> list[str]:
         return []
     if not isinstance(policy, Mapping):
         raise _invalid("plugins must be a mapping")
-    unknown = set(policy) - {"mode", "origins", "root"}
+    unknown = set(policy) - {"mode", "origins", "root", "isolation", "resource_root"}
     if unknown:
         raise _invalid(f"plugins has unknown keys: {', '.join(sorted(map(str, unknown)))}")
     flags: list[str] = []
@@ -299,6 +309,20 @@ def _plugin_flags(policy: object) -> list[str]:
             raise _invalid('plugins.root must be "any", "none" or a directory')
         text = os.fspath(root)
         flags += ["--plugin-root", text if text in ("any", "none") else os.path.abspath(text)]
+    isolation = policy.get("isolation")
+    if isolation is not None:
+        if isolation not in ("process", "in-process"):
+            raise _invalid("plugins.isolation must be process or in-process")
+        flags += ["--plugin-isolation", isolation]
+    resource_root = policy.get("resource_root")
+    if resource_root is not None:
+        if not isinstance(resource_root, (str, os.PathLike)) or os.fspath(resource_root) == "":
+            raise _invalid('plugins.resource_root must be "none", "any" or a directory')
+        text = os.fspath(resource_root)
+        flags += [
+            "--plugin-resource-root",
+            text if text in ("any", "none") else os.path.abspath(text),
+        ]
     return flags
 
 
@@ -1237,12 +1261,23 @@ class HostClient:
             manifest, sha256 = plugin.get("manifest"), plugin.get("sha256")
             if not isinstance(manifest, str) or not manifest or not isinstance(sha256, str):
                 raise _invalid("plugin needs its manifest and the manifest's sha256")
+            supplied = plugin.get("supplied", {})
+            if not isinstance(supplied, Mapping) or not all(
+                isinstance(slot, str)
+                and isinstance(path, (str, os.PathLike))
+                and os.fspath(path) != ""
+                for slot, path in supplied.items()
+            ):
+                raise _invalid("plugin.supplied maps resource slots to file or directory paths")
             runs = {
                 "plugin": {
                     "manifest": manifest if _URL_SCHEME.match(manifest) else _absolute(manifest),
                     "sha256": sha256,
                     "allow_native": bool(plugin.get("allow_native", False)),
                     "force_wasm": bool(plugin.get("force_wasm", False)),
+                    "supplied": {
+                        slot: _absolute(os.fspath(path)) for slot, path in supplied.items()
+                    },
                 }
             }
         read = request.get("input")
@@ -1616,6 +1651,8 @@ def _error_from_host(error: dict[str, Any], stderr: str, phase: ExportPhase) -> 
         and isinstance(details.get("keptPath"), str)
     ):
         options["kept_path"] = details["keptPath"]
+    if isinstance(details, dict):
+        options["details"] = details
     return Alpha2HostError(error["code"], error["message"], **options)
 
 

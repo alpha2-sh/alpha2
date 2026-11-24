@@ -42,7 +42,10 @@
           "fields": {
             "assets": { "a": "clip.mp4" },
             "fonts": ["fonts/Inter.ttf"],
-            "plugin": { "manifest": "plugins/levels/manifest.json" }
+            "plugin": {
+              "manifest": "plugins/levels/manifest.json",
+              "supplied": { "model": "models/whisper" }
+            }
           }
         },
         {
@@ -86,7 +89,12 @@
           "unchanged": ["/frames/seq/1"]
         },
         {
-          "resolved": ["/assets/a", "/fonts/0", "/plugin/manifest"],
+          "resolved": [
+            "/assets/a",
+            "/fonts/0",
+            "/plugin/manifest",
+            "/plugin/supplied/model"
+          ],
           "unchanged": []
         },
         { "resolved": [], "unchanged": ["/plugin/manifest"] },

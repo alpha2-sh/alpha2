@@ -156,6 +156,15 @@ def test_the_plugins_option_becomes_the_serve_flags_and_a_malformed_one_starts_n
     assert flags({"origins": "none", "root": "none"}) == [
         ["--plugin-origins", "none", "--plugin-root", "none"]
     ]
+    assert flags({"isolation": "in-process", "resource_root": "models"}) == [
+        [
+            "--plugin-isolation",
+            "in-process",
+            "--plugin-resource-root",
+            str(tmp_path / "models"),
+        ]
+    ]
+    assert flags({"resource_root": "any"}) == [["--plugin-resource-root", "any"]]
     starts.unlink(missing_ok=True)
     for refused in [
         {"mode": "all"},
@@ -163,6 +172,8 @@ def test_the_plugins_option_becomes_the_serve_flags_and_a_malformed_one_starts_n
         {"origins": ["http://a.example"]},
         {"origins": "https://a.example"},
         {"root": ""},
+        {"isolation": "worker"},
+        {"resource_root": ""},
         {"allow": True},
         "native",
     ]:
