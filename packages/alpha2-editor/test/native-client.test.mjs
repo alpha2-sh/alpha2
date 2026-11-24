@@ -411,9 +411,16 @@ test("an image sequence's frames map to their uploads in one pass, however long"
 /**
  * A fake native export service: PUT allocates a job once, assets upload while it prepares, POST
  * renders only a preparing or failed job, and a render completes after `renderPolls` status
- * requests. `fail(method, path, count)` makes a request throw as a lost connection does.
+ * requests. `fail(method, path, count)` makes a request throw as a lost connection does,
+ * `expire(method, path, count)` drops the job just before the request, and `refuse(method, path,
+ * count)` may answer it with its own response.
  */
-function service({ renderPolls = 3, fail = () => false } = {}) {
+function service({
+  renderPolls = 3,
+  fail = () => false,
+  expire = () => false,
+  refuse = () => null,
+} = {}) {
   const calls = [];
   const counts = new Map();
   let job = null;
@@ -425,6 +432,9 @@ function service({ renderPolls = 3, fail = () => false } = {}) {
     calls.push(key);
     if (fail(method, path, counts.get(key)))
       throw new TypeError("network connection lost");
+    if (expire(method, path, counts.get(key))) job = null;
+    const refused = refuse(method, path, counts.get(key));
+    if (refused) return refused;
     if (method === "PUT" && path === "/jobs/id") {
       if (job)
         return Response.json({ error: "Job already exists" }, { status: 409 });
@@ -470,7 +480,7 @@ const nativeExport = async (fake) => {
   );
   await client.dispose();
   await editor.dispose();
-  return result;
+  return { ...result, attempts: job.attempts };
 };
 
 test("a status request lost once is asked again, and the render goes on", async () => {
@@ -508,6 +518,62 @@ test("a retry while the service still renders follows that render instead of ask
   assert.equal(value.kind, "url");
   assert.equal(fake.count("POST /jobs/id"), 1);
   assert.equal(fake.count("DELETE /jobs/id"), 0);
+});
+
+test("an upload to a job the service dropped allocates the job again on the next attempt", async () => {
+  const fake = service({
+    expire: (method, path, n) =>
+      method === "PUT" && path === "/jobs/id/assets/b" && n === 1,
+  });
+  const { value, error } = await nativeExport(fake);
+  assert.equal(error, undefined, error?.message);
+  assert.equal(value.kind, "url");
+  assert.equal(fake.count("PUT /jobs/id"), 2);
+  assert.equal(fake.count("PUT /jobs/id/assets/a"), 2);
+  assert.equal(fake.count("POST /jobs/id"), 1);
+});
+
+test("a render request for a job the service dropped starts the job over", async () => {
+  const fake = service({
+    expire: (method, path, n) => method === "POST" && n === 1,
+  });
+  const { value, error, attempts } = await nativeExport(fake);
+  assert.equal(error, undefined, error?.message);
+  assert.equal(value.kind, "url");
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].failure.code, "HOST_EXITED");
+  assert.equal(fake.count("PUT /jobs/id"), 2);
+  assert.equal(fake.count("POST /jobs/id"), 2);
+});
+
+test("an upload past the service's limit fails at once as a resource limit", async () => {
+  const fake = service({
+    refuse: (method, path) =>
+      method === "PUT" && path === "/jobs/id/assets/b"
+        ? Response.json(
+            { error: "Upload exceeds 1 bytes", limitBytes: 1 },
+            { status: 413 },
+          )
+        : null,
+  });
+  const { error } = await nativeExport(fake);
+  assert.equal(error?.failure?.code, "RESOURCE_LIMIT");
+  assert.equal(error.failure.diagnostics.limitBytes, 1);
+  assert.match(error.message, /Upload exceeds 1 bytes/);
+  assert.equal(fake.count("PUT /jobs/id/assets/b"), 1);
+  assert.equal(fake.count("POST /jobs/id"), 0);
+});
+
+test("a project past the service's limit is not sent again", async () => {
+  const fake = service({
+    refuse: (method) =>
+      method === "POST"
+        ? Response.json({ error: "Project exceeds 1 bytes" }, { status: 413 })
+        : null,
+  });
+  const { error } = await nativeExport(fake);
+  assert.equal(error?.failure?.code, "RESOURCE_LIMIT");
+  assert.equal(fake.count("POST /jobs/id"), 1);
 });
 
 test("a client that detaches lets a submitted render go on, and removes a job still uploading", async () => {

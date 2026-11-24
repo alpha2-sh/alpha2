@@ -4,7 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `failureClassOfHttpStatus` in `alpha2/export-failure` classifies an export service's HTTP error
+  status: 413 `RESOURCE_LIMIT`, 429 and 503 `RESOURCE_BUSY`, 507 `STORAGE_QUOTA_EXCEEDED`.
+
 ### Fixed
+
+- The native client treats a 404 to an asset upload or a render request as a job the service lost,
+  so the next attempt allocates and uploads it again instead of failing three times, and no longer
+  retries an upload or a project the service refuses as too large (413): the export fails at once
+  with `RESOURCE_LIMIT` and the service's `limitBytes` in `diagnostics`. Its job failures are
+  `ExportFailureError`s with the service's message.
 
 - `bake` of a linear source-anchored data set read through a clip no longer stops the motion at
   the clip's last sample: the baked keys follow the live value toward the next sample up to the

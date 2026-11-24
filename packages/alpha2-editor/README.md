@@ -159,7 +159,7 @@ The application owns the session: unmounting the provider does not dispose it.
 
 ## Native export
 
-`@alpha2-sh/editor/native-client` (`createNativeClient({ baseUrl })`) exports a document on an HTTP export service that the application runs, for example on top of [`@alpha2-sh/node`](https://github.com/alpha2-sh/alpha2/blob/main/packages/alpha2-node/README.md). It uploads the document's media (`bridge.nativeAssets`) and follows the job to a downloadable file.
+`@alpha2-sh/editor/native-client` (`createNativeClient({ baseUrl })`) exports a document on an HTTP export service that the application runs, for example on top of [`@alpha2-sh/node`](https://github.com/alpha2-sh/alpha2/blob/main/packages/alpha2-node/README.md). It uploads the document's media (`bridge.nativeAssets`) and follows the job to a downloadable file. A job the service no longer has (an expired lease, a restarted service) is allocated and uploaded again by the next attempt, and an error status is classified by `failureClassOfHttpStatus` from `alpha2/export-failure`: a body past the service's limit (413) fails at once as `RESOURCE_LIMIT`, and 429 or 503 retries as `RESOURCE_BUSY` after `Retry-After`.
 
 ## License
 
