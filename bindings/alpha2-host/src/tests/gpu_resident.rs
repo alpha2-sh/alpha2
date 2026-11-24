@@ -1398,6 +1398,7 @@ fn gpu_time_is_reported_or_says_why_not() {
         }]}]}
     });
     let mut host = create_media_host(VideoDecodePolicy::Software).expect("host");
+    let gpu = host.renderer.gpu().is_some();
     let timestamps = host
         .renderer
         .gpu()
@@ -1461,7 +1462,7 @@ fn gpu_time_is_reported_or_says_why_not() {
                 &mut |_| Ok(()),
             )
             .unwrap_or_else(|error| panic!("{case}: {error}"));
-        assert_gpu_time_reported(&case, &result["performance"], timestamps);
+        assert_gpu_time_reported(&case, &result["performance"], gpu, timestamps);
     }
     host.input_policy = VideoInputPolicy::Auto;
 }
@@ -1470,9 +1471,9 @@ fn gpu_time_is_reported_or_says_why_not() {
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
 ))]
-fn assert_gpu_time_reported(case: &str, performance: &Value, timestamps: bool) {
+fn assert_gpu_time_reported(case: &str, performance: &Value, gpu: bool, timestamps: bool) {
     assert!(
-        performance["frameQueueSubmitMs"]
+        !gpu || performance["frameQueueSubmitMs"]
             .as_f64()
             .is_some_and(|ms| ms > 0.0),
         "{case}: {performance}"
