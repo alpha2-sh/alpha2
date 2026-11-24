@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,15 @@ use super::{
 const WATCH_INTERVAL: Duration = Duration::from_millis(50);
 /// How long a worker may take to end after it was asked to, before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+#[cfg(unix)]
+type WorkerInput = std::os::unix::net::UnixStream;
+#[cfg(unix)]
+type WorkerOutput = std::os::unix::net::UnixStream;
+#[cfg(not(unix))]
+type WorkerInput = std::process::ChildStdin;
+#[cfg(not(unix))]
+type WorkerOutput = std::process::ChildStdout;
 
 /// Why the host killed a worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,11 +181,48 @@ fn wire_violation(what: &str) -> PluginError {
     .with_details(details)
 }
 
+#[cfg(unix)]
+type Channel = (WorkerInput, WorkerOutput);
+
+#[cfg(not(unix))]
+struct Channel;
+
+#[cfg(unix)]
+fn open_channel(spawn: &mut Command) -> std::io::Result<Channel> {
+    use std::os::fd::OwnedFd;
+    let (host, worker) = std::os::unix::net::UnixStream::pair()?;
+    spawn
+        .stdin(Stdio::from(OwnedFd::from(worker.try_clone()?)))
+        .stdout(Stdio::from(OwnedFd::from(worker)));
+    Ok((host.try_clone()?, host))
+}
+
+#[cfg(not(unix))]
+#[expect(clippy::unnecessary_wraps, reason = "the socket pair of Unix may fail")]
+fn open_channel(spawn: &mut Command) -> std::io::Result<Channel> {
+    spawn.stdin(Stdio::piped()).stdout(Stdio::piped());
+    Ok(Channel)
+}
+
+#[cfg(unix)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the pipes of other platforms may be missing"
+)]
+const fn channel_ends(channel: Channel, _child: &mut Child) -> Option<(WorkerInput, WorkerOutput)> {
+    Some(channel)
+}
+
+#[cfg(not(unix))]
+fn channel_ends(_channel: Channel, child: &mut Child) -> Option<(WorkerInput, WorkerOutput)> {
+    Some((child.stdin.take()?, child.stdout.take()?))
+}
+
 /// A native plugin in a worker process.
 pub(super) struct ProcessTransport {
     shared: Arc<Shared>,
-    input: Option<ChildStdin>,
-    output: BufReader<ChildStdout>,
+    input: Option<WorkerInput>,
+    output: BufReader<WorkerOutput>,
     sequence: u32,
     deadline: Duration,
     collected: Collected,
@@ -207,11 +253,13 @@ impl ProcessTransport {
         spawn
             .args(&command.args)
             .envs(command.envs.iter().map(|(key, value)| (key, value)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         alpha2_os::own_process_tree(&mut spawn);
-        let mut child = spawn.spawn().map_err(|error| {
+        let channel = open_channel(&mut spawn)
+            .map_err(|error| failed(format!("the plugin worker's channel: {error}")))?;
+        let spawned = spawn.spawn();
+        drop(spawn);
+        let mut child = spawned.map_err(|error| {
             failed(format!(
                 "the plugin worker {} did not start: {error}",
                 command.program.display()
@@ -221,8 +269,8 @@ impl ProcessTransport {
         if let Some(job) = &job {
             let _ = job.assign(&child);
         }
-        let (Some(input), Some(output), Some(errors)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        let (Some((input, output)), Some(errors)) =
+            (channel_ends(channel, &mut child), child.stderr.take())
         else {
             let _ = alpha2_os::kill_process_tree(&mut child);
             return Err(failed("the plugin worker has no pipes".to_owned()));

@@ -18,6 +18,11 @@ const BROKEN: u8 = 3;
 
 type Writer = Rc<RefCell<BufWriter<File>>>;
 
+#[cfg(unix)]
+type Input = alpha2_os::DescriptorReader;
+#[cfg(not(unix))]
+type Input = File;
+
 /// Writes a frame, or ends the process when the host is gone.
 fn send(writer: &Writer, tag: u8, parts: &[&[u8]]) {
     if wire::write_frame(&mut *writer.borrow_mut(), tag, parts).is_err() {
@@ -56,6 +61,8 @@ pub fn main() -> ! {
         }
     };
     alpha2_os::close_descriptors_except(&[&input, &output]);
+    #[cfg(unix)]
+    let input = alpha2_os::DescriptorReader::new(input);
     let _ = alpha2_os::on_termination(|termination| {
         alpha2_os::exit_without_handlers(termination.exit_code());
     });
@@ -80,7 +87,7 @@ pub fn main() -> ! {
 }
 
 /// Answers the host's requests until it asks the worker to end.
-fn serve(input: &mut BufReader<File>, writer: &Writer) -> ! {
+fn serve(input: &mut BufReader<Input>, writer: &Writer) -> ! {
     let mut instance: Option<NativeInstance> = None;
     let mut reported = BTreeSet::new();
     let mut sequence = 0_u32;
@@ -93,6 +100,9 @@ fn serve(input: &mut BufReader<File>, writer: &Writer) -> ! {
             }
             Err(_) => alpha2_os::exit_without_handlers(BROKEN),
         };
+        if descriptors_pending(input) {
+            alpha2_os::exit_without_handlers(BROKEN);
+        }
         sequence = sequence.wrapping_add(1);
         let seq = sequence.to_le_bytes();
         match (frame.tag, instance.as_mut()) {
@@ -122,6 +132,16 @@ fn serve(input: &mut BufReader<File>, writer: &Writer) -> ! {
             (_, None) => alpha2_os::exit_without_handlers(BROKEN),
         }
     }
+}
+
+#[cfg(unix)]
+fn descriptors_pending(input: &BufReader<Input>) -> bool {
+    input.get_ref().pending() > 0
+}
+
+#[cfg(not(unix))]
+const fn descriptors_pending(_input: &BufReader<Input>) -> bool {
+    false
 }
 
 /// Loads the library a `load` frame names.

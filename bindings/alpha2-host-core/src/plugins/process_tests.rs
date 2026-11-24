@@ -431,6 +431,19 @@ fn a_worker_flooding_standard_error_finishes_and_its_host_writes_at_most_the_bud
     );
 }
 
+#[cfg(unix)]
+fn end_stream(output: std::fs::File) {
+    let socket = std::os::unix::net::UnixStream::from(std::os::fd::OwnedFd::from(output));
+    socket
+        .shutdown(std::net::Shutdown::Write)
+        .expect("shut the stream");
+}
+
+#[cfg(not(unix))]
+fn end_stream(output: std::fs::File) {
+    drop(output);
+}
+
 /// A worker that speaks the wire honestly for the scripted fixture until its `mode` breaks it.
 fn lying_worker(mode: &str) {
     let input = alpha2_os::claim_stdin().expect("stdin");
@@ -478,7 +491,7 @@ fn lying_worker(mode: &str) {
             (host::BEGIN, "cut_frame") => {
                 output.write_all(&100_u32.to_le_bytes()).expect("write");
                 output.write_all(&[child::RECORDS, 1, 2, 3]).expect("write");
-                drop(output);
+                end_stream(output);
                 std::thread::sleep(Duration::from_secs(30));
                 return;
             }
