@@ -130,8 +130,10 @@ pub use manifest::plugin_manifest_json_schema;
 pub use manifest::{
     ArtifactKind, MAX_MANIFEST_BYTES, MAX_PLUGIN_ARTIFACT_BYTES, MAX_PLUGIN_ARTIFACTS,
     MAX_PLUGIN_RESOURCE_BYTES, MAX_PLUGIN_RESOURCES, MAX_PLUGIN_RESOURCES_TOTAL_BYTES,
-    ManifestError, PLUGIN_MANIFEST_SCHEMA_ID, PluginArtifact, PluginKind, PluginManifest,
-    PluginResource, Reference, WASM_TARGET, reference,
+    MAX_PLUGIN_SLOTS, MAX_SLOT_ACCEPT, MAX_SLOT_ACCEPT_BYTES, MAX_SLOT_NAME_BYTES, ManifestError,
+    PLUGIN_MANIFEST_SCHEMA_ID, PinnedResource, PluginArtifact, PluginKind, PluginManifest,
+    PluginResource, Reference, ResourceSource, SlotShape, SuppliedSlot, WASM_TARGET, is_slot_name,
+    reference,
 };
 pub use pixels::{
     delivered_size, displayed_size, luma8_from_rgba8, mono_downmix, present_for_extraction,

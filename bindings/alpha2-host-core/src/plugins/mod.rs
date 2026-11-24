@@ -524,7 +524,10 @@ pub fn load(
     let mut resources = HashMap::new();
     for resource in &manifest.resources {
         stopped()?;
-        let (_, bytes) = read_verified(fetch, &resource.url, &resource.sha256, resource.bytes)?;
+        let Some(pinned) = resource.pinned() else {
+            continue;
+        };
+        let (_, bytes) = read_verified(fetch, &pinned.url, &pinned.sha256, pinned.bytes)?;
         resources.insert(resource.name.clone(), bytes);
     }
     stopped()?;

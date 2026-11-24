@@ -7,7 +7,8 @@
 //! ```
 //!
 //! The plugin crate has `descriptor.json` at its root; files under `resources/` are copied, and
-//! `resources.json` lists resources hosted elsewhere (`name`, `url`, `sha256`, `bytes`). Native
+//! `resources.json` lists entries written to the manifest as they are: resources hosted elsewhere
+//! (`name`, `url`, `sha256`, `bytes`) and slots the caller fills (`name`, `supplied`). Native
 //! targets default to the host's. Nothing is uploaded.
 
 mod check;

@@ -288,6 +288,40 @@
       ],
       "type": "object"
     },
+    "PinnedResource": {
+      "additionalProperties": false,
+      "description": "A file the manifest pins by URL, SHA-256 and length.",
+      "properties": {
+        "bytes": {
+          "description": "Its length in bytes.",
+          "format": "uint64",
+          "maximum": 2147483648,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "The name the plugin asks for.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 of its bytes, 64 lowercase hexadecimal digits.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "url": {
+          "description": "Where it is: a path under the manifest's own directory, or an absolute `https:` URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
     "PluginArtifact": {
       "additionalProperties": false,
       "description": "One build of a plugin.",
@@ -337,37 +371,30 @@
       ]
     },
     "PluginResource": {
-      "additionalProperties": false,
-      "description": "A file a plugin reads.",
-      "properties": {
-        "bytes": {
-          "description": "Its length in bytes.",
-          "format": "uint64",
-          "maximum": 2147483648,
-          "minimum": 0,
-          "type": "integer"
+      "description": "A file a plugin reads: pinned by the manifest, or a slot the caller fills at load time.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/PinnedResource"
         },
-        "name": {
-          "description": "The name the plugin asks for.",
+        {
+          "$ref": "#/$defs/SuppliedResource"
+        }
+      ]
+    },
+    "SlotShape": {
+      "description": "What the caller names for a slot.",
+      "oneOf": [
+        {
+          "const": "file",
+          "description": "One file, read as the resource named as the slot.",
           "type": "string"
         },
-        "sha256": {
-          "description": "SHA-256 of its bytes, 64 lowercase hexadecimal digits.",
-          "pattern": "^[0-9a-f]{64}$",
-          "type": "string"
-        },
-        "url": {
-          "description": "Where it is: a path under the manifest's own directory, or an absolute `https:` URL.",
+        {
+          "const": "directory",
+          "description": "A directory; each file under it is the resource `<slot>/<relative path>`.",
           "type": "string"
         }
-      },
-      "required": [
-        "name",
-        "url",
-        "sha256",
-        "bytes"
-      ],
-      "type": "object"
+      ]
     },
     "Suggest": {
       "description": "How an output is usually used.",
@@ -388,6 +415,64 @@
           "type": "string"
         }
       ]
+    },
+    "SuppliedResource": {
+      "additionalProperties": false,
+      "description": "A slot the caller fills with a file or a directory when it loads the plugin.",
+      "properties": {
+        "name": {
+          "description": "The slot's name, which the plugin asks for.",
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$",
+          "type": "string"
+        },
+        "supplied": {
+          "$ref": "#/$defs/SuppliedSlot",
+          "description": "What the caller fills it with."
+        }
+      },
+      "required": [
+        "name",
+        "supplied"
+      ],
+      "type": "object"
+    },
+    "SuppliedSlot": {
+      "additionalProperties": false,
+      "description": "A resource slot the caller fills at load time.",
+      "properties": {
+        "accept": {
+          "description": "File name suffixes a picker offers, such as `.onnx`; for interfaces only.",
+          "items": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "max_bytes": {
+          "description": "The largest single file the plugin takes from the slot, in bytes.",
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "required": {
+          "default": true,
+          "description": "Whether a load without it fails. An optional slot left empty reads as an undeclared name.",
+          "type": "boolean"
+        },
+        "shape": {
+          "$ref": "#/$defs/SlotShape",
+          "description": "What the caller names."
+        }
+      },
+      "required": [
+        "shape"
+      ],
+      "type": "object"
     },
     "VideoFormat": {
       "description": "How delivered video frames are packed.",
