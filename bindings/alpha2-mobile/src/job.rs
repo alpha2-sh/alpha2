@@ -58,6 +58,7 @@ impl<T: Send + 'static> Job<T> {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body))
                     .unwrap_or_else(|payload| {
                         Err(Alpha2Error::Failed {
+                            details: None,
                             code: "INTERNAL".into(),
                             reason: format!(
                                 "the {} thread panicked: {}",
@@ -70,6 +71,7 @@ impl<T: Send + 'static> Job<T> {
             })
             .map(drop)
             .map_err(|error| Alpha2Error::Failed {
+                details: None,
                 code: "RESOURCE_LIMIT".into(),
                 reason: format!("cannot start the {} thread: {error}", self.what),
             })
@@ -178,7 +180,7 @@ mod tests {
             pollster::block_on(job.outcome())
         });
         match outcome {
-            Err(Alpha2Error::Failed { code, reason }) => {
+            Err(Alpha2Error::Failed { code, reason, .. }) => {
                 assert_eq!(code, "INTERNAL");
                 assert!(reason.contains("the body broke"), "{reason}");
             }

@@ -90,6 +90,7 @@ impl From<Alpha2Error> for Failure {
 
 pub(crate) fn failed(code: &str, reason: impl Into<String>) -> Alpha2Error {
     Alpha2Error::Failed {
+        details: None,
         code: code.into(),
         reason: reason.into(),
     }
@@ -1198,7 +1199,7 @@ mod tests {
         });
         let (output, outcome) = export_with(&encoders, "audio", &wav);
         assert!(
-            matches!(&outcome, Err(Alpha2Error::Failed { code, reason })
+            matches!(&outcome, Err(Alpha2Error::Failed { code, reason, .. })
                 if code == "ENCODE_FAILED" && reason.contains("audio session")),
             "{outcome:?}"
         );

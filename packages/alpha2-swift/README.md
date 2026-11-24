@@ -16,7 +16,7 @@ dependencies: [.package(path: "../alpha2/packages/alpha2-swift")],
 
 - iOS 17 or later. The simulator slice is arm64 only.
 - Each framework slice carries `LICENSE.md`, `THIRD_PARTY_NOTICES.md` and, when the build named them with `ALPHA2_NOTICES`, the Rust crates' licences.
-- Compose is built in; extractor plugins (`Plugin`) are not, since the build script does not enable the crate's `plugins` feature.
+- Compose is built in; extractor plugins (`Plugin`) are not, since the build script does not enable the crate's `plugins` feature. A build that enables it loads a plugin with `Plugin.load(manifestPath:sha256:allowNative:supplied:)`; `supplied` maps a resource slot of the manifest to a file or directory the app may read (a model the user picked), read in the app's process. A document-picker URL is security-scoped: call `startAccessingSecurityScopedResource()` before `extractPlugin` and `stopAccessingSecurityScopedResource()` once the extraction has ended.
 
 ## Start
 
@@ -123,16 +123,16 @@ Every failing call throws an `Alpha2Error`, one case per kind:
 | `GpuInitFailed` | `GPU_INIT_FAILED` | `reason`, under `.gpu` |
 | `OutputPublishFailed` | `OUTPUT_PUBLISH_FAILED` | `reason`, `keptPath`: the finished file kept beside the output, which the app then owns |
 | `Aborted` | `ABORTED` | cancelled |
-| `Failed` | `code` | `code`, `reason` |
+| `Failed` | `code` | `code`, `reason`, `details`: a JSON object for codes that carry one, such as `PLUGIN_RESOURCE_INVALID` (`{ "slot", "reason" }`), else `nil` |
 
 `ConformFailed` (`CONFORM_FAILED`, with `reason` and `reportJson`) is part of the type, but no call of this release throws it: a source with no file in `assets` fails with `MISSING_INPUT`, and a file that does not open or decode with `SOURCE_FAILED` or `DECODE_FAILED`.
 
-`Failed` carries the other codes: `DECODE_FAILED`, `ENCODE_FAILED`, `RENDER_FAILED`, `AUDIO_RENDER_FAILED`, `SOURCE_FAILED` (a source that could not be read during the export), `MISSING_INPUT`, `OUTPUT_IN_USE`, `OUTPUT_IO_FAILED`, `RESOURCE_LIMIT` (including a library thread that could not start), `PROGRESS_CALLBACK_FAILED`, `INTERNAL` (a library thread panicked: a defect), and for extractions `EXTRACTOR_FAILED`, `INVALID_EMIT` and the extractor's own codes.
+`Failed` carries the other codes: `DECODE_FAILED`, `ENCODE_FAILED`, `RENDER_FAILED`, `AUDIO_RENDER_FAILED`, `SOURCE_FAILED` (a source that could not be read during the export), `MISSING_INPUT`, `OUTPUT_IN_USE`, `OUTPUT_IO_FAILED`, `RESOURCE_LIMIT` (including a library thread that could not start), `PROGRESS_CALLBACK_FAILED`, `INTERNAL` (a library thread panicked: a defect), and for extractions `EXTRACTOR_FAILED`, `INVALID_EMIT`, the extractor's own codes and the `PLUGIN_*` codes.
 
 ```swift
 do {
     _ = try await handle.outcome()
-} catch Alpha2Error.Failed(let code, let reason) {
+} catch Alpha2Error.Failed(let code, let reason, _) {
     print("\(code): \(reason)")
 }
 ```

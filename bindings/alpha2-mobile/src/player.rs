@@ -160,6 +160,7 @@ impl Player {
             .name("alpha2-preview".into())
             .spawn(move || contained(&thread_shared, || run(session, &receive, &thread_shared)))
             .map_err(|error| Alpha2Error::Failed {
+                details: None,
                 code: "RESOURCE_LIMIT".into(),
                 reason: format!("cannot start the preview thread: {error}"),
             })?;

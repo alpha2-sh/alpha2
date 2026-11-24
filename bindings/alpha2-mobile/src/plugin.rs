@@ -2,16 +2,18 @@
 //! pinned hashes. App stores forbid downloading code, so nothing is fetched and every URL in the
 //! manifest must be relative to it.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use alpha2_engine::extract::{Reference, reference};
 use alpha2_host_core::plugins::{
-    Fetch, Fetched, LoadRequest, PluginError, Policy, codes, load, parse_manifest, sha256_hex,
+    Fetch, Fetched, LoadRequest, PluginError, PluginExtractor, Policy, ResourceRoot, codes, load,
+    parse_manifest, sha256_hex,
 };
 
 use crate::error::Alpha2Error;
-use crate::extract::{ExtractRequest, ExtractionHandle, RunExtractor};
+use crate::extract::{ExtractRequest, ExtractionHandle, Run, RunExtractor};
 use crate::session::Alpha2;
 
 fn plugin_error(error: PluginError) -> Alpha2Error {
@@ -19,8 +21,17 @@ fn plugin_error(error: PluginError) -> Alpha2Error {
         return Alpha2Error::Aborted;
     }
     Alpha2Error::Failed {
+        details: error
+            .details
+            .map(|details| serde_json::Value::Object(details).to_string()),
         code: error.code.into(),
         reason: error.message,
+    }
+}
+
+impl Run for PluginExtractor {
+    fn made_by(&self) -> Option<alpha2_model::MadeByPlugin> {
+        Some(PluginExtractor::made_by(self))
     }
 }
 
@@ -50,13 +61,16 @@ pub struct Plugin {
     manifest: alpha2_engine::extract::PluginManifest,
     manifest_sha256: String,
     directory: PathBuf,
+    supplied: BTreeMap<String, PathBuf>,
     policy: Policy,
 }
 
 #[uniffi::export]
 impl Plugin {
     /// The plugin whose manifest is the file at `manifest_path`, which has SHA-256 `sha256`.
-    /// Its native artifact runs only when `allow_native`; otherwise its sandboxed wasm one does.
+    /// Its native artifact runs only when `allow_native`, in the app's process; otherwise its
+    /// sandboxed wasm one does. `supplied` maps each resource slot the app fills to the absolute
+    /// path of a file or directory the app may read; they are checked when the plugin runs.
     ///
     /// # Errors
     /// `PLUGIN_FETCH_FAILED` for an unreadable manifest, `PLUGIN_HASH_MISMATCH`,
@@ -66,6 +80,7 @@ impl Plugin {
         manifest_path: String,
         sha256: String,
         allow_native: bool,
+        supplied: HashMap<String, String>,
     ) -> Result<Arc<Self>, Alpha2Error> {
         let path = PathBuf::from(&manifest_path);
         let bytes = std::fs::read(&path).map_err(|error| {
@@ -92,8 +107,13 @@ impl Plugin {
             manifest,
             manifest_sha256: found,
             directory: path.parent().map(Path::to_path_buf).unwrap_or_default(),
+            supplied: supplied
+                .into_iter()
+                .map(|(slot, path)| (slot, PathBuf::from(path)))
+                .collect(),
             policy: Policy {
                 allow_native,
+                resource_root: ResourceRoot::Any,
                 ..Policy::default()
             },
         }))
@@ -136,17 +156,15 @@ impl Alpha2 {
                         manifest: &plugin.manifest,
                         manifest_sha256: &plugin.manifest_sha256,
                         params: &run.params,
-                        supplied: &std::collections::BTreeMap::new(),
+                        supplied: &plugin.supplied,
                     },
                     &plugin.policy,
                     &mut bundled,
                     cancel,
                 )
                 .map_err(plugin_error)?;
-                let made_by = extractor.made_by();
                 Ok(RunExtractor {
                     extractor: Box::new(extractor),
-                    plugin: Some(made_by),
                 })
             }),
         )

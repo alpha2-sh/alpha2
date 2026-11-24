@@ -221,6 +221,7 @@ impl Progress {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map(|reason| Alpha2Error::Failed {
+                details: None,
                 code: "PROGRESS_CALLBACK_FAILED".into(),
                 reason: format!("the progress callback failed: {reason}"),
             })
@@ -883,7 +884,7 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(30))
             .expect("the outcome settles");
         match outcome {
-            Err(Alpha2Error::Failed { code, reason }) => {
+            Err(Alpha2Error::Failed { code, reason, .. }) => {
                 assert_eq!(code, "INTERNAL");
                 assert!(reason.contains("the backend broke"), "{reason}");
             }
@@ -1092,7 +1093,7 @@ mod tests {
         for (at, name) in [(1, "first"), (u64::MAX, "last")] {
             let (output, outcome) = export_with(Arc::new(FailsAt(at)), name);
             match outcome {
-                Err(Alpha2Error::Failed { code, reason }) => {
+                Err(Alpha2Error::Failed { code, reason, .. }) => {
                     assert_eq!(code, "PROGRESS_CALLBACK_FAILED", "{name}");
                     assert!(reason.contains("progress callback"), "{reason}");
                     assert!(reason.contains("the app broke"), "{reason}");
