@@ -6,6 +6,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::Descriptor;
+#[cfg(feature = "schema")]
+use super::descriptor::PLAIN_TEXT_PATTERN;
+use super::descriptor::plain_text;
 
 /// The longest manifest text accepted.
 pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
@@ -40,8 +43,181 @@ pub struct PluginManifest {
     /// Files the plugin reads through `resource()`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<PluginResource>,
+    /// What an interface shows about the plugin. The engine ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<PluginAbout>,
     /// The descriptor `describe()` returns.
     pub descriptor: Descriptor,
+}
+
+/// The longest `about.name`, in characters.
+pub const MAX_ABOUT_NAME_CHARS: usize = 80;
+/// The longest `about.summary`, in characters.
+pub const MAX_ABOUT_SUMMARY_CHARS: usize = 400;
+/// The longest `about.author`, in characters.
+pub const MAX_ABOUT_AUTHOR_CHARS: usize = 80;
+/// The longest `about.homepage`, in characters.
+pub const MAX_ABOUT_HOMEPAGE_CHARS: usize = 2048;
+/// The longest `about.license`, in characters.
+pub const MAX_ABOUT_LICENSE_CHARS: usize = 256;
+
+/// What an interface shows about a plugin: plain text, never markup, without control characters.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PluginAbout {
+    /// The plugin's name.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAX_ABOUT_NAME_CHARS), regex(pattern = PLAIN_TEXT_PATTERN))
+    )]
+    pub name: String,
+    /// What it does, in a sentence or two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_ABOUT_SUMMARY_CHARS), regex(pattern = PLAIN_TEXT_PATTERN))
+    )]
+    pub summary: Option<String>,
+    /// Who makes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_ABOUT_AUTHOR_CHARS), regex(pattern = PLAIN_TEXT_PATTERN))
+    )]
+    pub author: Option<String>,
+    /// Its web page, an `https:` URL of printable ASCII.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_ABOUT_HOMEPAGE_CHARS), regex(pattern = HOMEPAGE_PATTERN))
+    )]
+    pub homepage: Option<String>,
+    /// Its license, an SPDX license expression such as `MIT OR Apache-2.0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_ABOUT_LICENSE_CHARS), regex(pattern = LICENSE_PATTERN))
+    )]
+    pub license: Option<String>,
+}
+
+#[cfg(feature = "schema")]
+const HOMEPAGE_PATTERN: &str = "^https://[!-~]+$";
+#[cfg(feature = "schema")]
+const LICENSE_PATTERN: &str = r"^[A-Za-z0-9.+:() -]+$";
+
+impl PluginAbout {
+    fn validate(&self) -> Result<(), String> {
+        let text = |field: &str, value: &str, min: usize, max: usize| {
+            if plain_text(value, min, max) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "about.{field} is not {min} to {max} characters without control characters"
+                ))
+            }
+        };
+        text("name", &self.name, 1, MAX_ABOUT_NAME_CHARS)?;
+        if let Some(summary) = &self.summary {
+            text("summary", summary, 0, MAX_ABOUT_SUMMARY_CHARS)?;
+        }
+        if let Some(author) = &self.author {
+            text("author", author, 0, MAX_ABOUT_AUTHOR_CHARS)?;
+        }
+        if let Some(homepage) = &self.homepage {
+            let rest = homepage.strip_prefix("https://").unwrap_or_default();
+            if homepage.len() > MAX_ABOUT_HOMEPAGE_CHARS
+                || rest.is_empty()
+                || !rest.bytes().all(|byte| matches!(byte, b'!'..=b'~'))
+            {
+                return Err(format!(
+                    "about.homepage is not an https: URL of printable ASCII, at most \
+                     {MAX_ABOUT_HOMEPAGE_CHARS} characters"
+                ));
+            }
+        }
+        if let Some(license) = &self.license
+            && (license.len() > MAX_ABOUT_LICENSE_CHARS || !spdx_expression(license))
+        {
+            return Err(format!(
+                "about.license {license:?} is not an SPDX license expression of at most \
+                 {MAX_ABOUT_LICENSE_CHARS} characters"
+            ));
+        }
+        Ok(())
+    }
+}
+
+// SPDX 2.3 annex D license expressions; the ids are not looked up.
+fn spdx_expression(text: &str) -> bool {
+    let spaced = text.replace('(', " ( ").replace(')', " ) ");
+    let tokens = spaced.split_ascii_whitespace().collect::<Vec<_>>();
+    let mut at = 0;
+    spdx_or(&tokens, &mut at, 0) && at == tokens.len()
+}
+
+const SPDX_MAX_NESTING: usize = 32;
+
+fn spdx_id(token: &str) -> bool {
+    !matches!(token, "AND" | "OR" | "WITH" | "(" | ")")
+        && !token.is_empty()
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':'))
+}
+
+fn spdx_or(tokens: &[&str], at: &mut usize, depth: usize) -> bool {
+    spdx_and(tokens, at, depth)
+        && loop {
+            if tokens.get(*at) != Some(&"OR") {
+                break true;
+            }
+            *at += 1;
+            if !spdx_and(tokens, at, depth) {
+                break false;
+            }
+        }
+}
+
+fn spdx_and(tokens: &[&str], at: &mut usize, depth: usize) -> bool {
+    spdx_term(tokens, at, depth)
+        && loop {
+            if tokens.get(*at) != Some(&"AND") {
+                break true;
+            }
+            *at += 1;
+            if !spdx_term(tokens, at, depth) {
+                break false;
+            }
+        }
+}
+
+fn spdx_term(tokens: &[&str], at: &mut usize, depth: usize) -> bool {
+    let Some(&token) = tokens.get(*at) else {
+        return false;
+    };
+    *at += 1;
+    if token == "(" {
+        if depth >= SPDX_MAX_NESTING
+            || !spdx_or(tokens, at, depth + 1)
+            || tokens.get(*at) != Some(&")")
+        {
+            return false;
+        }
+        *at += 1;
+        return true;
+    }
+    if !spdx_id(token.strip_suffix('+').unwrap_or(token)) {
+        return false;
+    }
+    if tokens.get(*at) == Some(&"WITH") {
+        *at += 1;
+        let exception = tokens.get(*at).is_some_and(|token| spdx_id(token));
+        *at += 1;
+        return exception;
+    }
+    true
 }
 
 /// The contract a plugin implements.
@@ -421,7 +597,7 @@ impl PluginManifest {
             }
         }
         self.validate_resources()?;
-        Ok(())
+        self.about.as_ref().map_or(Ok(()), PluginAbout::validate)
     }
 
     fn validate_resources(&self) -> Result<(), String> {

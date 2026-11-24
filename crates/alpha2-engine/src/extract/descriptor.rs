@@ -16,6 +16,10 @@ pub const BLOCK_FRAMES_RANGE: std::ops::RangeInclusive<u32> = 64..=65_536;
 pub const MAX_EXTRACTOR_OUTPUTS: usize = 32;
 /// Most passes one request asks for.
 pub const MAX_EXTRACTOR_PASSES: usize = 64;
+/// The longest output `label`, in characters.
+pub const MAX_OUTPUT_LABEL_CHARS: usize = 80;
+/// The longest output `description`, in characters.
+pub const MAX_OUTPUT_DESCRIPTION_CHARS: usize = 400;
 
 /// What an extractor declares, with its identity, the input it reads and the outputs it emits.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -161,6 +165,29 @@ pub struct OutputSpec {
     /// How the output is usually used, for interfaces. The engine ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggest: Option<Suggest>,
+    /// The output's name in an interface, plain text without control characters. The engine
+    /// ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAX_OUTPUT_LABEL_CHARS), regex(pattern = PLAIN_TEXT_PATTERN))
+    )]
+    pub label: Option<String>,
+    /// What the output holds, for an interface, plain text without control characters. The
+    /// engine ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_OUTPUT_DESCRIPTION_CHARS), regex(pattern = PLAIN_TEXT_PATTERN))
+    )]
+    pub description: Option<String>,
+}
+
+#[cfg(feature = "schema")]
+pub(super) const PLAIN_TEXT_PATTERN: &str = r"^[^\u0000-\u001F\u007F-\u009F]*$";
+
+pub(super) fn plain_text(text: &str, min: usize, max: usize) -> bool {
+    (min..=max).contains(&text.chars().count()) && !text.chars().any(char::is_control)
 }
 
 impl OutputSpec {

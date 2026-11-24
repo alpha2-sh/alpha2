@@ -251,6 +251,15 @@
           },
           "type": "array"
         },
+        "description": {
+          "description": "What the output holds, for an interface, plain text without control characters. The\nengine ignores it.",
+          "maxLength": 400,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "interpolation": {
           "anyOf": [
             {
@@ -265,6 +274,16 @@
         "kind": {
           "$ref": "#/$defs/DataKind",
           "description": "The kind of data it holds."
+        },
+        "label": {
+          "description": "The output's name in an interface, plain text without control characters. The engine\nignores it.",
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "description": "Its name, unique among the outputs.",
@@ -319,6 +338,59 @@
         "url",
         "sha256",
         "bytes"
+      ],
+      "type": "object"
+    },
+    "PluginAbout": {
+      "additionalProperties": false,
+      "description": "What an interface shows about a plugin: plain text, never markup, without control characters.",
+      "properties": {
+        "author": {
+          "description": "Who makes it.",
+          "maxLength": 80,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "homepage": {
+          "description": "Its web page, an `https:` URL of printable ASCII.",
+          "maxLength": 2048,
+          "pattern": "^https://[!-~]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "license": {
+          "description": "Its license, an SPDX license expression such as `MIT OR Apache-2.0`.",
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9.+:() -]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The plugin's name.",
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": "string"
+        },
+        "summary": {
+          "description": "What it does, in a sentence or two.",
+          "maxLength": 400,
+          "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
       ],
       "type": "object"
     },
@@ -499,6 +571,17 @@
       "const": "alpha2-plugin/1",
       "description": "The plugin ABI, `alpha2-plugin/1`.",
       "type": "string"
+    },
+    "about": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PluginAbout"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "What an interface shows about the plugin. The engine ignores it."
     },
     "artifacts": {
       "description": "The code, one artifact per target.",

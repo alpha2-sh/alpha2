@@ -1,0 +1,222 @@
+{
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "mode"
+    ],
+    "properties": {
+      "threshold": {
+        "type": "number",
+        "minimum": 0.05,
+        "maximum": 0.95
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "fast",
+          "exact"
+        ]
+      },
+      "bands": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxItems": 3
+      },
+      "label": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8
+          }
+        }
+      },
+      "title": {
+        "type": "string"
+      }
+    }
+  },
+  "annotated": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "mode"
+    ],
+    "properties": {
+      "threshold": {
+        "type": "number",
+        "minimum": 0.05,
+        "maximum": 0.95,
+        "title": "Speech threshold",
+        "description": "How sure the model must be that there is speech.",
+        "default": 0.5,
+        "x-alpha2-display": "percent",
+        "x-alpha2-step": 0.05,
+        "x-alpha2-order": 1,
+        "x-alpha2-group": "Detection"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "fast",
+          "exact"
+        ],
+        "title": "Mode",
+        "default": "fast",
+        "x-alpha2-order": 2
+      },
+      "bands": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 1,
+          "title": "Band",
+          "x-alpha2-unit": "Hz",
+          "x-alpha2-step": 1
+        },
+        "maxItems": 3,
+        "title": "Bands",
+        "default": [
+          1
+        ],
+        "x-alpha2-advanced": true,
+        "x-alpha2-unit": "Hz"
+      },
+      "label": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8,
+            "title": "Text",
+            "default": "",
+            "x-alpha2-order": 1
+          }
+        },
+        "title": "Label",
+        "x-alpha2-group": "Output",
+        "x-alpha2-advanced": false
+      },
+      "title": {
+        "type": "string",
+        "title": "Title",
+        "description": "A param named like an annotation keyword."
+      }
+    },
+    "title": "Settings",
+    "description": "Every annotation keyword, on the root and each property.",
+    "default": {
+      "mode": "fast"
+    }
+  },
+  "cases": [
+    {
+      "name": "fits",
+      "params": {
+        "mode": "fast",
+        "threshold": 0.5,
+        "bands": [
+          1,
+          2
+        ],
+        "label": {
+          "text": "ok"
+        },
+        "title": "t"
+      },
+      "problem": null
+    },
+    {
+      "name": "below-minimum",
+      "params": {
+        "mode": "fast",
+        "threshold": 0.01
+      },
+      "problem": "params.threshold must be at least 0.05"
+    },
+    {
+      "name": "above-maximum",
+      "params": {
+        "mode": "fast",
+        "threshold": 1
+      },
+      "problem": "params.threshold must be at most 0.95"
+    },
+    {
+      "name": "wrong-type",
+      "params": {
+        "mode": "fast",
+        "threshold": "0.5"
+      },
+      "problem": "params.threshold must be number"
+    },
+    {
+      "name": "unknown-key",
+      "params": {
+        "mode": "fast",
+        "x": 1
+      },
+      "problem": "params.x is not allowed"
+    },
+    {
+      "name": "missing-required",
+      "params": {
+        "threshold": 0.5
+      },
+      "problem": "params.mode is required"
+    },
+    {
+      "name": "not-in-enum",
+      "params": {
+        "mode": "slow"
+      },
+      "problem": "params.mode must be one of [\"fast\",\"exact\"]"
+    },
+    {
+      "name": "too-many-items",
+      "params": {
+        "mode": "fast",
+        "bands": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "problem": "params.bands has too many items"
+    },
+    {
+      "name": "item-below-minimum",
+      "params": {
+        "mode": "fast",
+        "bands": [
+          1,
+          0
+        ]
+      },
+      "problem": "params.bands[1] must be at least 1"
+    },
+    {
+      "name": "nested-too-long",
+      "params": {
+        "mode": "fast",
+        "label": {
+          "text": "far too long"
+        }
+      },
+      "problem": "params.label.text is too long"
+    },
+    {
+      "name": "param-named-title",
+      "params": {
+        "mode": "fast",
+        "title": 3
+      },
+      "problem": "params.title must be string"
+    }
+  ]
+}

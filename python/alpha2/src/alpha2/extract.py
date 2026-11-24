@@ -224,9 +224,9 @@ def schema_problem(schema: object, value: object, at: str = "params") -> str | N
         return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
     if isinstance(schema.get("enum"), list) and not any(same(v, value) for v in schema["enum"]):
-        return f"{at} must be one of {json.dumps(schema['enum'])}"
+        return f"{at} must be one of {json.dumps(schema['enum'], separators=(',', ':'))}"
     if "const" in schema and not same(schema["const"], value):
-        return f"{at} must be {json.dumps(schema['const'])}"
+        return f"{at} must be {json.dumps(schema['const'], separators=(',', ':'))}"
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if isinstance(schema.get("minimum"), (int, float)) and value < schema["minimum"]:
             return f"{at} must be at least {schema['minimum']}"

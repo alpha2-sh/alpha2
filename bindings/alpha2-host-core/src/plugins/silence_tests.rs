@@ -373,3 +373,15 @@ fn a_timeline_request_is_refused_before_the_run() {
         RequestError::InvalidInput("the descriptor does not read this input".to_owned())
     );
 }
+
+#[test]
+fn the_packed_manifest_names_the_plugin_and_its_output_for_interfaces() {
+    let manifest = packed_manifest();
+    let about = manifest.about.expect("about");
+    assert_eq!(about.name, "Silence");
+    assert_eq!(about.license.as_deref(), Some("MIT"));
+    let output = &manifest.descriptor.outputs[0];
+    assert_eq!(output.label.as_deref(), Some("Silences"));
+    let threshold = &manifest.descriptor.params_schema["properties"]["threshold"];
+    assert_eq!(threshold["x-alpha2-display"], "percent");
+}

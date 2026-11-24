@@ -2,7 +2,8 @@
 
 use super::descriptor::{
     AudioChannels, BLOCK_FRAMES_RANGE, Descriptor, Direction, ExtractRequest, InputFrom, InputSpec,
-    MAX_EXTRACTOR_OUTPUTS, MAX_EXTRACTOR_PASSES, OutputSpec, Pass, VideoFormat,
+    MAX_EXTRACTOR_OUTPUTS, MAX_EXTRACTOR_PASSES, MAX_OUTPUT_DESCRIPTION_CHARS,
+    MAX_OUTPUT_LABEL_CHARS, OutputSpec, Pass, VideoFormat, plain_text,
 };
 use super::pixels::luma8_from_rgba8;
 use alpha2_media::SourceId;
@@ -436,6 +437,19 @@ pub(super) fn validate_descriptor(descriptor: &Descriptor) -> Result<(), Request
         }
         if output.interpolation.is_some() && output.kind.arity().is_none() {
             return invalid("only sampled outputs take an interpolation");
+        }
+        if output
+            .label
+            .as_deref()
+            .is_some_and(|label| !plain_text(label, 1, MAX_OUTPUT_LABEL_CHARS))
+            || output.description.as_deref().is_some_and(|description| {
+                !plain_text(description, 0, MAX_OUTPUT_DESCRIPTION_CHARS)
+            })
+        {
+            return Err(RequestError::InvalidDescriptor(format!(
+                "an output label is not 1 to {MAX_OUTPUT_LABEL_CHARS} characters, a description \
+                 is longer than {MAX_OUTPUT_DESCRIPTION_CHARS}, or either has a control character"
+            )));
         }
     }
     if descriptor.input.from().is_empty() {

@@ -130,6 +130,15 @@ impl Plugin {
     pub fn descriptor_json(&self) -> String {
         serde_json::to_string(&self.manifest.descriptor).unwrap_or_default()
     }
+
+    /// What the manifest's `about` says for an interface, as JSON, or `None` without one.
+    #[must_use]
+    pub fn about_json(&self) -> Option<String> {
+        self.manifest
+            .about
+            .as_ref()
+            .and_then(|about| serde_json::to_string(about).ok())
+    }
 }
 
 #[uniffi::export]
@@ -174,6 +183,42 @@ impl Alpha2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loaded_plugin_gives_its_about_and_output_labels_for_interfaces() {
+        let corpus: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../tests/cases/plugin-manifest-corpus.json"
+        ))
+        .expect("corpus");
+        let dir = std::env::temp_dir().join(format!("alpha2-mobile-about-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let load = |name: &str| {
+            let case = corpus
+                .iter()
+                .find(|case| case["name"] == name)
+                .expect("case");
+            let text = case["manifest"].to_string();
+            let path = dir.join(format!("{name}.json"));
+            std::fs::write(&path, &text).expect("manifest");
+            Plugin::load(
+                path.to_string_lossy().into_owned(),
+                sha256_hex(text.as_bytes()),
+                false,
+                HashMap::new(),
+            )
+            .expect("loads")
+        };
+        let labelled = load("about-and-output-labels");
+        let plain = load("complete");
+        let _ = std::fs::remove_dir_all(&dir);
+        let about: serde_json::Value =
+            serde_json::from_str(&labelled.about_json().expect("about")).expect("json");
+        assert_eq!(about["name"], "Silence");
+        let descriptor: serde_json::Value =
+            serde_json::from_str(&labelled.descriptor_json()).expect("json");
+        assert_eq!(descriptor["outputs"][0]["label"], "Silences");
+        assert_eq!(plain.about_json(), None);
+    }
 
     #[test]
     fn a_bundled_plugin_reads_only_paths_under_its_manifest() {

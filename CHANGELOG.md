@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- A plugin manifest may carry `about` (`name`, `summary`, `author`, `homepage`, `license`) and an
+  output `label` and `description`, plain text for interfaces that the engine ignores; Rust reads
+  them as `PluginManifest::about` and `OutputSpec::label` / `description`, the mobile `Plugin` as
+  `aboutJson()`. A loader before this release refuses a manifest that has them. `pack` writes a
+  plugin crate's `about.json` as the manifest's `about`.
+- `docs/plugin-abi.md` lists the interface annotations a `params_schema` may carry (`title`,
+  `description`, `default`, `x-alpha2-unit`, `x-alpha2-step`, `x-alpha2-display`,
+  `x-alpha2-order`, `x-alpha2-group`, `x-alpha2-advanced`), which every params check ignores.
+- `alpha2.silence` 1.1.0 carries its `about`, an output label and annotated params. Its outputs
+  are unchanged (`descriptor.version` 1).
+
+### Fixed
+
+- The Python client's params check words an `enum` or `const` refusal as `schemaProblem` does.
+
 ## [0.7.0] - 2026-11-24
 
 ### Changed

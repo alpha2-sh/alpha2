@@ -23,7 +23,10 @@ export interface ExtractorDescriptor {
         readonly channels?: "mono" | "source";
         readonly block_frames?: number;
       };
-  /** JSON Schema of the request's `params`; checked before the request is sent. */
+  /**
+   * JSON Schema of the request's `params`; checked before the request is sent. Its interface
+   * annotations (`title`, `description`, `default`, `x-alpha2-*`) are not checked.
+   */
   readonly params_schema?: unknown;
   readonly outputs: readonly {
     readonly name: string;
@@ -31,6 +34,10 @@ export interface ExtractorDescriptor {
     readonly channels?: readonly string[];
     readonly interpolation?: "hold" | "linear";
     readonly suggest?: "bind" | "remove_ranges" | "split_at";
+    /** The output's name in an interface: 1 to 80 characters, no control characters. */
+    readonly label?: string;
+    /** What the output holds, for an interface: up to 400 characters, no control characters. */
+    readonly description?: string;
   }[];
 }
 
@@ -232,7 +239,8 @@ export function collectEmits(): {
  * Where `value` breaks `schema`, as a path and reason, or `undefined`. Covers the JSON Schema
  * keywords descriptors use, which are `type`, `enum`, `const`, `properties`, `required`,
  * `additionalProperties`, `items`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength` and
- * `maxLength`.
+ * `maxLength`; every other keyword, the interface annotations of `docs/plugin-abi.md` among them,
+ * is ignored.
  */
 export function schemaProblem(
   schema: unknown,

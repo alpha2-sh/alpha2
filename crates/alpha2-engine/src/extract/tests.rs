@@ -263,6 +263,8 @@ fn two_passes_from_a_seed_meet_without_repeating_it() {
         channels: vec!["a".into()],
         interpolation: None,
         suggest: None,
+        label: None,
+        description: None,
     }];
     let sample = |time: i64| Emit::Sample {
         output: "track".into(),
@@ -323,6 +325,8 @@ fn a_time_emitted_twice_is_refused_at_finish() {
         channels: vec!["a".into()],
         interpolation: None,
         suggest: None,
+        label: None,
+        description: None,
     }];
     let sample = |time: i64| Emit::Sample {
         output: "track".into(),
@@ -403,6 +407,8 @@ fn scalar_output() -> Vec<OutputSpec> {
         channels: vec!["a".into()],
         interpolation: None,
         suggest: None,
+        label: None,
+        description: None,
     }]
 }
 
@@ -452,6 +458,8 @@ fn words_and_intervals_follow_their_rules() {
             channels: vec![],
             interpolation: None,
             suggest: None,
+            label: None,
+            description: None,
         },
         OutputSpec {
             name: "i".into(),
@@ -459,6 +467,8 @@ fn words_and_intervals_follow_their_rules() {
             channels: vec![],
             interpolation: None,
             suggest: None,
+            label: None,
+            description: None,
         },
     ];
     let word = |start, end, text: &str| Emit::Word {
@@ -567,6 +577,8 @@ fn an_emit_past_a_data_limit_is_refused_when_it_is_emitted() {
         channels: (0..channels).map(|channel| format!("c{channel}")).collect(),
         interpolation: None,
         suggest: None,
+        label: None,
+        description: None,
     };
     let interval = |name: &str, score: f32| Emit::Interval {
         output: name.into(),
