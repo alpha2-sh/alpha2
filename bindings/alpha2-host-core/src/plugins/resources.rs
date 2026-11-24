@@ -90,7 +90,7 @@ fn plain(path: PathBuf) -> PathBuf {
     path
 }
 
-fn canonical(path: &Path) -> Result<PathBuf, PluginError> {
+pub(super) fn canonical(path: &Path) -> Result<PathBuf, PluginError> {
     std::fs::canonicalize(path)
         .map(plain)
         .map_err(|error| fetch_failed(path, &error))

@@ -188,7 +188,7 @@ fn supplied_files_read_in_a_worker_reach_the_data_and_its_failures_keep_their_de
         words[1],
         format!(
             "path extra {}",
-            std::fs::canonicalize(dir.join("extra"))
+            resources::canonical(&dir.join("extra"))
                 .expect("canonical")
                 .display()
         )

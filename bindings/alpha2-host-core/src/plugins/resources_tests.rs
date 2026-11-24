@@ -7,7 +7,7 @@ use alpha2_engine::extract::{PluginManifest, VideoFormat};
 use alpha2_media::CancelToken;
 use serde_json::{Value, json};
 
-use super::resources::{MAX_SLOT_DEPTH, PinnedFile, ResourceReader, ResourceSet};
+use super::resources::{MAX_SLOT_DEPTH, PinnedFile, ResourceReader, ResourceSet, canonical};
 use super::{CANCELLED, PluginError, ResourceRoot, codes, sha256_hex, slot_reasons};
 
 fn scratch(name: &str) -> PathBuf {
@@ -504,18 +504,13 @@ fn paths_name_supplied_files_and_directories_only() {
     )
     .expect("resolves");
     let mut reader = ResourceReader::new(set, CancelToken::default());
-    let canonical = |path: &Path| std::fs::canonicalize(path).expect("canonical");
-    assert_eq!(
-        reader.path("model").map(PathBuf::from),
-        Some(canonical(&model))
-    );
-    assert_eq!(
-        reader.path("extra").map(PathBuf::from),
-        Some(canonical(&extra))
-    );
+    let plain = |path: &Path| canonical(path).expect("canonical");
+    assert!(!reader.path("model").expect("model").starts_with(r"\\?\"));
+    assert_eq!(reader.path("model").map(PathBuf::from), Some(plain(&model)));
+    assert_eq!(reader.path("extra").map(PathBuf::from), Some(plain(&extra)));
     assert_eq!(
         reader.path("extra/sub").map(PathBuf::from),
-        Some(canonical(&extra).join("sub"))
+        Some(plain(&extra).join("sub"))
     );
     for absent in [
         "extra/none",

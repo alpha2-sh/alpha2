@@ -1349,7 +1349,7 @@ fn a_native_plugin_gets_paths_and_a_wasm_one_none() {
         ("extra".to_owned(), dir.join("extra")),
     ]);
     let params = json!({ "paths": ["model", "extra/onnx", "vocab"] });
-    let canonical = |path: &Path| std::fs::canonicalize(path).expect("canonical");
+    let canonical = |path: &Path| resources::canonical(path).expect("canonical");
     let (words, made_by) =
         supplied_words(&supplied_policy(true), &supplied, &params).expect("native");
     assert_eq!(
