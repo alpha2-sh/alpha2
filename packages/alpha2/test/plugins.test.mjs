@@ -95,6 +95,7 @@ async function hostedPlugin({
   end = "i32.const 0",
   alloc = "i32.const 65536",
   describe = null,
+  resources = undefined,
 } = {}) {
   const binaryen = (await import("binaryen")).default;
   const json = JSON.stringify(DESCRIPTOR);
@@ -133,15 +134,20 @@ async function hostedPlugin({
           bytes: wasm.byteLength,
         },
       ],
+      resources,
       descriptor: DESCRIPTOR,
     }),
   );
   const files = { "manifest.json": manifest, "m.wasm": wasm };
   const fetch = async (url) =>
     new Response(files[new URL(url).pathname.slice(1)]);
-  return loadPlugin("https://plugins.test/manifest.json", await hex(manifest), {
-    fetch,
-  });
+  const loaded = await loadPlugin(
+    "https://plugins.test/manifest.json",
+    await hex(manifest),
+    { fetch },
+  );
+  assert.equal(loaded.manifestSha256, await hex(manifest));
+  return loaded;
 }
 
 const CONTEXT = {
@@ -242,4 +248,26 @@ test("a trap in describe or in the allocation is a PluginError", async () => {
     outside.extractor().begin(CONTEXT),
     (error) => error.code === "PLUGIN_TRAPPED",
   );
+});
+
+test("the browser refuses a required resource slot and leaves an optional one empty", async () => {
+  await assert.rejects(
+    hostedPlugin({
+      resources: [{ name: "model", supplied: { shape: "file" } }],
+    }),
+    (error) =>
+      error.code === "PLUGIN_RESOURCE_INVALID" &&
+      error.details?.slot === "model" &&
+      error.details?.reason === "unsupported",
+  );
+  const plugin = await hostedPlugin({
+    resources: [
+      { name: "model", supplied: { shape: "directory", required: false } },
+    ],
+    begin: "local.get 0 local.get 1 call $fail i32.const 1",
+  });
+  await assert.rejects(plugin.extractor().begin(CONTEXT), (error) => {
+    assert.deepEqual(JSON.parse(error.message).supplied, {});
+    return true;
+  });
 });
