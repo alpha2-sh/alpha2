@@ -1,7 +1,8 @@
 //! The "Classic" group's transitions on the CPU against the GPU.
 
+use super::super::cpu_parity::{Parity, Side};
 use super::{Tolerance, check};
-use crate::ParamValue;
+use crate::{EffectId, EffectParams, EffectRuntime, ParamValue, RenderGraph, RenderSize};
 
 #[test]
 fn bounce_matches() {
@@ -193,4 +194,69 @@ fn uncover_matches() {
             &[("direction", ParamValue::Enum(3))],
         ],
     );
+}
+
+fn edge_card(size: RenderSize) -> Vec<u8> {
+    (0..size.height)
+        .flat_map(|_| 0..size.width)
+        .flat_map(|x| {
+            let level = if x == 0 {
+                0
+            } else if x == size.width - 1 {
+                255
+            } else {
+                128
+            };
+            [level, level, level, 255]
+        })
+        .collect()
+}
+
+#[test]
+fn directional_never_draws_the_opposite_frame_edge_into_an_edge_column() {
+    let parity = Parity::new();
+    for width in (40..=200).step_by(3) {
+        let size = RenderSize::new(width, 16).expect("size");
+        let card = parity.picture(size, &edge_card(size));
+        for side in [Side::Gpu, Side::Cpu] {
+            let mut graph = RenderGraph::new(size);
+            let from = graph.add_source(card.view(side));
+            let to = graph.add_source(card.view(side));
+            let output = graph
+                .add_transition(
+                    EffectId::new("alpha2.transition.directional".into(), 1),
+                    from,
+                    to,
+                    EffectParams::new(),
+                    EffectRuntime {
+                        progress: 1.0 / 3.0,
+                        ratio: 2.5,
+                        ..Default::default()
+                    },
+                )
+                .expect("transition");
+            graph.set_output(output).expect("output");
+            let pixels = match side {
+                Side::Gpu => {
+                    let texture = parity.gpu.execute_graph(&graph).expect("GPU draws");
+                    parity.gpu.read_rgba8(&texture).expect("readback")
+                }
+                Side::Cpu => parity
+                    .cpu
+                    .execute_graph(&graph)
+                    .expect("CPU draws")
+                    .read_rgba8(),
+            };
+            let red = |x: u32, y: u32| pixels[((y * width + x) * 4) as usize];
+            let seam = 16 / 3;
+            for y in (0..16).filter(|y| !(seam - 1..=seam + 1).contains(y)) {
+                assert!(
+                    red(0, y) < 64 && red(width - 1, y) > 192,
+                    "width {width} row {y}: the edge columns drew {} and {}",
+                    red(0, y),
+                    red(width - 1, y)
+                );
+            }
+        }
+    }
 }

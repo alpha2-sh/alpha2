@@ -74,17 +74,12 @@ fn fade(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
 
 fn directional(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
     let progress = context.progress();
-    let direction = context.vec2("direction");
-    // The schema admits (0, 0), which would move neither clip; use the default.
-    let mut direction_step = [sign(direction[0]), sign(direction[1])];
-    if direction_step == [0.0, 0.0] {
-        direction_step = [0.0, 1.0];
-    }
+    let heading = push_heading(context);
     let resolution = context.resolution();
     let width = [1.0 / resolution[0], 1.0 / resolution[1]];
-    let side = context.max_filter_samples().clamp(1.0, 16.0).sqrt().floor();
-    let sample = |uv: Vec2| {
-        let p = add(uv, scale(direction_step, progress));
+    let max_side = context.max_filter_samples().clamp(1.0, 16.0).sqrt().floor();
+    let shift = scale(heading, progress);
+    let tap = |p: Vec2, _: f32| {
         let wrapped = [fract(p[0]), fract(p[1])];
         let inside = step(0.0, p[1]) * step(p[1], 1.0) * step(0.0, p[0]) * step(p[0], 1.0);
         mix4(
@@ -94,26 +89,7 @@ fn directional(context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [Rgba]) {
         )
     };
     transition_row(context, y, x0, out, |_, uv| {
-        let uv = gl_uv(uv);
-        let p = add(uv, scale(direction_step, progress));
-        let coverage =
-            builtin_interval_coverage(p[0], width[0]) * builtin_interval_coverage(p[1], width[1]);
-        if coverage <= 0.0 || coverage >= 1.0 {
-            return sample(uv);
-        }
-        // The two images wrap at the seam: integrate subpixel samples there.
-        let mut color = [0.0; 4];
-        for row in 0..side as u32 {
-            for column in 0..side as u32 {
-                let offset = [
-                    ((column as f32 + 0.5) / side - 0.5) * width[0],
-                    ((row as f32 + 0.5) / side - 0.5) * width[1],
-                ];
-                color = add4(color, sample(add(uv, offset)));
-            }
-        }
-        let count = side * side;
-        color.map(|channel| channel / count)
+        push_pixel(width, max_side, gl_uv(uv), (heading, shift), tap)
     });
 }
 

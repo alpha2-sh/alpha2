@@ -331,7 +331,7 @@ mod tests {
             .expect("built-ins");
         assert_eq!(
             (most, id.as_str()),
-            (4105, "alpha2.transition.directional"),
+            (4103, "alpha2.transition.directional"),
             "the costliest built-in, which MAX_INVOCATION_CALLS documents"
         );
         assert!(most + most / 2 <= MAX_INVOCATION_CALLS);
