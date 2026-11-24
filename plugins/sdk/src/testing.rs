@@ -168,8 +168,7 @@ impl Instance {
         }
     }
 
-    /// Creates an instance, offering what `offered` holds, of the plugin whose entry returned
-    /// `table`.
+    /// Creates an instance of the plugin whose entry returned `table`, offering `offered`.
     ///
     /// # Safety
     /// `table` is what a plugin's `alpha2_plugin_v1` returned.

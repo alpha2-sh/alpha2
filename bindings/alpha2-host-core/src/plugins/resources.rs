@@ -1,13 +1,11 @@
-//! The files one run of a plugin may read, and the reader that serves its `resource` calls in
-//! whichever process runs it. Pinned files are checked at load and again where they are read;
-//! supplied files are read and hashed only when the plugin asks for them.
+//! The files one run of a plugin may read, and the reader that serves them.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use alpha2_engine::extract::{MAX_PLUGIN_RESOURCE_BYTES, PluginManifest, SlotShape};
+use alpha2_engine::extract::{MAX_PLUGIN_RESOURCE_BYTES, PluginManifest, SlotShape, SuppliedSlot};
 use alpha2_media::CancelToken;
 use alpha2_model::{MAX_SUPPLIED_FILES, MAX_SUPPLIED_NAME_BYTES, SuppliedFile};
 use serde::{Deserialize, Serialize};
@@ -26,7 +24,7 @@ pub(super) struct PinnedFile {
     pub(super) path: PathBuf,
     pub(super) sha256: String,
     pub(super) bytes: u64,
-    /// A local file the caller named, whose content a mismatch message may describe.
+    /// A local file the caller named.
     pub(super) local: bool,
 }
 
@@ -45,24 +43,24 @@ enum Entry {
     Supplied(SlotFile),
 }
 
-/// A slot the caller filled.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 struct FilledSlot {
     shape: SlotShape,
     /// The canonical path of what the caller named.
     root: PathBuf,
-    /// Its files' resource names, sorted.
+    /// Its files' resource names, in byte order.
     files: Vec<String>,
 }
 
-/// What one run may read: the pinned resources and the files of the filled slots, by resource
-/// name.
+/// What one run may read by resource name: pinned resources and the files of filled slots.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ResourceSet {
     entries: BTreeMap<String, Entry>,
     slots: BTreeMap<String, FilledSlot>,
     /// A wasm module reads it, which addresses at most [`MAX_PLUGIN_RESOURCE_BYTES`] per file.
     wasm: bool,
+    /// The directory supplied files must lie under, links resolved, when the caller names one.
+    root: Option<PathBuf>,
 }
 
 fn invalid(slot: &str, reason: &str, message: impl Into<String>) -> PluginError {
@@ -121,11 +119,12 @@ fn outside_root(path: &Path) -> PluginError {
     ))
 }
 
-/// Walks a directory slot.
 struct Walk<'a> {
     slot: &'a str,
     root: &'a ResourceRoot,
     max_bytes: Option<u64>,
+    /// Files the slots resolved before this one offer.
+    before: usize,
     files: Vec<(String, SlotFile)>,
     /// Canonical paths of the directories being walked, the slot's first.
     ancestors: Vec<PathBuf>,
@@ -207,12 +206,12 @@ impl Walk<'_> {
                 format!("{name} is longer than {MAX_SUPPLIED_NAME_BYTES} bytes"),
             ));
         }
-        if self.files.len() == MAX_SUPPLIED_FILES {
+        if self.files.len() + self.before == MAX_SUPPLIED_FILES {
             return Err(invalid(
                 self.slot,
                 slot_reasons::TOO_MANY_FILES,
                 format!(
-                    "slot {} holds more than {MAX_SUPPLIED_FILES} files",
+                    "slot {} brings the run's supplied files past {MAX_SUPPLIED_FILES}",
                     self.slot
                 ),
             ));
@@ -261,11 +260,15 @@ impl ResourceSet {
             ));
         }
         let root = match root {
-            ResourceRoot::Dir(dir) => ResourceRoot::Dir(canonical(dir)?),
+            ResourceRoot::Dir(dir) if !supplied.is_empty() => ResourceRoot::Dir(canonical(dir)?),
             other => other.clone(),
         };
         let mut set = Self {
             wasm,
+            root: match &root {
+                ResourceRoot::Dir(dir) => Some(dir.clone()),
+                _ => None,
+            },
             ..Self::default()
         };
         for resource in &manifest.resources {
@@ -304,29 +307,16 @@ impl ResourceSet {
                     format!("slot {name} takes {shape}; {} is not one", named.display()),
                 ));
             }
-            let files = match slot.shape {
-                SlotShape::File => {
-                    let file = SlotFile {
-                        slot: name.to_owned(),
-                        path: resolved.clone(),
-                        bytes: metadata.len(),
-                        max_bytes: slot.max_bytes,
-                    };
-                    set.check_size(name, &file)?;
-                    vec![(name.to_owned(), file)]
-                }
-                SlotShape::Directory => {
-                    let mut walk = Walk {
-                        slot: name,
-                        root: &root,
-                        max_bytes: slot.max_bytes,
-                        files: Vec::new(),
-                        ancestors: vec![resolved.clone()],
-                    };
-                    walk.directory(&resolved, &mut Vec::new())?;
-                    walk.files
-                }
-            };
+            let files = set.slot_files(name, slot, &resolved, &metadata, &root)?;
+            if set.supplied_files() + files.len() > MAX_SUPPLIED_FILES {
+                return Err(invalid(
+                    name,
+                    slot_reasons::TOO_MANY_FILES,
+                    format!(
+                        "slot {name} brings the run's supplied files past {MAX_SUPPLIED_FILES}"
+                    ),
+                ));
+            }
             set.slots.insert(
                 name.to_owned(),
                 FilledSlot {
@@ -340,6 +330,47 @@ impl ResourceSet {
             }
         }
         Ok(set)
+    }
+
+    /// The files a slot filled with `resolved` offers, by resource name in byte order.
+    fn slot_files(
+        &self,
+        name: &str,
+        slot: &SuppliedSlot,
+        resolved: &Path,
+        metadata: &std::fs::Metadata,
+        root: &ResourceRoot,
+    ) -> Result<Vec<(String, SlotFile)>, PluginError> {
+        Ok(match slot.shape {
+            SlotShape::File => {
+                let file = SlotFile {
+                    slot: name.to_owned(),
+                    path: resolved.to_path_buf(),
+                    bytes: metadata.len(),
+                    max_bytes: slot.max_bytes,
+                };
+                self.check_size(name, &file)?;
+                vec![(name.to_owned(), file)]
+            }
+            SlotShape::Directory => {
+                let mut walk = Walk {
+                    slot: name,
+                    root,
+                    max_bytes: slot.max_bytes,
+                    before: self.supplied_files(),
+                    files: Vec::new(),
+                    ancestors: vec![resolved.to_path_buf()],
+                };
+                walk.directory(resolved, &mut Vec::new())?;
+                let mut files = walk.files;
+                files.sort_by(|(a, _), (b, _)| a.cmp(b));
+                files
+            }
+        })
+    }
+
+    fn supplied_files(&self) -> usize {
+        self.slots.values().map(|slot| slot.files.len()).sum()
     }
 
     /// Adds a pinned resource whose file was checked against its pin.
@@ -426,8 +457,8 @@ pub(super) struct ResourceReader {
     read: BTreeMap<String, (String, u64)>,
     /// Bytes handed to a native plugin, kept until the instance is destroyed.
     kept: HashMap<String, Vec<u8>>,
-    /// Paths handed to a native plugin, kept until the instance is destroyed.
-    paths: Vec<String>,
+    /// Paths handed to a native plugin, by name, kept until the instance is destroyed.
+    paths: HashMap<String, String>,
     failure: Option<PluginError>,
 }
 
@@ -439,7 +470,7 @@ impl ResourceReader {
             ends: None,
             read: BTreeMap::new(),
             kept: HashMap::new(),
-            paths: Vec::new(),
+            paths: HashMap::new(),
             failure: None,
         }
     }
@@ -455,7 +486,6 @@ impl ResourceReader {
         self.failure.take()
     }
 
-    /// Whether a failure is latched.
     pub(super) const fn failed(&self) -> bool {
         self.failure.is_some()
     }
@@ -562,7 +592,17 @@ impl ResourceReader {
             Some(Entry::Supplied(file)) => {
                 let file = file.clone();
                 self.set.check_size(name, &file)?;
-                let (sha256, bytes) = self.stream(&file.path, file.bytes, sink)?;
+                let path = match &self.set.root {
+                    Some(root) => {
+                        let resolved = canonical(&file.path)?;
+                        if !resolved.starts_with(root) {
+                            return Err(outside_root(&file.path));
+                        }
+                        resolved
+                    }
+                    None => file.path.clone(),
+                };
+                let (sha256, bytes) = self.stream(&path, file.bytes, sink)?;
                 self.record(name, &file, sha256, bytes)
             }
             None => Ok(()),
@@ -663,10 +703,13 @@ impl ResourceReader {
     }
 
     /// The path of the supplied file, filled directory slot or directory under one named `name`,
-    /// kept until the reader is dropped. Every file it covers is hashed first.
+    /// kept until the reader is dropped. Every file it covers is hashed the first time.
     pub(super) fn path(&mut self, name: &str) -> Option<&str> {
         if self.failed() {
             return None;
+        }
+        if self.paths.contains_key(name) {
+            return self.paths.get(name).map(String::as_str);
         }
         let (path, files) = self.path_and_files(name)?;
         let text = path.to_str()?.to_owned();
@@ -676,8 +719,7 @@ impl ResourceReader {
                 return None;
             }
         }
-        self.paths.push(text);
-        self.paths.last().map(String::as_str)
+        Some(self.paths.entry(name.to_owned()).or_insert(text).as_str())
     }
 
     /// The path `name` hands out and the supplied files under it.

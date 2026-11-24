@@ -144,8 +144,7 @@ pub struct Context {
 pub struct SuppliedSlot {
     /// What the caller named.
     pub shape: SlotShape,
-    /// Its files, sorted by name: the slot's own name for a file, `<slot>/<relative path>` for a
-    /// directory.
+    /// Its files in byte order of name: `<slot>` for a file slot, else `<slot>/<relative path>`.
     pub files: Vec<SuppliedFile>,
 }
 

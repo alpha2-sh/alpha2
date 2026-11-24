@@ -4461,11 +4461,11 @@
           "type": "string"
         },
         "manifest_sha256": {
-          "description": "SHA-256 of the manifest's bytes, as 64 lowercase hexadecimal digits; it covers the pinned\nresources.",
+          "description": "SHA-256 of the manifest's bytes, 64 lowercase hex digits; it covers the pinned resources.",
           "type": "string"
         },
         "supplied": {
-          "description": "The files of resource slots the run read, sorted by name; at most\n[`MAX_SUPPLIED_FILES`].",
+          "description": "The slot files the run read, sorted by name; at most [`MAX_SUPPLIED_FILES`].",
           "items": {
             "$ref": "#/$defs/SuppliedFile"
           },

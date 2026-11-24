@@ -318,40 +318,34 @@ impl NativeInstance {
         })
     }
 
-    /// The host's state for the instance.
     pub(super) fn state(&self) -> &RefCell<State> {
         &self.host.1
     }
 
-    /// Starts a call; a native call has no deadline of its own here.
     fn start_call(&self) {
         let mut state = self.host.1.borrow_mut();
         state.reader.start_call(None);
         state.collected = Collected::default();
     }
 
-    /// The descriptor's bytes.
     pub(super) fn describe(&self) -> Vec<u8> {
         let mut len = 0;
         // SAFETY: `describe` returns static bytes of the length it writes.
         unsafe { borrowed((self.table.describe)(&raw mut len), len) }.to_vec()
     }
 
-    /// `begin`'s status.
     pub(super) fn begin(&mut self, context: &[u8]) -> i32 {
         self.start_call();
         // SAFETY: a live instance; the context is borrowed for the call.
         unsafe { (self.table.begin)(self.instance, context.as_ptr(), context.len()) }
     }
 
-    /// `pass`'s status.
     pub(super) fn pass(&mut self, pass: u32, direction: u32) -> i32 {
         self.start_call();
         // SAFETY: a live instance.
         unsafe { (self.table.pass)(self.instance, pass, direction) }
     }
 
-    /// `video`'s status.
     pub(super) fn video(
         &mut self,
         time: i64,
@@ -373,7 +367,7 @@ impl NativeInstance {
         }
     }
 
-    /// `audio`'s status for a block of `(start, start_sample, frames, rate, channels)`.
+    /// `block` is `(start, start_sample, frames, rate, channels)`.
     pub(super) fn audio(&mut self, block: (i64, i64, u32, u32, u32), samples: &[f32]) -> i32 {
         let (start, start_sample, frames, rate, channels) = block;
         self.start_call();
@@ -392,7 +386,6 @@ impl NativeInstance {
         }
     }
 
-    /// `end`'s status.
     pub(super) fn end(&mut self) -> i32 {
         self.start_call();
         // SAFETY: a live instance.
@@ -401,7 +394,6 @@ impl NativeInstance {
 }
 
 impl NativeTransport {
-    /// Runs `instance` in this process.
     pub(super) const fn new(instance: NativeInstance) -> Self {
         Self(instance)
     }

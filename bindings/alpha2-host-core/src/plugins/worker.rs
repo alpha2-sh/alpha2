@@ -1,6 +1,4 @@
-//! The worker process that runs one native plugin for its host over its standard input and
-//! output: [`main`] is the whole program. A crash, an abort or a hang here ends this process and
-//! the host's request, not the host.
+//! The worker process that runs one native plugin for its host.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;

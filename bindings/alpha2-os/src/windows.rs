@@ -287,6 +287,7 @@ unsafe extern "C" {
 }
 
 pub(crate) fn claim_stdin() -> io::Result<File> {
+    const O_RDONLY: std::ffi::c_int = 0;
     use std::os::windows::io::{FromRawHandle, IntoRawHandle};
     use windows_sys::Win32::Foundation::{
         DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
@@ -321,8 +322,8 @@ pub(crate) fn claim_stdin() -> io::Result<File> {
     // SAFETY: `null` is an open handle kept for the process's life.
     unsafe { SetStdHandle(STD_INPUT_HANDLE, null.cast()) };
     let runtime = std::fs::File::open("NUL")?.into_raw_handle();
-    // SAFETY: the C runtime takes ownership of the open handle; `_O_RDONLY` is 0.
-    let descriptor = unsafe { _open_osfhandle(runtime as isize, 0) };
+    // SAFETY: the C runtime takes ownership of the open handle.
+    let descriptor = unsafe { _open_osfhandle(runtime as isize, O_RDONLY) };
     if descriptor >= 0 {
         // SAFETY: `_dup2` takes any descriptors and fails without effect when one is not open.
         let _ = unsafe { _dup2(descriptor, 0) };

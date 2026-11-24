@@ -431,8 +431,7 @@ fn descriptors() -> Vec<std::os::fd::RawFd> {
 pub(crate) fn close_descriptors_except(keep: &[std::os::fd::RawFd]) {
     for descriptor in descriptors() {
         if descriptor > libc::STDERR_FILENO && !keep.contains(&descriptor) {
-            // SAFETY: closing a descriptor reads no memory; the listing's own one is closed
-            // already and fails with `EBADF`.
+            // SAFETY: the caller owns no descriptor outside `keep` that it still uses.
             let _ = unsafe { libc::close(descriptor) };
         }
     }

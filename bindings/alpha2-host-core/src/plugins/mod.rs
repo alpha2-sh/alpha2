@@ -645,8 +645,7 @@ impl Collected {
 pub struct PluginExtractor {
     descriptor: Descriptor,
     params: serde_json::Map<String, serde_json::Value>,
-    /// The filled slots as `begin`'s context names them.
-    supplied: serde_json::Value,
+    slots_context: serde_json::Value,
     plugin: MadeByPlugin,
     transport: Box<dyn Transport>,
     native: bool,
@@ -668,8 +667,7 @@ impl fmt::Debug for PluginExtractor {
 pub struct LoadRequest<'a> {
     /// The manifest, as [`parse_manifest`] read it.
     pub manifest: &'a PluginManifest,
-    /// SHA-256 of the manifest's bytes, which the caller checked; `made_by.plugin` records it in
-    /// lowercase.
+    /// SHA-256 of the manifest's bytes, which the caller checked; the data records it lowercase.
     pub manifest_sha256: &'a str,
     /// The run's parameters.
     pub params: &'a serde_json::Map<String, serde_json::Value>,
@@ -678,8 +676,8 @@ pub struct LoadRequest<'a> {
 }
 
 /// Loads the artifact `policy` picks from the request's manifest, fetching it and every pinned
-/// resource through `fetch`. The caller's slots are resolved first, so a missing model fails
-/// before a download; their files are read only when the plugin asks for them. Once `cancel` is
+/// resource through `fetch`. Slots are resolved before any download; their files are read only
+/// when the plugin asks for them. Once `cancel` is
 /// set, the load stops before the next file, and a wasm call of the plugin it returns stops within
 /// about 50 ms; a module compile and a native call run to their end.
 ///
@@ -719,7 +717,7 @@ pub fn load(
         let file = check_pinned(fetch, &pinned.url, &pinned.sha256, pinned.bytes)?;
         resources.add_pinned(&resource.name, file);
     }
-    let supplied = resources.context();
+    let slots_context = resources.context();
     stopped()?;
     let (path, bytes) = read_verified(fetch, &artifact.url, &artifact.sha256, artifact.bytes)?;
     let caps = output_caps(&manifest.descriptor);
@@ -751,7 +749,7 @@ pub fn load(
     Ok(PluginExtractor {
         descriptor: described,
         params: params.clone(),
-        supplied,
+        slots_context,
         plugin: MadeByPlugin {
             version: manifest.version.clone(),
             artifact_sha256: artifact.sha256.clone(),
@@ -944,7 +942,7 @@ impl Extractor for PluginExtractor {
             })),
             "frame_rate": context.frame_rate,
             "params": self.params,
-            "supplied": self.supplied,
+            "supplied": self.slots_context,
         });
         let records = self.transport.begin(context.to_string().as_bytes())?;
         nothing_emitted(&records, "begin")

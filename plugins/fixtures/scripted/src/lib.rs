@@ -14,8 +14,8 @@
 //!
 //! As a native library, for isolation tests: a delivery index in `segv_at` makes that delivery
 //! write through a null pointer, in `sleep_at` sleep for good, and in `print_at` print to standard
-//! output first; `spawn_at` (`delivery`, `pid_file`) starts a long-lived process, writes its id to
-//! `pid_file` and sleeps for good. `report` names a file `begin` writes this process's id and open
+//! output first; `spawn_at` (`delivery`, `pid_file`, `then`) starts a long-lived process, writes
+//! its id to `pid_file`, then sleeps for good, or with `then` `abort` or `return` does that. `report` names a file `begin` writes this process's id and open
 //! descriptors to, and `stderr_lines` makes `begin` write that many lines to standard error.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
@@ -34,7 +34,7 @@ pub struct Scripted {
     segv_at: Option<u64>,
     sleep_at: Option<u64>,
     print_at: Option<u64>,
-    spawn_at: Option<(u64, String)>,
+    spawn_at: Option<(u64, String, String)>,
     resource: Option<String>,
     path: Option<String>,
     flood: Option<(u64, bool)>,
@@ -248,6 +248,11 @@ impl Extractor for Scripted {
                 Some((
                     spawn.get("delivery")?.as_u64()?,
                     spawn.get("pid_file")?.as_str()?.to_owned(),
+                    spawn
+                        .get("then")
+                        .and_then(Value::as_str)
+                        .unwrap_or("sleep")
+                        .to_owned(),
                 ))
             }),
             resource,
@@ -293,17 +298,23 @@ impl Extractor for Scripted {
             std::process::abort();
         }
         if self.segv_at == Some(delivery) {
-            // SAFETY: none; the write crashes the process, which is what the fault is for.
+            // SAFETY: not sound by design: the write faults and the process ends there.
             unsafe {
-                std::ptr::write_volatile(std::hint::black_box(std::ptr::null_mut::<u8>()), 1)
+                std::ptr::write_volatile(std::hint::black_box(std::ptr::null_mut::<u8>()), 1);
             };
         }
         if self.sleep_at == Some(delivery) {
             sleep_for_good();
         }
-        if let Some((_, pid_file)) = self.spawn_at.as_ref().filter(|(at, _)| *at == delivery) {
+        if let Some((_, pid_file, then)) =
+            self.spawn_at.as_ref().filter(|(at, _, _)| *at == delivery)
+        {
             spawn_long_lived(pid_file)?;
-            sleep_for_good();
+            match then.as_str() {
+                "abort" => std::process::abort(),
+                "return" => {}
+                _ => sleep_for_good(),
+            }
         }
         if self.spin_at == Some(delivery) {
             loop {

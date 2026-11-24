@@ -2559,13 +2559,11 @@ export interface MadeByPlugin {
    */
   readonly artifact_sha256: string;
   /**
-   * SHA-256 of the manifest's bytes, as 64 lowercase hexadecimal digits; it covers the pinned
-   * resources.
+   * SHA-256 of the manifest's bytes, 64 lowercase hex digits; it covers the pinned resources.
    */
   readonly manifest_sha256: string;
   /**
-   * The files of resource slots the run read, sorted by name; at most
-   * `MAX_SUPPLIED_FILES`.
+   * The slot files the run read, sorted by name; at most `MAX_SUPPLIED_FILES`.
    */
   readonly supplied?: readonly SuppliedFile[];
   /**

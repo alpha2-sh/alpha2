@@ -1,6 +1,4 @@
-//! Runs a native plugin in a worker process of its own, one per run, and checks everything the
-//! worker sends as if the plugin ran here. A crash or a hang of the plugin ends the worker and
-//! fails the call; cancel and the call deadline kill the worker.
+//! Runs a native plugin in a worker process, one per run.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
@@ -33,6 +31,7 @@ enum Killed {
 
 /// What the call thread and the watcher share.
 struct Watch {
+    /// The worker until it is reaped.
     child: Option<Child>,
     job: Option<alpha2_os::KillOnCloseJob>,
     /// When the running exchange must have ended.
@@ -42,6 +41,19 @@ struct Watch {
 }
 
 impl Watch {
+    /// Reaps the worker once it has ended, after killing what it left in its process tree.
+    fn reap_ended(&mut self) -> Option<ExitStatus> {
+        let child = self.child.as_mut()?;
+        if !alpha2_os::child_exited(child).unwrap_or(true) {
+            return None;
+        }
+        let _ = alpha2_os::kill_process_tree(child);
+        let status = child.wait().ok();
+        self.child = None;
+        self.job = None;
+        status
+    }
+
     fn kill(&mut self, why: Killed) {
         if self.killed.is_none() {
             self.killed = Some(why);
@@ -84,7 +96,7 @@ fn watcher(shared: &Shared, cancel: &CancelToken) {
 }
 
 /// Writes the worker's standard error as plugin diagnostics under the run's log budget, line by
-/// line; past the budget it reads on and drops, so the worker never blocks on a full pipe.
+/// line; past the budget it reads on and drops.
 fn drain_errors(stream: impl Read, log: &Mutex<LogBudget>) {
     let mut reader = BufReader::new(stream);
     let mut line = Vec::new();
@@ -182,8 +194,9 @@ impl ProcessTransport {
     /// Starts a worker with `command` and waits for its `hello`.
     ///
     /// # Errors
-    /// `PLUGIN_LOAD_FAILED` when it does not start or is another build, `PLUGIN_LIMIT` when it does
-    /// not answer within `deadline`, `CANCELLED` once `cancel` is set.
+    /// `PLUGIN_LOAD_FAILED` when it does not start or is another build, `PLUGIN_TRAPPED` when it
+    /// ends or breaks the wire before its `hello`, `PLUGIN_LIMIT` when it does not answer within
+    /// `deadline`, `CANCELLED` once `cancel` is set.
     pub(super) fn spawn(
         command: &WorkerCommand,
         cancel: &CancelToken,
@@ -331,17 +344,17 @@ impl ProcessTransport {
         error
     }
 
-    /// Why the worker's pipe failed: the host's cancel, the deadline, a broken frame, or the
-    /// worker's end.
+    /// Why the worker's pipe failed: a cancel, the deadline, a broken frame or the worker's end.
     fn ended(&mut self, error: &WireError) -> PluginError {
         if matches!(error, WireError::Oversized(_) | WireError::Malformed(_)) {
             return self.violation(&error.to_string());
         }
-        let killed = self.shared.lock().killed;
-        let status = match killed {
+        let killed_first = self.shared.lock().killed;
+        let status = match killed_first {
             Some(_) => None,
             None => self.exit_status(),
         };
+        let killed = self.shared.lock().killed;
         let failure = match killed {
             Some(Killed::Cancelled) => PluginError::new(CANCELLED, "the extraction was cancelled"),
             Some(Killed::Deadline) => PluginError::new(
@@ -369,10 +382,17 @@ impl ProcessTransport {
     fn exit_status(&self) -> Option<ExitStatus> {
         let asked = Instant::now();
         loop {
-            match self.shared.lock().child.as_mut().map(Child::try_wait) {
-                Some(Ok(Some(status))) => return Some(status),
-                Some(Ok(None)) if asked.elapsed() < SHUTDOWN_GRACE => {}
-                _ => return None,
+            {
+                let mut watch = self.shared.lock();
+                if watch.child.is_none() || watch.killed.is_some() {
+                    return None;
+                }
+                if let Some(status) = watch.reap_ended() {
+                    return Some(status);
+                }
+            }
+            if asked.elapsed() >= SHUTDOWN_GRACE {
+                return None;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -489,8 +509,7 @@ impl ProcessTransport {
         }
     }
 
-    /// Asks the worker to end and leaves it to a reaper thread, which kills it after a grace
-    /// period.
+    /// Asks the worker to end and leaves it to a reaper thread, which kills it past a grace.
     fn finish(&mut self) {
         let Some(mut input) = self.input.take() else {
             return;
@@ -520,16 +539,21 @@ impl ProcessTransport {
 fn reap(child: &mut Child, _job: Option<alpha2_os::KillOnCloseJob>, report: bool) {
     let asked = Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() || !report => break,
-            Ok(Some(status)) => {
-                alpha2_os::diagnostic!(
-                    "plugin: the worker ended with {status} after its last reply"
-                );
+        match alpha2_os::child_exited(child) {
+            Ok(true) => {
+                let _ = alpha2_os::kill_process_tree(child);
+                match child.wait() {
+                    Ok(status) if report && !status.success() => {
+                        alpha2_os::diagnostic!(
+                            "plugin: the worker ended with {status} after its last reply"
+                        );
+                    }
+                    _ => {}
+                }
                 break;
             }
-            Ok(None) if asked.elapsed() < SHUTDOWN_GRACE => std::thread::sleep(WATCH_INTERVAL),
-            Ok(None) | Err(_) => {
+            Ok(false) if asked.elapsed() < SHUTDOWN_GRACE => std::thread::sleep(WATCH_INTERVAL),
+            Ok(false) | Err(_) => {
                 alpha2_os::diagnostic!(
                     "plugin: the worker did not end within {} ms of its last reply; killed",
                     SHUTDOWN_GRACE.as_millis()

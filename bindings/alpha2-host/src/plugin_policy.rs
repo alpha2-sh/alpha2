@@ -104,7 +104,6 @@ pub enum Root {
 /// The hidden subcommand a host runs a native plugin in, as its own child.
 pub const PLUGIN_WORKER: &str = "plugin-worker";
 
-/// In a test, this test binary's [`TEST_WORKER`] test stands in for the subcommand.
 fn worker_arguments() -> Vec<std::ffi::OsString> {
     #[cfg(not(test))]
     {
@@ -230,8 +229,7 @@ impl PluginPolicy {
         Ok(())
     }
 
-    /// Reads `--plugin-resource-root`; a directory must exist and is resolved against the working
-    /// directory.
+    /// Reads `--plugin-resource-root`; a directory must exist and resolves against the cwd.
     pub(crate) fn set_resource_root(&mut self, value: &str) -> Result<(), String> {
         self.resource_root = match value {
             "any" => ResourceRoot::Any,

@@ -537,3 +537,108 @@ fn paths_name_supplied_files_and_directories_only() {
         ["extra/b", "extra/sub/a", "model"]
     );
 }
+
+#[test]
+fn the_supplied_files_of_all_slots_together_stay_within_what_provenance_holds() {
+    let dir = scratch("total");
+    let model = dir.join("model.bin");
+    write(&model, b"w");
+    for slot in ["one", "two"] {
+        for index in 0..600 {
+            write(&dir.join(slot).join(format!("{index:04}")), b"");
+        }
+    }
+    let two = manifest(&json!([
+        { "name": "model", "supplied": { "shape": "file" } },
+        { "name": "one", "supplied": { "shape": "directory" } },
+        { "name": "two", "supplied": { "shape": "directory" } }
+    ]));
+    let refused = resolve(
+        &two,
+        &[
+            ("model", &model),
+            ("one", &dir.join("one")),
+            ("two", &dir.join("two")),
+        ],
+        &ResourceRoot::Any,
+    )
+    .expect_err("1,201 files");
+    assert_eq!(
+        reason(&refused),
+        (
+            codes::RESOURCE_INVALID,
+            Some("two"),
+            Some(slot_reasons::TOO_MANY_FILES)
+        )
+    );
+}
+
+#[test]
+fn a_directory_slot_lists_its_files_in_byte_order() {
+    let dir = scratch("order");
+    let model = dir.join("model.bin");
+    write(&model, b"w");
+    let extra = dir.join("extra");
+    write(&extra.join("a/x"), b"1");
+    write(&extra.join("a.txt"), b"2");
+    let set = resolve(
+        &slots(),
+        &[("model", &model), ("extra", &extra)],
+        &ResourceRoot::Any,
+    )
+    .expect("resolves");
+    assert_eq!(
+        files_of(&set)["extra"]["files"],
+        json!([
+            { "name": "extra/a.txt", "bytes": 1 },
+            { "name": "extra/a/x", "bytes": 1 }
+        ])
+    );
+}
+
+#[test]
+fn a_path_handed_out_once_is_not_hashed_again() {
+    let dir = scratch("memo");
+    let model = dir.join("model.bin");
+    write(&model, b"before");
+    let set = resolve(&slots(), &[("model", &model)], &ResourceRoot::Any).expect("resolves");
+    let mut reader = ResourceReader::new(set, CancelToken::default());
+    let first = reader.path("model").expect("path").to_owned();
+    write(&model, b"after, and longer");
+    assert_eq!(reader.path("model"), Some(first.as_str()));
+    assert!(reader.take_failure().is_none());
+    assert_eq!(reader.supplied()[0].sha256, sha256_hex(b"before"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_retargeted_outside_the_root_after_the_load_is_refused_where_it_is_read() {
+    use std::os::unix::fs::symlink;
+    let dir = scratch("retarget");
+    let allowed = dir.join("allowed");
+    write(&allowed.join("real.bin"), b"inside");
+    write(&dir.join("secret.bin"), b"outside");
+    let link = allowed.join("model.bin");
+    symlink(allowed.join("real.bin"), &link).expect("link");
+    let extra = allowed.join("extra");
+    symlink(allowed.join("real.bin"), {
+        std::fs::create_dir_all(&extra).expect("dir");
+        extra.join("weights")
+    })
+    .expect("link");
+    let set = resolve(
+        &slots(),
+        &[("model", &allowed.join("real.bin")), ("extra", &extra)],
+        &ResourceRoot::Dir(allowed.clone()),
+    )
+    .expect("under the root");
+    std::fs::remove_file(extra.join("weights")).expect("unlink");
+    symlink(dir.join("secret.bin"), extra.join("weights")).expect("retarget");
+    let mut reader = ResourceReader::new(set, CancelToken::default());
+    assert_eq!(reader.bytes("extra/weights"), None);
+    assert_eq!(
+        reader.take_failure().map(|error| error.code),
+        Some(codes::REFUSED)
+    );
+    drop(link);
+}

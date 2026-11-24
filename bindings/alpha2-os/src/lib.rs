@@ -33,7 +33,7 @@ pub use memory::{
 pub use memory::{MemoryCapacity, memory_capacity};
 pub use os_version::os_version;
 pub use worker::{
-    claim_stdin, close_descriptors_except, disable_crash_dumps, kill_process_tree,
+    child_exited, claim_stdin, close_descriptors_except, disable_crash_dumps, kill_process_tree,
     own_process_tree, prefer_out_of_memory_kill,
 };
 

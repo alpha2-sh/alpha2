@@ -1,6 +1,4 @@
-//! The wire between a host and the worker process that runs a native plugin for it: frames of a
-//! `u32` length, a `u8` tag and a payload, little-endian. The worker starts with [`MAGIC`] and a
-//! `hello`; every reply that ends a request carries the request's sequence number.
+//! The wire between a host and the worker process that runs a native plugin for it.
 
 use std::io::{self, Read, Write};
 
@@ -18,8 +16,15 @@ pub const WIRE_VERSION: u32 = 1;
 pub const MAX_PREAMBLE_BYTES: usize = 4096;
 /// The longest frame a worker writes.
 pub const MAX_CHILD_FRAME_BYTES: usize = 4 << 20;
-/// The longest frame a host writes: the largest frame of a 16384-pixel canvas, and headers.
-pub const MAX_HOST_FRAME_BYTES: usize = 16384 * 16384 * 4 + 4096;
+/// Bytes of a frame's fields before a video or audio payload, rounded up.
+const MAX_HEADER_BYTES: usize = 4096;
+/// The longest frame a host writes: a delivered RGBA frame of the largest size, and its fields.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "256 MiB fits a 32-bit usize"
+)]
+pub const MAX_HOST_FRAME_BYTES: usize =
+    alpha2_media::MAX_FRAME_PIXELS as usize * 4 + MAX_HEADER_BYTES;
 
 /// Tags of frames a host writes.
 pub mod host {
@@ -115,7 +120,7 @@ impl Failure {
 /// Why the wire was broken.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WireError {
-    /// The stream ended; at the start of a frame when `clean`.
+    /// The stream ended.
     Closed {
         /// Whether it ended between frames.
         clean: bool,
@@ -149,7 +154,8 @@ pub struct Frame {
     pub payload: Vec<u8>,
 }
 
-/// Reads one frame of at most `max` payload bytes.
+/// Reads one frame of at most `max` payload bytes: a `u32` length, a `u8` tag and the payload,
+/// little-endian.
 ///
 /// # Errors
 /// [`WireError::Closed`] at the end of the stream, [`WireError::Oversized`] past `max`, or
@@ -378,9 +384,7 @@ pub fn parse_child(frame: Frame) -> Result<ChildMessage, WireError> {
 /// What a host asks a worker to load.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct Load {
-    /// The library file.
     pub(super) library: std::path::PathBuf,
-    /// The artifact's SHA-256.
     pub(super) sha256: String,
     /// Whether the library file holds the pinned bytes, which the worker checks before loading.
     pub(super) check: bool,

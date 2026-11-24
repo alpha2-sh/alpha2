@@ -318,8 +318,7 @@ mod resource_schema {
     }
 }
 
-/// Whether `name` is a slot name: an ASCII letter, digit, `_` or `-`, then up to 63 of those or
-/// `.`.
+/// Whether `name` is a slot name: 1 to 64 of `A-Z a-z 0-9 . _ -`, not starting with `.`.
 #[must_use]
 pub fn is_slot_name(name: &str) -> bool {
     let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-');

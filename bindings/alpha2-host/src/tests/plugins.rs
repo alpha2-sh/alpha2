@@ -743,6 +743,29 @@ fn a_native_plugin_in_process_still_runs_when_the_operator_asks() {
     assert_eq!(serving.finish(), Some(0));
 }
 
+fn assert_read_the_supplied_files(answer: &Value) {
+    assert_eq!(answer["ok"], true, "{answer}");
+    let set = &answer["result"]["dataSets"][0];
+    assert_eq!(
+        set["words"]
+            .as_array()
+            .expect("words")
+            .iter()
+            .map(|word| word["text"].as_str().expect("text"))
+            .collect::<Vec<_>>(),
+        ["model 3 010277", "extra/a.txt 5 616c706861"],
+        "{answer}"
+    );
+    assert_eq!(
+        set["made_by"]["plugin"]["supplied"],
+        json!([
+            { "name": "extra/a.txt", "sha256": sha256_hex(b"alpha"), "bytes": 5 },
+            { "name": "model", "sha256": sha256_hex(b"\x01\x02w"), "bytes": 3 }
+        ]),
+        "{answer}"
+    );
+}
+
 #[test]
 fn a_request_fills_resource_slots_only_where_the_operator_allows() {
     let _gpu = gpu_test_lock();
@@ -822,26 +845,7 @@ fn a_request_fills_resource_slots_only_where_the_operator_allows() {
         ],
     );
     for answer in &answers[..2] {
-        assert_eq!(answer["ok"], true, "{answer}");
-        let set = &answer["result"]["dataSets"][0];
-        assert_eq!(
-            set["words"]
-                .as_array()
-                .expect("words")
-                .iter()
-                .map(|word| word["text"].as_str().expect("text"))
-                .collect::<Vec<_>>(),
-            ["model 3 010277", "extra/a.txt 5 616c706861"],
-            "{answer}"
-        );
-        assert_eq!(
-            set["made_by"]["plugin"]["supplied"],
-            json!([
-                { "name": "extra/a.txt", "sha256": sha256_hex(b"alpha"), "bytes": 5 },
-                { "name": "model", "sha256": sha256_hex(b"\x01\x02w"), "bytes": 3 }
-            ]),
-            "{answer}"
-        );
+        assert_read_the_supplied_files(answer);
     }
     assert_eq!(
         answers[2]["error"]["code"], "PLUGIN_RESOURCE_INVALID",

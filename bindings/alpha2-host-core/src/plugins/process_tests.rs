@@ -284,6 +284,27 @@ fn nothing_the_plugin_started_survives_the_kill_at_the_deadline() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn nothing_the_plugin_started_survives_its_worker_crashing_or_ending() {
+    for then in ["abort", "return"] {
+        let pid_file = scratch(&format!("isolated-spawn-{then}")).join("pid");
+        let params = json!({ "spawn_at": { "delivery": 0, "pid_file": pid_file, "then": then } });
+        let mut plugin = loaded(&manifest(1, false, true), &params, &isolated()).expect("loads");
+        let outcome = run(&mut plugin, &params);
+        drop(plugin);
+        match then {
+            "abort" => assert_eq!(failure(outcome).code, Some(codes::TRAPPED)),
+            _ => drop(outcome.expect("the run ends")),
+        }
+        let pid = std::fs::read_to_string(&pid_file).expect("the plugin started a process");
+        assert!(
+            gone_within(&pid, Duration::from_secs(5)),
+            "process {pid} outlived its worker ({then})"
+        );
+    }
+}
+
 #[test]
 #[ignore = "a host the isolation tests kill while its worker runs"]
 fn run_a_host_whose_worker_sleeps() {
@@ -351,14 +372,14 @@ fn worker_descriptors(name: &str) -> Vec<i32> {
 
 #[cfg(unix)]
 #[test]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "clears close-on-exec with fcntl")]
 fn a_worker_holds_none_of_the_descriptors_it_inherited() {
     use std::os::fd::AsRawFd;
     let baseline = worker_descriptors("isolated-descriptors");
     let leaked = std::fs::File::open(built().native[1].clone()).expect("a file");
-    // SAFETY: clearing close-on-exec on a descriptor this test owns reads no memory.
+    // SAFETY: `leaked` is open for the call.
     let flags = unsafe { libc::fcntl(leaked.as_raw_fd(), libc::F_GETFD) };
-    // SAFETY: as above.
+    // SAFETY: `leaked` is open for the call.
     unsafe { libc::fcntl(leaked.as_raw_fd(), libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
     let with_leak = worker_descriptors("isolated-descriptors-leaked");
     drop(leaked);

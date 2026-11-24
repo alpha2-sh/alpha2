@@ -528,7 +528,6 @@ fn extract(
 /// Makes the run's extractor; the token is the handle's cancel.
 type MakeExtractor = Box<dyn FnOnce(&CancelToken) -> Result<RunExtractor, Alpha2Error> + Send>;
 
-/// An extractor a run drives.
 pub(crate) trait Run: Engine {
     /// What its data records as `made_by.plugin`, read once the run has ended.
     fn made_by(&self) -> Option<alpha2_model::MadeByPlugin> {
@@ -538,7 +537,6 @@ pub(crate) trait Run: Engine {
 
 impl Run for Foreign {}
 
-/// The extractor of a run.
 pub(crate) struct RunExtractor {
     pub(crate) extractor: Box<dyn Run>,
 }

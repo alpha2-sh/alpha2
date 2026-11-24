@@ -287,11 +287,9 @@ pub struct MadeByPlugin {
     pub version: String,
     /// SHA-256 of the artifact that ran, as 64 lowercase hexadecimal digits.
     pub artifact_sha256: String,
-    /// SHA-256 of the manifest's bytes, as 64 lowercase hexadecimal digits; it covers the pinned
-    /// resources.
+    /// SHA-256 of the manifest's bytes, 64 lowercase hex digits; it covers the pinned resources.
     pub manifest_sha256: String,
-    /// The files of resource slots the run read, sorted by name; at most
-    /// [`MAX_SUPPLIED_FILES`].
+    /// The slot files the run read, sorted by name; at most [`MAX_SUPPLIED_FILES`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supplied: Vec<SuppliedFile>,
 }
