@@ -310,30 +310,14 @@ fn a_device_rate_seeded_too_high_is_recalibrated_by_the_frames_it_mispredicts() 
 }
 
 #[test]
-fn a_frame_of_more_submissions_than_the_clock_keeps_still_lowers_the_rate() {
+fn a_frame_predicted_past_its_most_submissions_still_lowers_the_rate() {
     let _lock = gpu_test_lock();
     let gpu = own_device();
     let renderer = Renderer::new(gpu.clone());
     let (effect, _) = registered(&renderer, heavy_effect());
-    let size = RenderSize::new(40, 40).expect("size");
+    let size = RenderSize::new(512, 288).expect("size");
     let view = flat_source(&renderer, size);
-    let pieces = (size.height / 2).min(crate::submission_planner::MAX_BANDS)
-        * (size.width / 2).min(crate::submission_planner::MAX_TILE_COLUMNS);
-    let quads = usize::try_from(pieces).expect("fits");
-    let passes = crate::submission_clock::RECENT_SUBMISSIONS_KEPT / quads + 1;
-    let mut graph = RenderGraph::new(size);
-    let mut node = graph.add_source(SourceView::from_wgpu(&view));
-    for _ in 0..passes {
-        node = graph
-            .add_effect(
-                effect.clone(),
-                node,
-                EffectParams::new(),
-                EffectRuntime::default(),
-            )
-            .expect("dependency exists");
-    }
-    graph.set_output(node).expect("output exists");
+    let graph = heavy_chain(&view, &effect, size, 5);
     let polled = || {
         let result = renderer.execute_graph(&graph).expect("the graph renders");
         renderer
@@ -352,19 +336,66 @@ fn a_frame_of_more_submissions_than_the_clock_keeps_still_lowers_the_rate() {
     let _ = polled();
     gpu.rate().seed(1.0);
     let banded = with_watchdog(1.0, polled);
-    assert_eq!(
-        usize::try_from(banded.submissions).expect("fits"),
-        passes * quads,
-        "{banded:?}"
-    );
     assert!(
-        passes * quads > crate::submission_clock::RECENT_SUBMISSIONS_KEPT,
+        banded.submissions > 1
+            && banded.submissions <= crate::submission_planner::MAX_FRAME_SUBMISSIONS,
         "{banded:?}"
     );
     assert!(
         gpu.rate().ms_per_unit_pixel() < Some(2.0),
         "{:?}",
         gpu.rate().ms_per_unit_pixel()
+    );
+}
+
+fn heavy_chain<'a>(
+    view: &'a wgpu::TextureView,
+    effect: &crate::EffectId,
+    size: RenderSize,
+    passes: usize,
+) -> RenderGraph<'a> {
+    let mut graph = RenderGraph::new(size);
+    let mut node = graph.add_source(SourceView::from_wgpu(view));
+    for _ in 0..passes {
+        node = graph
+            .add_effect(
+                effect.clone(),
+                node,
+                EffectParams::new(),
+                EffectRuntime::default(),
+            )
+            .expect("dependency exists");
+    }
+    graph.set_output(node).expect("output exists");
+    graph
+}
+
+#[test]
+fn a_frame_under_a_one_millisecond_watchdog_keeps_to_its_most_submissions_and_its_picture() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(own_device());
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let size = RenderSize::new(512, 288).expect("size");
+    let view = flat_source(&renderer, size);
+    let graph = heavy_chain(&view, &effect, size, 6);
+    let draw = || {
+        let result = renderer.execute_graph(&graph).expect("the graph renders");
+        let submissions = renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions");
+        (submissions, read_rgba8(&renderer, &result))
+    };
+    let (whole, whole_picture) = with_watchdog(UNSPLIT_WATCHDOG_MS, draw);
+    assert_eq!(whole.submissions, 1, "{whole:?}");
+    let (capped, capped_picture) = with_watchdog(1.0, draw);
+    assert!(
+        capped.submissions > 1
+            && capped.submissions <= crate::submission_planner::MAX_FRAME_SUBMISSIONS,
+        "{capped:?}"
+    );
+    assert!(
+        whole_picture == capped_picture,
+        "the capped frame drew other bytes"
     );
 }
 
@@ -1002,7 +1033,7 @@ fn a_pass_past_the_most_bands_is_cut_across_too_and_not_submitted_over_the_budge
     let view = flat_source(&renderer, size);
     let graph = effect_graph(&view, &effect, size);
     let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
-    let past_the_bands = 8.0 * f64::from(crate::submission_planner::MAX_BANDS);
+    let past_the_bands = 1.25 * f64::from(crate::submission_planner::MAX_BANDS);
     let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, past_the_bands);
     assert_within_the_budget(
         longest,
@@ -1075,17 +1106,15 @@ fn a_submission_predicted_over_the_budget_is_counted() {
     let _ = renderer.execute_graph(&graph).expect("the graph renders");
     let stats = renderer.take_gpu_submission_stats();
     assert_eq!((stats.frames, stats.over_budget), (1, 0), "{planned:?}");
-    let most_pieces =
-        crate::submission_planner::MAX_BANDS * crate::submission_planner::MAX_TILE_COLUMNS;
-    seeded_at(
-        &gpu,
-        planned.cost.unit_pixels(),
-        4.0 * f64::from(most_pieces),
-    );
+    let most = crate::submission_planner::MAX_FRAME_SUBMISSIONS;
+    seeded_at(&gpu, planned.cost.unit_pixels(), 16.0 * f64::from(most));
     let _ = renderer.take_gpu_submission_stats();
     let _ = renderer.execute_graph(&graph).expect("the graph renders");
     let stats = renderer.take_gpu_submission_stats();
-    assert_eq!(stats.over_budget, u64::from(most_pieces), "{stats:?}");
+    assert!(
+        stats.over_budget >= u64::from(most / 2) && stats.max_per_frame <= most,
+        "{stats:?}"
+    );
     assert_eq!(stats.budget_ms, Some(alpha2_gpu::submission_budget_ms()));
 }
 
