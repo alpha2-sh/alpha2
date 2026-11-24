@@ -12,6 +12,10 @@ use serde_json::{Value, json};
 
 use super::*;
 
+/// The manifest hash test loads record.
+pub(super) const MANIFEST_SHA256: &str =
+    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
 /// The fixture plugins built for wasm32 and this target, once per test process.
 struct Built {
     /// The directory test manifests lie in; their URLs are relative to it.
@@ -137,8 +141,11 @@ fn loaded(
 ) -> Result<PluginExtractor, PluginError> {
     let manifest = parse_manifest(&manifest.to_string())?;
     load(
-        &manifest,
-        params.as_object().cloned().unwrap_or_default(),
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: &params.as_object().cloned().unwrap_or_default(),
+        },
         policy,
         &mut Local,
         &CancelToken::default(),
@@ -305,6 +312,7 @@ fn the_fixture_plugins_give_the_data_the_rust_fixtures_do() {
             "{policy:?}"
         );
         assert_eq!(plugin.made_by().version, "1.2.3");
+        assert_eq!(plugin.made_by().manifest_sha256, MANIFEST_SHA256);
     }
 
     let expected = run(&mut rust_scripted(), &script()).expect("rust scripted");
@@ -915,8 +923,11 @@ fn a_native_library_is_prepared_once_and_outlives_threads_it_left_running() {
     let mut fetch = Counting::default();
     let params = json!({ "park_thread": true }).as_object().cloned();
     let mut first = load(
-        &manifest,
-        params.clone().unwrap_or_default(),
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: &params.clone().unwrap_or_default(),
+        },
         &native_allowed(),
         &mut fetch,
         &CancelToken::default(),
@@ -928,8 +939,11 @@ fn a_native_library_is_prepared_once_and_outlives_threads_it_left_running() {
     // Another test of this process may have loaded the library first.
     assert!(after_first <= 1, "{after_first}");
     let mut second = load(
-        &manifest,
-        params.unwrap_or_default(),
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: &params.unwrap_or_default(),
+        },
         &native_allowed(),
         &mut fetch,
         &CancelToken::default(),
@@ -970,8 +984,11 @@ fn load_a_native_library_by_bare_name() {
                            "kind": "extractor", "artifacts": [entry], "descriptor": descriptor });
     let manifest = parse_manifest(&manifest.to_string()).expect("manifest");
     let mut plugin = load(
-        &manifest,
-        serde_json::Map::new(),
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: &serde_json::Map::new(),
+        },
         &native_allowed(),
         &mut Bare(PathBuf::from(file)),
         &CancelToken::default(),
@@ -1028,8 +1045,11 @@ fn a_cancel_stops_a_wasm_call_before_its_deadline_and_the_deadline_is_wall_clock
         ..Policy::default()
     };
     let mut plugin = load(
-        &parse_manifest(&manifest.to_string()).expect("manifest"),
-        params.as_object().cloned().unwrap_or_default(),
+        LoadRequest {
+            manifest: &parse_manifest(&manifest.to_string()).expect("manifest"),
+            manifest_sha256: MANIFEST_SHA256,
+            params: &params.as_object().cloned().unwrap_or_default(),
+        },
         &policy,
         &mut Local,
         &cancel,
@@ -1054,8 +1074,11 @@ fn a_cancel_stops_a_wasm_call_before_its_deadline_and_the_deadline_is_wall_clock
         started.elapsed()
     );
     let refused = load(
-        &parse_manifest(&manifest.to_string()).expect("manifest"),
-        serde_json::Map::new(),
+        LoadRequest {
+            manifest: &parse_manifest(&manifest.to_string()).expect("manifest"),
+            manifest_sha256: MANIFEST_SHA256,
+            params: &serde_json::Map::new(),
+        },
         &Policy::default(),
         &mut Local,
         &cancel,

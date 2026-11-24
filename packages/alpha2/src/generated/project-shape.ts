@@ -1879,9 +1879,11 @@ export const PROJECT_SHAPE: unknown = {
       additionalProperties: false,
       properties: {
         artifact_sha256: { type: "string" },
+        manifest_sha256: { type: "string" },
+        supplied: { items: { $ref: "#/$defs/SuppliedFile" }, type: "array" },
         version: { type: "string" },
       },
-      required: ["version", "artifact_sha256"],
+      required: ["version", "artifact_sha256", "manifest_sha256"],
       type: "object",
     },
     MaskMode: {
@@ -2778,6 +2780,16 @@ export const PROJECT_SHAPE: unknown = {
         },
       },
       required: ["vertices"],
+      type: "object",
+    },
+    SuppliedFile: {
+      additionalProperties: false,
+      properties: {
+        bytes: { format: "uint64", minimum: 0, type: "integer" },
+        name: { type: "string" },
+        sha256: { type: "string" },
+      },
+      required: ["name", "sha256", "bytes"],
       type: "object",
     },
     TextAlign: {

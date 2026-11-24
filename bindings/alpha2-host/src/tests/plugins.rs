@@ -348,7 +348,14 @@ fn run_with_flags_in(
 
 fn ran_artifact(response: &Value) -> Value {
     assert_eq!(response["ok"], true, "{response}");
-    response["result"]["dataSets"][0]["made_by"]["plugin"]["artifact_sha256"].clone()
+    let plugin = &response["result"]["dataSets"][0]["made_by"]["plugin"];
+    assert!(
+        plugin["manifest_sha256"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64),
+        "{plugin}"
+    );
+    plugin["artifact_sha256"].clone()
 }
 
 #[test]

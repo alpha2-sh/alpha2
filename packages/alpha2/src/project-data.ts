@@ -13,6 +13,8 @@ import {
   MAX_DATA_VALUES,
   MAX_DATA_WORDS,
   MAX_FOLLOW_DEPTH,
+  MAX_SUPPLIED_FILES,
+  MAX_SUPPLIED_NAME_BYTES,
 } from "./generated/project-schema.js";
 
 type Json = Record<string, unknown>;
@@ -39,6 +41,15 @@ function isRecord(value: unknown): value is Json {
 
 function bytes(text: string): number {
   return encoder.encode(text).length;
+}
+
+/** Whether `a` sorts before `b` by UTF-8 bytes, as Rust compares strings. */
+function bytesBefore(a: string, b: string): boolean {
+  const left = encoder.encode(a);
+  const right = encoder.encode(b);
+  for (let index = 0; index < Math.min(left.length, right.length); index++)
+    if (left[index] !== right[index]) return left[index] < right[index];
+  return left.length < right.length;
 }
 
 function finite(value: unknown): value is number {
@@ -76,6 +87,38 @@ function label(text: unknown): boolean {
   return typeof text === "string" && bytes(text) <= MAX_DATA_LABEL_BYTES;
 }
 
+const isSha256 = (value: unknown): boolean =>
+  typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+
+/** Mirrors `MadeByPlugin::is_valid`. */
+function validMadeByPlugin(plugin: unknown): boolean {
+  if (
+    !isRecord(plugin) ||
+    typeof plugin.version !== "string" ||
+    plugin.version.length === 0 ||
+    !isSha256(plugin.artifact_sha256) ||
+    !isSha256(plugin.manifest_sha256)
+  )
+    return false;
+  const supplied = plugin.supplied ?? [];
+  if (!Array.isArray(supplied) || supplied.length > MAX_SUPPLIED_FILES)
+    return false;
+  let previous: string | undefined;
+  for (const file of supplied as unknown[]) {
+    if (
+      !isRecord(file) ||
+      typeof file.name !== "string" ||
+      file.name.length === 0 ||
+      bytes(file.name) > MAX_SUPPLIED_NAME_BYTES ||
+      !isSha256(file.sha256) ||
+      (previous !== undefined && !bytesBefore(previous, file.name))
+    )
+      return false;
+    previous = file.name;
+  }
+  return true;
+}
+
 /** Mirrors `DataSet::check`. */
 function setProblem(
   set: Json,
@@ -87,13 +130,7 @@ function setProblem(
   const madeBy = set.made_by;
   if (isRecord(madeBy)) {
     const plugin = madeBy.plugin;
-    const pluginOk =
-      plugin == null ||
-      (isRecord(plugin) &&
-        typeof plugin.version === "string" &&
-        plugin.version.length > 0 &&
-        typeof plugin.artifact_sha256 === "string" &&
-        /^[0-9a-f]{64}$/.test(plugin.artifact_sha256));
+    const pluginOk = plugin == null || validMadeByPlugin(plugin);
     if (madeBy.extractor === "" || !pluginOk) return "has an invalid made_by";
   }
   const anchor = isRecord(set.anchor) ? set.anchor : {};

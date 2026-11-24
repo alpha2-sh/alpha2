@@ -10,6 +10,7 @@ use alpha2_eval::edit::{DataRef, EditRequest, Ranges, Ripple, Target, apply};
 use alpha2_model::{DataSet, DataValues, Project};
 use serde_json::{Value, json};
 
+use super::tests::MANIFEST_SHA256;
 use super::*;
 
 const RATE: i64 = 16_000;
@@ -166,8 +167,11 @@ fn extract(
 ) -> Result<DataSet, DriveError> {
     let manifest = packed_manifest();
     let mut plugin = load(
-        &manifest,
-        params.as_object().cloned().unwrap_or_default(),
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: &params.as_object().cloned().unwrap_or_default(),
+        },
         policy,
         &mut Packed,
         &CancelToken::default(),

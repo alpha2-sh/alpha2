@@ -625,8 +625,11 @@ fn load_plugin(
     )
     .with_cancel(cancel.clone());
     plugins::load(
-        &manifest,
-        request.params.clone(),
+        plugins::LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: &plugin.sha256,
+            params: &request.params,
+        },
         &policy,
         &mut fetcher,
         cancel,

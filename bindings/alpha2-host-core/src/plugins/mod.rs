@@ -499,20 +499,36 @@ impl fmt::Debug for PluginExtractor {
     }
 }
 
-/// Loads the artifact `policy` picks from `manifest`, fetching it and every resource through
-/// `fetch`, to run with `params`. Once `cancel` is set, the load stops before the next file, and
-/// a wasm call of the plugin it returns stops within about 50 ms; a module compile and a native
-/// call run to their end.
+/// What a caller loads: a checked manifest and what one run of it takes.
+#[derive(Clone, Copy, Debug)]
+pub struct LoadRequest<'a> {
+    /// The manifest, as [`parse_manifest`] read it.
+    pub manifest: &'a PluginManifest,
+    /// SHA-256 of the manifest's bytes, which the caller checked; `made_by.plugin` records it in
+    /// lowercase.
+    pub manifest_sha256: &'a str,
+    /// The run's parameters.
+    pub params: &'a serde_json::Map<String, serde_json::Value>,
+}
+
+/// Loads the artifact `policy` picks from the request's manifest, fetching it and every resource
+/// through `fetch`. Once `cancel` is set, the load stops before the next file, and a wasm call of
+/// the plugin it returns stops within about 50 ms; a module compile and a native call run to
+/// their end.
 ///
 /// # Errors
 /// A [`PluginError`] for the first check that fails, [`CANCELLED`] once `cancel` is set.
 pub fn load(
-    manifest: &PluginManifest,
-    params: serde_json::Map<String, serde_json::Value>,
+    request: LoadRequest<'_>,
     policy: &Policy,
     fetch: &mut dyn Fetch,
     cancel: &CancelToken,
 ) -> Result<PluginExtractor, PluginError> {
+    let LoadRequest {
+        manifest,
+        manifest_sha256,
+        params,
+    } = request;
     let artifact = select(manifest, policy, TARGET)?;
     let stopped = || {
         if cancel.is_cancelled() {
@@ -574,10 +590,12 @@ pub fn load(
     }
     Ok(PluginExtractor {
         descriptor: described,
-        params,
+        params: params.clone(),
         plugin: MadeByPlugin {
             version: manifest.version.clone(),
             artifact_sha256: artifact.sha256.clone(),
+            manifest_sha256: manifest_sha256.to_ascii_lowercase(),
+            supplied: Vec::new(),
         },
         transport,
         native,

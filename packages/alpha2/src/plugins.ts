@@ -65,6 +65,8 @@ export interface LoadedPlugin {
   readonly version: string;
   /** SHA-256 of the artifact that runs, as `made_by.plugin` records it. */
   readonly artifactSha256: string;
+  /** SHA-256 of the manifest's bytes in lowercase, as `made_by.plugin` records it. */
+  readonly manifestSha256: string;
   readonly descriptor: ExtractorDescriptor;
   /** An extractor that runs the module with `params`; each run instantiates it anew. */
   extractor(params?: Readonly<Record<string, unknown>>): Extractor;
@@ -696,6 +698,7 @@ export async function loadPlugin(
     id: parsed.id,
     version: parsed.version,
     artifactSha256: artifact.sha256,
+    manifestSha256: found,
     descriptor,
     extractor(params = {}) {
       let run: Run | undefined;

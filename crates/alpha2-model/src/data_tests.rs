@@ -104,7 +104,9 @@ fn every_kind_round_trips() {
             { "start": 0, "end": 0, "label": "beat" },
             { "start": 1000, "end": 9000, "score": 0.25 } ],
             "made_by": { "extractor": "com.example.vad", "version": 2, "params": { "k": 1 },
-                         "plugin": { "version": "1.0.0", "artifact_sha256": "a".repeat(64) } } }),
+                         "plugin": { "version": "1.0.0", "artifact_sha256": "a".repeat(64),
+                                     "manifest_sha256": "b".repeat(64),
+                                     "supplied": [{ "name": "model/a.onnx", "sha256": "c".repeat(64), "bytes": 3 }] } } }),
     ]);
     let loaded = load(&project).expect("valid");
     let again = load(&serde_json::to_value(&loaded).expect("serializes")).expect("valid");
@@ -367,12 +369,36 @@ fn provenance_is_well_formed() {
         data_problem(&with_data(vec![set])),
         DataProblem::InvalidMadeBy
     );
+    let hash = "a".repeat(64);
+    let file = |name: &str, sha256: &str| json!({ "name": name, "sha256": sha256, "bytes": 1 });
+    for plugin in [
+        json!({ "version": "1", "artifact_sha256": "xyz", "manifest_sha256": hash }),
+        json!({ "version": "1", "artifact_sha256": hash, "manifest_sha256": hash.to_uppercase() }),
+        json!({ "version": "1", "artifact_sha256": hash, "manifest_sha256": hash,
+                "supplied": [file("b", &hash), file("a", &hash)] }),
+        json!({ "version": "1", "artifact_sha256": hash, "manifest_sha256": hash,
+                "supplied": [file("a", &hash), file("a", &hash)] }),
+        json!({ "version": "1", "artifact_sha256": hash, "manifest_sha256": hash,
+                "supplied": [file("", &hash)] }),
+        json!({ "version": "1", "artifact_sha256": hash, "manifest_sha256": hash,
+                "supplied": [file(&"n".repeat(513), &hash)] }),
+        json!({ "version": "1", "artifact_sha256": hash, "manifest_sha256": hash,
+                "supplied": [file("a", "short")] }),
+        json!({ "version": "1", "artifact_sha256": hash, "manifest_sha256": hash,
+                "supplied": (0..1025).map(|index| file(&format!("m/{index:04}"), &hash)).collect::<Vec<_>>() }),
+    ] {
+        let mut set = points("p", &source("source-a"));
+        set["made_by"] = json!({ "extractor": "a.b", "version": 1, "plugin": plugin });
+        assert_eq!(
+            data_problem(&with_data(vec![set])),
+            DataProblem::InvalidMadeBy,
+            "{plugin}"
+        );
+    }
     let mut set = points("p", &source("source-a"));
-    set["made_by"] = json!({ "extractor": "a.b", "version": 1, "plugin": { "version": "1", "artifact_sha256": "xyz" } });
-    assert_eq!(
-        data_problem(&with_data(vec![set])),
-        DataProblem::InvalidMadeBy
-    );
+    set["made_by"] = json!({ "extractor": "a.b", "version": 1,
+                             "plugin": { "version": "1", "artifact_sha256": hash } });
+    assert!(Project::from_json(&with_data(vec![set]).to_string()).is_err());
     let mut set = points("p", &source("source-a"));
     set["made_from"] = json!({ "content_sha256": "nothex" });
     assert_eq!(

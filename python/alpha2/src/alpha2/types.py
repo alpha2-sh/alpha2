@@ -274,6 +274,12 @@ MAX_SHAPE_DEPTH = 32
 MAX_SHAPE_ITEMS = 1024
 """Mirrors `alpha2_model::MAX_SHAPE_ITEMS`."""
 
+MAX_SUPPLIED_FILES = 1024
+"""Mirrors `alpha2_model::MAX_SUPPLIED_FILES`."""
+
+MAX_SUPPLIED_NAME_BYTES = 512
+"""Mirrors `alpha2_model::MAX_SUPPLIED_NAME_BYTES`."""
+
 MAX_SVG_DOCUMENT_BYTES = 33554432
 """Mirrors `alpha2_model::MAX_SVG_DOCUMENT_BYTES`."""
 
@@ -1888,6 +1894,14 @@ class MadeByPlugin(TypedDict):
 
     artifact_sha256: str
     """SHA-256 of the artifact that ran, as 64 lowercase hexadecimal digits."""
+    manifest_sha256: str
+    """SHA-256 of the manifest's bytes, as 64 lowercase hexadecimal digits; it covers the pinned
+    resources.
+    """
+    supplied: NotRequired[list[SuppliedFile]]
+    """The files of resource slots the run read, sorted by name; at most
+    `MAX_SUPPLIED_FILES`.
+    """
     version: str
     """The package's semantic version."""
 
@@ -2888,6 +2902,19 @@ class Subpath(TypedDict):
     """
     vertices: list[PathVertex]
     """The vertices, in order."""
+
+
+class SuppliedFile(TypedDict):
+    """A file of a resource slot that a plugin run read, by name and content, never by path."""
+
+    bytes: int
+    """Its length in bytes."""
+    name: str
+    """The resource name the plugin read it by, `<slot>` or `<slot>/<relative path>`; at most
+    `MAX_SUPPLIED_NAME_BYTES` bytes.
+    """
+    sha256: str
+    """SHA-256 of its bytes, as 64 lowercase hexadecimal digits."""
 
 
 TextAlign: TypeAlias = Literal["start", "center", "end"]

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use alpha2_engine::extract::{Reference, reference};
 use alpha2_host_core::plugins::{
-    Fetch, Fetched, PluginError, Policy, codes, load, parse_manifest, sha256_hex,
+    Fetch, Fetched, LoadRequest, PluginError, Policy, codes, load, parse_manifest, sha256_hex,
 };
 
 use crate::error::Alpha2Error;
@@ -48,6 +48,7 @@ impl Fetch for Bundled {
 #[derive(uniffi::Object)]
 pub struct Plugin {
     manifest: alpha2_engine::extract::PluginManifest,
+    manifest_sha256: String,
     directory: PathBuf,
     policy: Policy,
 }
@@ -89,6 +90,7 @@ impl Plugin {
         let manifest = parse_manifest(&text).map_err(plugin_error)?;
         Ok(Arc::new(Self {
             manifest,
+            manifest_sha256: found,
             directory: path.parent().map(Path::to_path_buf).unwrap_or_default(),
             policy: Policy {
                 allow_native,
@@ -130,8 +132,11 @@ impl Alpha2 {
             Box::new(move |cancel| {
                 let mut bundled = Bundled(plugin.directory.clone());
                 let extractor = load(
-                    &plugin.manifest,
-                    run.params,
+                    LoadRequest {
+                        manifest: &plugin.manifest,
+                        manifest_sha256: &plugin.manifest_sha256,
+                        params: &run.params,
+                    },
                     &plugin.policy,
                     &mut bundled,
                     cancel,

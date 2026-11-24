@@ -4460,6 +4460,17 @@
           "description": "SHA-256 of the artifact that ran, as 64 lowercase hexadecimal digits.",
           "type": "string"
         },
+        "manifest_sha256": {
+          "description": "SHA-256 of the manifest's bytes, as 64 lowercase hexadecimal digits; it covers the pinned\nresources.",
+          "type": "string"
+        },
+        "supplied": {
+          "description": "The files of resource slots the run read, sorted by name; at most\n[`MAX_SUPPLIED_FILES`].",
+          "items": {
+            "$ref": "#/$defs/SuppliedFile"
+          },
+          "type": "array"
+        },
         "version": {
           "description": "The package's semantic version.",
           "type": "string"
@@ -4467,7 +4478,8 @@
       },
       "required": [
         "version",
-        "artifact_sha256"
+        "artifact_sha256",
+        "manifest_sha256"
       ],
       "type": "object"
     },
@@ -6563,6 +6575,32 @@
       },
       "required": [
         "vertices"
+      ],
+      "type": "object"
+    },
+    "SuppliedFile": {
+      "additionalProperties": false,
+      "description": "A file of a resource slot that a plugin run read, by name and content, never by path.",
+      "properties": {
+        "bytes": {
+          "description": "Its length in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "The resource name the plugin read it by, `<slot>` or `<slot>/<relative path>`; at most\n[`MAX_SUPPLIED_NAME_BYTES`] bytes.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 of its bytes, as 64 lowercase hexadecimal digits.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sha256",
+        "bytes"
       ],
       "type": "object"
     },

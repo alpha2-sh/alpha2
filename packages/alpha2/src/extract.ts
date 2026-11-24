@@ -123,6 +123,7 @@ export interface RunExtractorRequest {
   readonly plugin?: {
     readonly version: string;
     readonly artifactSha256: string;
+    readonly manifestSha256: string;
   };
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: ExtractProgress) => void;
@@ -524,6 +525,7 @@ export async function runExtractor(
               plugin: {
                 version: plugin.version,
                 artifact_sha256: plugin.artifactSha256,
+                manifest_sha256: plugin.manifestSha256,
               },
             },
           }));
