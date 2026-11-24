@@ -10,6 +10,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+mod descriptor_passing;
 mod lifetime;
 mod memory;
 mod os_version;
@@ -23,6 +25,8 @@ mod windows;
 #[cfg(windows)]
 use windows as platform;
 
+#[cfg(unix)]
+pub use descriptor_passing::{DescriptorReader, write_with_descriptor};
 pub use lifetime::{
     KillOnCloseJob, claim_stdout, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
 };
