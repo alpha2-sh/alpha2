@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 import { cargoTargetDirectory } from "./lib/cargo-target.mjs";
 
 const root = resolve(import.meta.dirname, "..");
-const PINNED_GRAPH_HASH = "39b4fab61033bdd0";
+const PINNED_GRAPH_HASH = "2028e62294dab6ef";
 const cargo = (args) =>
   execFileSync("cargo", args, {
     cwd: root,
