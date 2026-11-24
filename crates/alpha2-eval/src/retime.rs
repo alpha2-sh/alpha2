@@ -191,6 +191,30 @@ fn monotone_stretches(
     }))
 }
 
+pub(crate) fn picture_line_breaks(
+    timeline: TimeRange,
+    source: TimeRange,
+    time_map: TimeMap,
+    frame_rate: FrameRate,
+) -> Option<Vec<i64>> {
+    let shown = |tick: i64| {
+        picture_source_time(timeline, source, time_map, frame_rate, MediaTime(tick))
+            .map_or(i64::MIN, MediaTime::ticks)
+    };
+    let mut breaks = Vec::new();
+    for (from, to, direction) in monotone_stretches(timeline, source, time_map)? {
+        breaks.extend([from, to - 1]);
+        if let Direction::Falling = direction {
+            let (top, bottom) = (shown(from), shown(to - 1));
+            breaks.push(first_reached(from, to, |tick| shown(tick) < top) - 1);
+            breaks.push(first_reached(from, to, |tick| shown(tick) <= bottom));
+        }
+    }
+    breaks.sort_unstable();
+    breaks.dedup();
+    Some(breaks)
+}
+
 /// The first tick in `from..to` at which `reached` holds, for a `reached` that never stops
 /// holding once it does; `to` when it never holds.
 fn first_reached(from: i64, to: i64, reached: impl Fn(i64) -> bool) -> i64 {

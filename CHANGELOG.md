@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `bake` of a linear source-anchored data set read through a clip no longer stops the motion at
+  the clip's last sample: the baked keys follow the live value toward the next sample up to the
+  clip's end, at loop pass boundaries, and over the frames a reversed pass holds.
+
 ## [0.7.0] - 2026-11-24
 
 ### Changed
