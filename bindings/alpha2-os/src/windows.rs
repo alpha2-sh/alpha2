@@ -283,6 +283,51 @@ pub(crate) fn process_memory() -> ProcessMemory {
 
 unsafe extern "C" {
     fn _dup2(from: std::ffi::c_int, to: std::ffi::c_int) -> std::ffi::c_int;
+    fn _open_osfhandle(handle: isize, flags: std::ffi::c_int) -> std::ffi::c_int;
+}
+
+pub(crate) fn claim_stdin() -> io::Result<File> {
+    use std::os::windows::io::{FromRawHandle, IntoRawHandle};
+    use windows_sys::Win32::Foundation::{
+        DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE, SetStdHandle};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    // SAFETY: any standard handle id may be asked for.
+    let input = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    if input.is_null() || input == INVALID_HANDLE_VALUE {
+        return Err(io::Error::from(io::ErrorKind::NotFound));
+    }
+    let mut claimed: HANDLE = std::ptr::null_mut();
+    // SAFETY: both process handles are the current-process pseudo-handle, `input` is open, and
+    // `claimed` outlives the call; the duplicate is not inheritable.
+    let duplicated = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            input,
+            GetCurrentProcess(),
+            &raw mut claimed,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } != 0;
+    if !duplicated {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `claimed` is a new handle nothing else owns.
+    let claimed = unsafe { File::from_raw_handle(claimed.cast()) };
+    let null = std::fs::File::open("NUL")?.into_raw_handle();
+    // SAFETY: `null` is an open handle kept for the process's life.
+    unsafe { SetStdHandle(STD_INPUT_HANDLE, null.cast()) };
+    let runtime = std::fs::File::open("NUL")?.into_raw_handle();
+    // SAFETY: the C runtime takes ownership of the open handle; `_O_RDONLY` is 0.
+    let descriptor = unsafe { _open_osfhandle(runtime as isize, 0) };
+    if descriptor >= 0 {
+        // SAFETY: `_dup2` takes any descriptors and fails without effect when one is not open.
+        let _ = unsafe { _dup2(descriptor, 0) };
+    }
+    Ok(claimed)
 }
 
 pub(crate) fn claim_stdout() -> io::Result<File> {

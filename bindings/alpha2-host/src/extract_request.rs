@@ -617,6 +617,7 @@ fn load_plugin(
         memory_bytes: options.plugin_memory_bytes,
         call_deadline: options.plugin_call_deadline,
         resource_root: plugins::ResourceRoot::None,
+        isolation: plugins::Isolation::InProcess,
     };
     let mut fetcher = crate::plugin_fetch::Fetcher::new(
         base,

@@ -1,11 +1,15 @@
 //! Loads extractor plugins. The trust policy picks a manifest's artifact, which is checked against
 //! its hash and loaded as an [`Extractor`] the session drives like any other. wasm modules run in
-//! wasmtime, sandboxed, with capped memory and bounded calls. Native libraries run in the process,
-//! and only for plugins the caller allows.
+//! wasmtime, sandboxed, with capped memory and bounded calls. Native libraries run only for
+//! plugins the caller allows, in this process or in a worker process of their own
+//! ([`Isolation`]).
 //!
 //! The caller fetches: [`load`] asks a [`Fetch`] for each file by URL and hash.
 
 mod native;
+mod process;
+#[cfg(test)]
+mod process_tests;
 mod resources;
 #[cfg(test)]
 mod resources_tests;
@@ -14,6 +18,8 @@ mod silence_tests;
 #[cfg(test)]
 mod tests;
 mod wasm;
+pub mod wire;
+pub mod worker;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -193,6 +199,31 @@ pub struct Policy {
     pub call_deadline: Duration,
     /// Where files the caller supplies for resource slots may lie.
     pub resource_root: ResourceRoot,
+    /// Where a native artifact runs.
+    pub isolation: Isolation,
+}
+
+/// Where a native artifact runs; wasm modules always run in this process.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Isolation {
+    /// In this process: a crash of the plugin ends it, and a call runs to its end.
+    #[default]
+    InProcess,
+    /// In a worker process per run, started with this command: a crash or a hang fails the run,
+    /// and cancel and the call deadline kill the worker. A program that writes to a dead worker's
+    /// pipe needs `SIGPIPE` ignored, as Rust programs have it.
+    Child(WorkerCommand),
+}
+
+/// The command that runs [`worker::main`], whose standard input and output become the pipes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkerCommand {
+    /// The program, usually this one.
+    pub program: PathBuf,
+    /// Its arguments, such as the subcommand that calls [`worker::main`].
+    pub args: Vec<std::ffi::OsString>,
+    /// Variables set in its environment.
+    pub envs: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 /// Where files supplied for resource slots may lie, links resolved.
@@ -223,6 +254,7 @@ impl Default for Policy {
             memory_bytes: DEFAULT_MEMORY_BYTES,
             call_deadline: DEFAULT_CALL_DEADLINE,
             resource_root: ResourceRoot::None,
+            isolation: Isolation::InProcess,
         }
     }
 }
@@ -331,8 +363,9 @@ pub trait Fetch {
     fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError>;
 
     /// The file to load for the native artifact read from `verified`, whose checked `bytes` have
-    /// the pinned `sha256`. Called only when this process has not loaded that artifact yet; the
-    /// library then stays loaded until the process exits. A host loads its own copy of the bytes
+    /// the pinned `sha256`. In process it is called only when this process has not loaded that
+    /// artifact yet, and the library then stays loaded until the process exits; with
+    /// [`Isolation::Child`] it is called for every run. A host loads its own copy of the bytes
     /// here, so the file it checked cannot be replaced before the load.
     ///
     /// # Errors
@@ -617,6 +650,7 @@ pub struct PluginExtractor {
     plugin: MadeByPlugin,
     transport: Box<dyn Transport>,
     native: bool,
+    isolated: bool,
 }
 
 impl fmt::Debug for PluginExtractor {
@@ -690,29 +724,15 @@ pub fn load(
     let (path, bytes) = read_verified(fetch, &artifact.url, &artifact.sha256, artifact.bytes)?;
     let caps = output_caps(&manifest.descriptor);
     let native = artifact.kind == ArtifactKind::Cdylib;
-    let mut transport: Box<dyn Transport> = match artifact.kind {
-        ArtifactKind::Wasm => Box::new(wasm::WasmTransport::new(
-            &manifest.id,
-            &bytes,
-            &artifact.sha256,
-            resources::ResourceReader::new(resources, cancel.clone()),
-            caps,
-            policy,
-            cancel.clone(),
-        )?),
-        ArtifactKind::Cdylib => Box::new(native::NativeTransport::new(
-            &artifact.sha256,
-            || fetch.prepare_native(&path, &bytes, &artifact.sha256),
-            resources::ResourceReader::new(resources, cancel.clone()),
-            caps,
-        )?),
-        ArtifactKind::Staticlib => {
-            return Err(PluginError::new(
-                codes::NO_ARTIFACT,
-                "a static library is linked at build time, not loaded",
-            ));
-        }
-    };
+    let isolated = native && matches!(policy.isolation, Isolation::Child(_));
+    let mut transport = transport(
+        manifest,
+        artifact,
+        (&path, &bytes),
+        resources,
+        caps,
+        (policy, fetch, cancel),
+    )?;
     let described: Descriptor = serde_json::from_str(&transport.describe()?).map_err(|error| {
         PluginError::new(
             codes::DESCRIPTOR_MISMATCH,
@@ -740,15 +760,90 @@ pub fn load(
         },
         transport,
         native,
+        isolated,
+    })
+}
+
+/// The transport that runs `artifact`, whose checked file is `path` holding `bytes`.
+fn transport(
+    manifest: &PluginManifest,
+    artifact: &PluginArtifact,
+    (path, bytes): (&Path, &[u8]),
+    resources: resources::ResourceSet,
+    caps: Vec<OutputCap>,
+    (policy, fetch, cancel): (&Policy, &mut dyn Fetch, &CancelToken),
+) -> Result<Box<dyn Transport>, PluginError> {
+    Ok(match artifact.kind {
+        ArtifactKind::Wasm => Box::new(wasm::WasmTransport::new(
+            &manifest.id,
+            bytes,
+            &artifact.sha256,
+            resources::ResourceReader::new(resources, cancel.clone()),
+            caps,
+            policy,
+            cancel.clone(),
+        )?),
+        ArtifactKind::Cdylib => match &policy.isolation {
+            Isolation::InProcess => {
+                Box::new(native::NativeTransport::new(native::NativeInstance::new(
+                    &artifact.sha256,
+                    || fetch.prepare_native(path, bytes, &artifact.sha256),
+                    resources::ResourceReader::new(resources, cancel.clone()),
+                    caps,
+                    None,
+                )?))
+            }
+            Isolation::Child(command) => {
+                let library =
+                    std::path::absolute(fetch.prepare_native(path, bytes, &artifact.sha256)?)
+                        .map_err(|error| {
+                            PluginError::new(
+                                codes::LOAD_FAILED,
+                                format!("the library path: {error}"),
+                            )
+                        })?;
+                if cancel.is_cancelled() {
+                    return Err(PluginError::new(CANCELLED, "the plugin load was cancelled"));
+                }
+                let mut worker =
+                    process::ProcessTransport::spawn(command, cancel, policy.call_deadline)?;
+                worker.load(
+                    &wire::Load {
+                        library,
+                        sha256: artifact.sha256.clone(),
+                        check: !cfg!(target_os = "macos"),
+                        caps: caps
+                            .iter()
+                            .map(|cap| (cap.name.clone(), cap.items))
+                            .collect(),
+                        resources,
+                    },
+                    caps,
+                )?;
+                Box::new(worker)
+            }
+        },
+        ArtifactKind::Staticlib => {
+            return Err(PluginError::new(
+                codes::NO_ARTIFACT,
+                "a static library is linked at build time, not loaded",
+            ));
+        }
     })
 }
 
 impl PluginExtractor {
-    /// Whether the plugin is a native library, which runs in the process with no deadline of its
-    /// own; a wasm module's calls end at the policy's call deadline.
+    /// Whether the plugin is a native library.
     #[must_use]
     pub const fn is_native(&self) -> bool {
         self.native
+    }
+
+    /// Whether its calls end at the policy's call deadline: a wasm module's, and an isolated
+    /// native library's; a native call in this process runs to its end.
+    #[must_use]
+    pub const fn calls_are_bounded(&self) -> bool {
+        !self.native || self.isolated
     }
 
     /// What `made_by.plugin` records for data this plugin makes, with the supplied files read

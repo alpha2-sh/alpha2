@@ -72,6 +72,9 @@ cpal = { version = "0.17.3", optional = true }
 alpha2-engine = { workspace = true, features = ["extract-fixtures"] }
 alpha2-test-support.workspace = true
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.189"
+
 # The workspace's lints, with unsafe code denied rather than forbidden, because the plugin loader
 # calls into native plugins and allows it there alone.
 [lints.rust]

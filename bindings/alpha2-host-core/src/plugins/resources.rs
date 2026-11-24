@@ -369,6 +369,17 @@ impl ResourceSet {
         Ok(())
     }
 
+    /// The supplied files by name, with their enumerated lengths.
+    pub(super) fn supplied_lengths(&self) -> BTreeMap<String, u64> {
+        self.entries
+            .iter()
+            .filter_map(|(name, entry)| match entry {
+                Entry::Supplied(file) => Some((name.clone(), file.bytes)),
+                Entry::Pinned(_) => None,
+            })
+            .collect()
+    }
+
     /// The filled slots as `begin`'s context names them: shape and files with their sizes.
     #[must_use]
     pub(super) fn context(&self) -> serde_json::Value {

@@ -18,14 +18,14 @@ pub(super) const MANIFEST_SHA256: &str =
     "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
 /// The fixture plugins built for wasm32 and this target, once per test process.
-struct Built {
+pub(super) struct Built {
     /// The directory test manifests lie in; their URLs are relative to it.
-    dir: PathBuf,
-    wasm: [PathBuf; 3],
-    native: [PathBuf; 3],
+    pub(super) dir: PathBuf,
+    pub(super) wasm: [PathBuf; 3],
+    pub(super) native: [PathBuf; 3],
 }
 
-fn built() -> &'static Built {
+pub(super) fn built() -> &'static Built {
     static BUILT: OnceLock<Built> = OnceLock::new();
     BUILT.get_or_init(|| {
         let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
@@ -78,7 +78,7 @@ fn built() -> &'static Built {
 }
 
 /// Fetches files under the directory test manifests lie in.
-struct Local;
+pub(super) struct Local;
 
 impl Fetch for Local {
     fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
@@ -101,7 +101,7 @@ fn entry(path: &Path) -> Value {
 }
 
 /// A fresh directory under `built().dir` for files a test manifest names.
-fn scratch(name: &str) -> PathBuf {
+pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = built()
         .dir
         .join("tmp")
@@ -110,7 +110,7 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-fn descriptor_of(plugin: usize) -> Value {
+pub(super) fn descriptor_of(plugin: usize) -> Value {
     let file = ["digest", "scripted", "supplied"][plugin];
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../../plugins/fixtures/{file}/descriptor.json"));
@@ -119,7 +119,7 @@ fn descriptor_of(plugin: usize) -> Value {
 
 /// A manifest for fixture `plugin` (0 digest, 1 scripted, 2 supplied) offering wasm, native or
 /// both; the supplied fixture's declares its slots.
-fn manifest(plugin: usize, wasm: bool, native: bool) -> Value {
+pub(super) fn manifest(plugin: usize, wasm: bool, native: bool) -> Value {
     let built = built();
     let mut artifacts = Vec::new();
     if wasm {
@@ -146,7 +146,7 @@ fn manifest(plugin: usize, wasm: bool, native: bool) -> Value {
     manifest
 }
 
-fn loaded(
+pub(super) fn loaded(
     manifest: &Value,
     params: &Value,
     policy: &Policy,
@@ -166,7 +166,7 @@ fn loaded(
 }
 
 /// Loads `manifest` filling `supplied` under `policy`.
-fn loaded_with(
+pub(super) fn loaded_with(
     manifest: &Value,
     params: &Value,
     supplied: &BTreeMap<String, PathBuf>,
@@ -186,7 +186,7 @@ fn loaded_with(
     )
 }
 
-fn native_allowed() -> Policy {
+pub(super) fn native_allowed() -> Policy {
     Policy {
         allow_native: true,
         ..Policy::default()
@@ -255,7 +255,7 @@ impl Supplier for Frames {
     }
 }
 
-fn run(
+pub(super) fn run(
     extractor: &mut dyn Extractor,
     params: &Value,
 ) -> Result<Vec<DataSet>, alpha2_engine::extract::DriveError> {
@@ -265,7 +265,7 @@ fn run(
     drive(session, extractor, &mut Frames)
 }
 
-fn script() -> Value {
+pub(super) fn script() -> Value {
     json!({
         "per_delivery": [
             [
@@ -1256,7 +1256,7 @@ fn bounded_text_cuts_at_a_character_boundary() {
 }
 
 /// The words the supplied fixture emits for `params`, and what its data records.
-fn supplied_words(
+pub(super) fn supplied_words(
     policy: &Policy,
     supplied: &BTreeMap<String, PathBuf>,
     params: &Value,
@@ -1284,7 +1284,7 @@ fn supplied_words(
     Ok((words, plugin.made_by()))
 }
 
-fn supplied_policy(native: bool) -> Policy {
+pub(super) fn supplied_policy(native: bool) -> Policy {
     Policy {
         allow_native: native,
         resource_root: ResourceRoot::Any,

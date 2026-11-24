@@ -156,6 +156,25 @@ seed() {
           fs.writeFileSync(`${dir}/${name}`, bytes);
       ' "$dir"
       ;;
+    plugin_wire)
+      node -e '
+        const dir = process.argv[1];
+        const fs = require("fs");
+        const frame = (tag, payload) => {
+          const head = Buffer.alloc(5);
+          head.writeUInt32LE(payload.length, 0);
+          head.writeUInt8(tag, 4);
+          return Buffer.concat([head, payload]);
+        };
+        const u32 = (value) => { const b = Buffer.alloc(4); b.writeUInt32LE(value); return b; };
+        const hello = frame(0x40, Buffer.from(JSON.stringify({ wire: 1, host_core: "0.7.0" })));
+        const log = frame(0x41, Buffer.concat([u32(1), Buffer.from("loading")]));
+        const returned = frame(0x49, Buffer.concat([u32(1), u32(0)]));
+        const start = Buffer.concat([Buffer.from("running 1 test\n"), Buffer.from("A2PLUGW\n"), hello]);
+        fs.writeFileSync(`${dir}/start`, start);
+        fs.writeFileSync(`${dir}/call`, Buffer.concat([start, log, returned]));
+      ' "$dir"
+      ;;
     extract_emits)
       node -e '
         const dir = process.argv[1];
