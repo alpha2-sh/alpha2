@@ -5,7 +5,7 @@
     "media": "video",
     "from": ["source", "timeline"],
     "format": "luma8",
-    "max_size": 64
+    "max_size": 960
   },
   "params_schema": {
     "type": "object",

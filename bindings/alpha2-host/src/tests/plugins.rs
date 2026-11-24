@@ -25,6 +25,8 @@ fn built() -> &'static Path {
                     "alpha2-plugin-fixture-digest",
                     "-p",
                     "alpha2-plugin-fixture-scripted",
+                    "-p",
+                    "alpha2-plugin-fixture-supplied",
                 ])
                 .env_remove("CARGO_TARGET_DIR")
                 .env(
@@ -39,6 +41,14 @@ fn built() -> &'static Path {
     })
 }
 
+#[test]
+#[ignore = "the plugin worker a test host starts for a native plugin"]
+fn plugin_worker_child() {
+    if std::env::var_os(crate::plugin_policy::TEST_WORKER_ENV).is_some() {
+        alpha2_host_core::plugins::worker::main();
+    }
+}
+
 fn native_file(name: &str) -> String {
     if TARGET.contains("windows") {
         format!("{name}.dll")
@@ -49,8 +59,8 @@ fn native_file(name: &str) -> String {
     }
 }
 
-/// Writes fixture `name` (`digest` or `scripted`) into `dir` as a plugin directory with relative
-/// URLs, offering wasm, native or both, and returns the manifest's path and SHA-256.
+/// Writes fixture `name` (`digest`, `scripted` or `supplied`) into `dir` as a plugin directory with
+/// relative URLs, offering wasm, native or both, and returns the manifest's path and SHA-256.
 fn plugin_dir(dir: &Path, name: &str, wasm: bool, native: bool) -> (PathBuf, String) {
     let target_dir = built();
     let library = format!("alpha2_plugin_fixture_{name}");
@@ -88,8 +98,13 @@ fn plugin_dir(dir: &Path, name: &str, wasm: bool, native: bool) -> (PathBuf, Str
         .expect("descriptor"),
     )
     .expect("json");
-    let manifest = json!({ "id": descriptor["id"], "version": "0.1.0", "abi": "alpha2-plugin/1", "kind": "extractor",
-                           "artifacts": artifacts, "descriptor": descriptor });
+    let mut manifest = json!({ "id": descriptor["id"], "version": "0.1.0", "abi": "alpha2-plugin/1",
+                               "kind": "extractor", "artifacts": artifacts, "descriptor": descriptor });
+    let slots = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../plugins/fixtures/{name}/resources.json"));
+    if let Ok(slots) = std::fs::read(slots) {
+        manifest["resources"] = serde_json::from_slice(&slots).expect("resources");
+    }
     let text = serde_json::to_string_pretty(&manifest).expect("json");
     let path = dir.join("manifest.json");
     std::fs::write(&path, &text).expect("manifest");
@@ -115,6 +130,8 @@ fn extract(
 ) -> String {
     let outputs = if extractor == "alpha2.test.digest" {
         json!({ "digest": "digest" })
+    } else if extractor == "alpha2.test.supplied" {
+        json!({ "files": "files" })
     } else {
         json!({ "track": "track", "levels": "levels", "correction": "correction", "words": "words", "quiet": "quiet" })
     };
@@ -595,4 +612,256 @@ fn a_manifest_naming_a_local_file_outside_its_directory_is_refused_unread() {
         "{response}"
     );
     assert_eq!(serving.finish(), Some(0));
+}
+
+fn scripted_native(id: &str, manifest: &Path, sha256: &str, params: &Value) -> String {
+    extract(
+        id,
+        "alpha2.test.scripted",
+        manifest,
+        sha256,
+        &json!({ "allow_native": true }),
+        params,
+    )
+}
+
+#[test]
+fn a_native_plugin_that_crashes_or_hangs_fails_its_request_and_the_host_serves_on() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-isolated-faults");
+    let (manifest, sha256) = plugin_dir(&dir, "scripted", false, true);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[(
+            "ALPHA2_TEST_SERVE_ARGS",
+            "--plugins native --plugin-call-timeout 3000",
+        )],
+    );
+    for (id, params, code, detail) in [
+        ("segv", json!({ "segv_at": 1 }), "PLUGIN_TRAPPED", None),
+        ("abort", json!({ "abort_at": 1 }), "PLUGIN_TRAPPED", None),
+        ("hang", json!({ "sleep_at": 1 }), "PLUGIN_LIMIT", None),
+        ("panic", json!({ "panic_at": 1 }), "PLUGIN_TRAPPED", None),
+        (
+            "print",
+            json!({ "print_at": 0, "fail_at": 1 }),
+            "EXTRACTOR_FAILED",
+            None,
+        ),
+        (
+            "exit",
+            json!({ "segv_at": 0 }),
+            "PLUGIN_TRAPPED",
+            Some(cfg!(unix)),
+        ),
+    ] {
+        serving.write(&scripted_native(id, &manifest, &sha256, &params));
+        let response = answer(&serving, id);
+        assert_eq!(response["error"]["code"], code, "{id}: {response}");
+        assert_eq!(response["hostState"], "ready", "{id}: {response}");
+        if detail == Some(true) {
+            assert_eq!(response["error"]["details"]["signal"], 11, "{response}");
+        }
+    }
+    serving.write(&scripted_native(
+        "ok",
+        &manifest,
+        &sha256,
+        &json!({ "per_delivery": [[{ "output": "levels", "time": 0, "values": [1, 2] }]] }),
+    ));
+    let ok = answer(&serving, "ok");
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn a_cancel_stops_a_hung_native_call_in_its_worker() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-isolated-cancel");
+    let (manifest, sha256) = plugin_dir(&dir, "scripted", false, true);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[("ALPHA2_TEST_SERVE_ARGS", "--plugins native")],
+    );
+    serving.write(&scripted_native(
+        "hang",
+        &manifest,
+        &sha256,
+        &json!({ "sleep_at": 1 }),
+    ));
+    loop {
+        let message = serving.message(Duration::from_secs(120));
+        if message["requestId"] == "hang" && message["type"] == "progress" {
+            break;
+        }
+        assert!(message.get("ok").is_none(), "{message}");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let cancelled = Instant::now();
+    serving.write(
+        &json!({ "protocolVersion": 2, "requestId": "c", "operation": "cancel", "target": "hang" })
+            .to_string(),
+    );
+    let response = answer(&serving, "hang");
+    assert_eq!(response["error"]["code"], "CANCELLED", "{response}");
+    assert!(
+        cancelled.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        cancelled.elapsed()
+    );
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn a_native_plugin_in_process_still_runs_when_the_operator_asks() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-in-process");
+    let (manifest, sha256) = plugin_dir(&dir, "scripted", false, true);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[(
+            "ALPHA2_TEST_SERVE_ARGS",
+            "--plugins native --plugin-isolation in-process",
+        )],
+    );
+    for (id, params, code) in [
+        ("panic", json!({ "panic_at": 1 }), Some("PLUGIN_TRAPPED")),
+        ("fail", json!({ "fail_at": 1 }), Some("EXTRACTOR_FAILED")),
+        (
+            "ok",
+            json!({ "per_delivery": [[{ "output": "levels", "time": 0, "values": [1, 2] }]] }),
+            None,
+        ),
+    ] {
+        serving.write(&scripted_native(id, &manifest, &sha256, &params));
+        let response = answer(&serving, id);
+        match code {
+            Some(code) => assert_eq!(response["error"]["code"], code, "{id}: {response}"),
+            None => assert_eq!(response["ok"], true, "{id}: {response}"),
+        }
+    }
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn a_request_fills_resource_slots_only_where_the_operator_allows() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-supplied");
+    let (manifest, sha256) = plugin_dir(&dir, "supplied", true, true);
+    let models = dir.join("models");
+    std::fs::create_dir_all(models.join("extra")).expect("dir");
+    std::fs::write(models.join("model.bin"), b"\x01\x02w").expect("model");
+    std::fs::write(models.join("extra/a.txt"), b"alpha").expect("file");
+    let models = std::fs::canonicalize(&models).expect("canonical");
+    let request = |id: &str, plugin: Value, read: &[&str]| {
+        extract(
+            id,
+            "alpha2.test.supplied",
+            &manifest,
+            &sha256,
+            &plugin,
+            &json!({ "read": read }),
+        )
+    };
+    let filled = json!({ "model": models.join("model.bin"), "extra": models.join("extra") });
+    let answers = run_with_flags(
+        "",
+        &[(
+            "default",
+            request("default", json!({ "supplied": filled }), &["model"]),
+        )],
+    );
+    assert_eq!(
+        answers[0]["error"]["code"], "PLUGIN_REFUSED",
+        "{}",
+        answers[0]
+    );
+    assert!(
+        answers[0]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("--plugin-resource-root")),
+        "{}",
+        answers[0]
+    );
+    let flags = format!(
+        "--plugins native --plugin-resource-root {}",
+        models.display()
+    );
+    let answers = run_with_flags(
+        &flags,
+        &[
+            (
+                "wasm",
+                request(
+                    "wasm",
+                    json!({ "supplied": filled }),
+                    &["model", "extra/a.txt"],
+                ),
+            ),
+            (
+                "native",
+                request(
+                    "native",
+                    json!({ "supplied": filled, "allow_native": true }),
+                    &["model", "extra/a.txt"],
+                ),
+            ),
+            ("missing", request("missing", json!({}), &[])),
+            (
+                "relative",
+                request(
+                    "relative",
+                    json!({ "supplied": { "model": "model.bin" } }),
+                    &[],
+                ),
+            ),
+            (
+                "outside",
+                request("outside", json!({ "supplied": { "model": manifest } }), &[]),
+            ),
+        ],
+    );
+    for answer in &answers[..2] {
+        assert_eq!(answer["ok"], true, "{answer}");
+        let set = &answer["result"]["dataSets"][0];
+        assert_eq!(
+            set["words"]
+                .as_array()
+                .expect("words")
+                .iter()
+                .map(|word| word["text"].as_str().expect("text"))
+                .collect::<Vec<_>>(),
+            ["model 3 010277", "extra/a.txt 5 616c706861"],
+            "{answer}"
+        );
+        assert_eq!(
+            set["made_by"]["plugin"]["supplied"],
+            json!([
+                { "name": "extra/a.txt", "sha256": sha256_hex(b"alpha"), "bytes": 5 },
+                { "name": "model", "sha256": sha256_hex(b"\x01\x02w"), "bytes": 3 }
+            ]),
+            "{answer}"
+        );
+    }
+    assert_eq!(
+        answers[2]["error"]["code"], "PLUGIN_RESOURCE_INVALID",
+        "{}",
+        answers[2]
+    );
+    assert_eq!(
+        answers[2]["error"]["details"],
+        json!({ "slot": "model", "reason": "missing" }),
+        "{}",
+        answers[2]
+    );
+    assert_eq!(
+        answers[3]["error"]["code"], "INVALID_REQUEST",
+        "{}",
+        answers[3]
+    );
+    assert_eq!(
+        answers[4]["error"]["code"], "PLUGIN_REFUSED",
+        "{}",
+        answers[4]
+    );
 }

@@ -107,14 +107,18 @@ fn allowed(root: &ResourceRoot, path: &Path) -> bool {
     }
 }
 
+/// A refusal by the caller's [`ResourceRoot`], with `details.policy` `resource_root`.
+fn root_refusal(message: String) -> PluginError {
+    let mut details = serde_json::Map::new();
+    details.insert("policy".to_owned(), "resource_root".into());
+    PluginError::new(codes::REFUSED, message).with_details(details)
+}
+
 fn outside_root(path: &Path) -> PluginError {
-    PluginError::new(
-        codes::REFUSED,
-        format!(
-            "{} lies outside the directory the caller allows supplied files in",
-            path.display()
-        ),
-    )
+    root_refusal(format!(
+        "{} lies outside the directory the caller allows supplied files in",
+        path.display()
+    ))
 }
 
 /// Walks a directory slot.
@@ -251,9 +255,9 @@ impl ResourceSet {
             ));
         }
         if !supplied.is_empty() && matches!(root, ResourceRoot::None) {
-            return Err(PluginError::new(
-                codes::REFUSED,
-                "the caller allows no supplied files; a request may not fill a resource slot",
+            return Err(root_refusal(
+                "the caller allows no supplied files; a request may not fill a resource slot"
+                    .to_owned(),
             ));
         }
         let root = match root {

@@ -293,6 +293,7 @@ fn run(host: &mut Option<Host>) -> Result<(), HostError> {
         }
         Some("export") => export_cli(args.collect(), host),
         Some("conform") => conform_cli(args.collect()),
+        Some(crate::plugin_policy::PLUGIN_WORKER) => alpha2_host_core::plugins::worker::main(),
         #[cfg(all(target_os = "linux", feature = "hwencode"))]
         Some("probe-gpu-encode") => probe_gpu_encode(args.collect()),
         #[cfg(all(target_os = "macos", feature = "hwencode"))]
