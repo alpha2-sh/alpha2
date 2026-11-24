@@ -1119,17 +1119,9 @@ fn a_submission_predicted_over_the_budget_is_counted() {
 }
 
 #[test]
-fn a_wait_on_a_split_frame_sees_its_submissions_complete_one_by_one() {
+fn a_wait_on_a_split_frame_finds_its_completions_late_only_before_the_ones_it_saw() {
     let _lock = gpu_test_lock();
-    let gpu = own_device();
-    if gpu.capabilities().backend == "Gl" || gpu.capabilities().software_rasterizer {
-        alpha2_test_support::skip!(
-            alpha2_test_support::Capability::ExactGpuCompletion,
-            "the device completes submissions before a wait on them blocks"
-        );
-        return;
-    }
-    let renderer = Renderer::new(gpu);
+    let renderer = Renderer::new(own_device());
     let (effect, _) = registered(&renderer, heavy_effect());
     let (size, view, frame_ms) =
         with_watchdog(UNSPLIT_WATCHDOG_MS, || busy_size(&renderer, &effect));
@@ -1137,12 +1129,14 @@ fn a_wait_on_a_split_frame_sees_its_submissions_complete_one_by_one() {
     let submissions = usize::try_from(frame.submissions).expect("fits");
     assert!(submissions >= 4, "{frame:?}");
     let kept = renderer.submission_clock.kept_seen_as_they_happened();
-    let seen = kept[kept.len() - submissions..]
+    let stamps = &kept[kept.len() - submissions..];
+    assert!(stamps.iter().all(Option::is_some), "{stamps:?}");
+    let first_seen = stamps
         .iter()
-        .filter(|seen| **seen == Some(true))
-        .count();
+        .position(|seen| *seen == Some(true))
+        .unwrap_or(submissions);
     assert!(
-        seen * 2 > submissions,
-        "{seen} of the frame's {submissions} completions were seen as they happened"
+        stamps[first_seen..].iter().all(|seen| *seen == Some(true)),
+        "a completion delivered after one the wait saw was late: {stamps:?}"
     );
 }

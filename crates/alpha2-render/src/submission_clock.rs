@@ -512,21 +512,39 @@ impl ClockedSubmission {
         gpu.device()
             .poll(wgpu::PollType::Poll)
             .map_err(crate::error::poll_error)?;
-        for (index, sequence) in self
-            .earlier
-            .iter()
-            .chain(std::iter::once(&(self.index.clone(), self.sequence)))
-        {
-            let _waiting = Waiting::on(self.clock.address(), *sequence);
-            gpu.device()
-                .poll(wgpu::PollType::Wait {
-                    submission_index: Some(index.clone()),
-                    timeout: Some(deadline.saturating_duration_since(Instant::now())),
-                })
-                .map_err(crate::error::poll_error)?;
-        }
-        Ok(())
+        let last = (self.index.clone(), self.sequence);
+        wait_in_order(
+            &self.clock,
+            self.earlier.iter().chain(std::iter::once(&last)),
+            deadline,
+            |index, remaining| {
+                gpu.device()
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: Some(index.clone()),
+                        timeout: Some(remaining),
+                    })
+                    .map(drop)
+                    .map_err(crate::error::poll_error)
+            },
+        )
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn wait_in_order<'a, T: 'a>(
+    clock: &Arc<SubmissionClock>,
+    waited: impl Iterator<Item = &'a (T, u64)>,
+    deadline: Instant,
+    mut block: impl FnMut(&T, std::time::Duration) -> Result<(), crate::RenderError>,
+) -> Result<(), crate::RenderError> {
+    for (submission, sequence) in waited {
+        let _waiting = Waiting::on(clock.address(), *sequence);
+        block(
+            submission,
+            deadline.saturating_duration_since(Instant::now()),
+        )?;
+    }
+    Ok(())
 }
 
 fn milliseconds(duration: std::time::Duration) -> f64 {
@@ -538,6 +556,50 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn a_wait_in_order_stamps_completions_delivered_while_it_blocks_however_they_are_batched() {
+        let clock = Arc::new(SubmissionClock::default());
+        let start = Instant::now();
+        let sequences = (0..7)
+            .map(|_| clock.record(start, Some(1.0), Vec::new(), false).sequence)
+            .collect::<Vec<_>>();
+        let deliver = |sequence: u64| {
+            clock.complete(sequence, Instant::now(), clock.sees_as_it_happens(sequence));
+        };
+        deliver(sequences[0]);
+        let batches = [&sequences[1..2], &sequences[2..5], &sequences[5..7]];
+        let mut delivered = batches.iter();
+        let mut remaining = Vec::new();
+        let waited = sequences[1..]
+            .iter()
+            .map(|sequence| ((), *sequence))
+            .collect::<Vec<_>>();
+        let timeout = Duration::from_secs(5);
+        wait_in_order(&clock, waited.iter(), start + timeout, |(), left| {
+            remaining.push(left);
+            if let Some(batch) = delivered.next() {
+                batch.iter().copied().for_each(deliver);
+            }
+            Ok(())
+        })
+        .expect("waits");
+        assert!(remaining.windows(2).all(|pair| pair[1] <= pair[0]) && remaining[0] <= timeout);
+        let seen = clock
+            .state()
+            .entries
+            .iter()
+            .map(|entry| entry.done.map(|stamp| stamp.seen_as_it_happened))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            seen,
+            [Some(false)]
+                .into_iter()
+                .chain(std::iter::repeat_n(Some(true), 6))
+                .collect::<Vec<_>>(),
+            "only the completion delivered before the wait is late"
+        );
+    }
 
     /// Submissions made at once run back to back; each starts where the previous ended.
     #[test]
