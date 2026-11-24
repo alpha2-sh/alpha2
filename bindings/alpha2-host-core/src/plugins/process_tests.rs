@@ -614,3 +614,67 @@ fn record_runs_cut_a_batch_at_record_boundaries_within_a_frame() {
     let records = |bytes: &[u8]| alpha2_plugin_abi::records::decode(bytes).expect("whole records");
     assert_eq!(runs.iter().map(|run| records(run).len()).sum::<usize>(), 9);
 }
+
+const TIMED_FRAMES: u32 = 100;
+
+fn ms_per_frame(plugin: usize, policy: &Policy, size: (u32, u32), format: VideoFormat) -> f64 {
+    let mut plugin = loaded(&manifest(plugin, false, true), &json!({}), policy).expect("loads");
+    let (width, height) = size;
+    let name = match format {
+        VideoFormat::Rgba8 => "rgba8",
+        VideoFormat::Luma8 => "luma8",
+    };
+    let context = json!({
+        "range": { "start": 0, "end": i64::from(TIMED_FRAMES + 1) * 4000 },
+        "passes": [{ "start": 0, "direction": "forward" }], "from": "source",
+        "video": { "size": width.max(height), "format": name }, "audio": null,
+        "frame_rate": null, "params": {}, "supplied": plugin.slots_context.clone()
+    });
+    plugin
+        .transport
+        .begin(context.to_string().as_bytes())
+        .expect("begin");
+    plugin.transport.pass(0, direction::FORWARD).expect("pass");
+    let bytes_per_pixel = match format {
+        VideoFormat::Rgba8 => 4,
+        VideoFormat::Luma8 => 1,
+    };
+    let length = usize::try_from(width * height * bytes_per_pixel).expect("length");
+    let mut frame = VideoInput {
+        time: MediaTime(0),
+        width,
+        height,
+        format,
+        bytes: (0..length)
+            .map(|at| u8::try_from(at % 251).unwrap_or(0))
+            .collect(),
+    };
+    let mut out = Emitter::default();
+    plugin.video(&frame, &mut out).expect("first frame");
+    let started = Instant::now();
+    for index in 1..=TIMED_FRAMES {
+        frame.time = MediaTime(i64::from(index) * 4000);
+        plugin.video(&frame, &mut out).expect("frame");
+    }
+    started.elapsed().as_secs_f64() * 1000.0 / f64::from(TIMED_FRAMES)
+}
+
+#[test]
+#[ignore = "a measurement, run in release with --nocapture"]
+fn time_video_frames_in_process_and_through_a_worker() {
+    for (size, format) in [
+        ((1920, 1080), VideoFormat::Rgba8),
+        ((960, 540), VideoFormat::Luma8),
+    ] {
+        let here = ms_per_frame(0, &native_allowed(), size, format);
+        let there = ms_per_frame(0, &isolated(), size, format);
+        let idle = ms_per_frame(1, &isolated(), size, format);
+        println!(
+            "{}x{} {format:?}: digest in process {here:.3} ms/frame, digest in a worker \
+             {there:.3}, scripted in a worker {idle:.3}; worker cost {:.1} % of in process",
+            size.0,
+            size.1,
+            (there - here) / here * 100.0
+        );
+    }
+}
