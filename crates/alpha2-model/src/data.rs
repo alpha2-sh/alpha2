@@ -279,7 +279,7 @@ pub struct MadeBy {
 }
 
 /// The plugin build that made a data set.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct MadeByPlugin {
@@ -287,6 +287,48 @@ pub struct MadeByPlugin {
     pub version: String,
     /// SHA-256 of the artifact that ran, as 64 lowercase hexadecimal digits.
     pub artifact_sha256: String,
+    /// SHA-256 of the manifest's bytes, 64 lowercase hex digits; it covers the pinned resources.
+    pub manifest_sha256: String,
+    /// The slot files the run read, sorted by name; at most [`MAX_SUPPLIED_FILES`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supplied: Vec<SuppliedFile>,
+}
+
+/// The most supplied files one plugin run reads, and one directory slot holds.
+pub const MAX_SUPPLIED_FILES: usize = 1024;
+/// The longest resource name of a supplied file, in bytes.
+pub const MAX_SUPPLIED_NAME_BYTES: usize = 512;
+
+/// A file of a resource slot that a plugin run read, by name and content, never by path.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SuppliedFile {
+    /// The resource name the plugin read it by, `<slot>` or `<slot>/<relative path>`; at most
+    /// [`MAX_SUPPLIED_NAME_BYTES`] bytes.
+    pub name: String,
+    /// SHA-256 of its bytes, as 64 lowercase hexadecimal digits.
+    pub sha256: String,
+    /// Its length in bytes.
+    pub bytes: u64,
+}
+
+impl MadeByPlugin {
+    fn is_valid(&self) -> bool {
+        !self.version.is_empty()
+            && valid_sha256(&self.artifact_sha256)
+            && valid_sha256(&self.manifest_sha256)
+            && self.supplied.len() <= MAX_SUPPLIED_FILES
+            && self.supplied.iter().all(|file| {
+                !file.name.is_empty()
+                    && file.name.len() <= MAX_SUPPLIED_NAME_BYTES
+                    && valid_sha256(&file.sha256)
+            })
+            && self
+                .supplied
+                .windows(2)
+                .all(|pair| pair[0].name < pair[1].name)
+    }
 }
 
 /// Values derived from media, anchored to a source or to the timeline.
@@ -961,9 +1003,7 @@ impl DataSet {
             return Err(DataProblem::IdTooLong);
         }
         if let Some(made_by) = &self.made_by {
-            let plugin_ok = made_by.plugin.as_ref().is_none_or(|plugin| {
-                !plugin.version.is_empty() && valid_sha256(&plugin.artifact_sha256)
-            });
+            let plugin_ok = made_by.plugin.as_ref().is_none_or(MadeByPlugin::is_valid);
             if made_by.extractor.is_empty() || !plugin_ok {
                 return Err(DataProblem::InvalidMadeBy);
             }

@@ -214,7 +214,8 @@ const found = set.times.map((time, index) => [
 ]);
 report({
   ok: refused === "PLUGIN_HASH_MISMATCH" && JSON.stringify(found) === JSON.stringify(pinned[name])
-    && set.made_by.plugin?.artifact_sha256 === plugin.artifactSha256,
+    && set.made_by.plugin?.artifact_sha256 === plugin.artifactSha256
+    && set.made_by.plugin?.manifest_sha256 === plugin.manifestSha256,
   refused, found, madeBy: set.made_by,
 });
 `;

@@ -3,7 +3,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::records::{Limits, Record, RecordError, decode, encode, records};
-use crate::{HostV1, PluginV1};
+use crate::{HOST_V1_BASE_BYTES, HostV1, PluginV1};
 
 fn batch(records: &[Record]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -231,7 +231,9 @@ fn the_native_tables_carry_their_size_after_the_abi() {
     {
         assert_eq!(offset_of!(HostV1, context), 8);
         assert_eq!(offset_of!(PluginV1, describe), 8);
-        assert_eq!(size_of::<HostV1>(), 48);
+        assert_eq!(HOST_V1_BASE_BYTES, 48);
+        assert_eq!(offset_of!(HostV1, resource_path), 48);
+        assert_eq!(size_of::<HostV1>(), 56);
         assert_eq!(size_of::<PluginV1>(), 72);
     }
 }

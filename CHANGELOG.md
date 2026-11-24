@@ -6,6 +6,29 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Breaking:** `alpha2-host` runs a native plugin in a worker process of its own,
+  `alpha2-host plugin-worker`, one per run, by default (`--plugin-isolation process`): a crash, an
+  abort or a hang of the plugin fails its request with `PLUGIN_TRAPPED` (`details.exit` or
+  `details.signal`) or `PLUGIN_LIMIT` and the host serves on, instead of ending the host. A native
+  call now ends at `--plugin-call-timeout` (300 s by default) instead of retiring the host after
+  three stall limits, and a cancel kills the worker at once. `--plugin-isolation in-process` keeps
+  the old behavior, for debugging a plugin under a debugger.
+- **Breaking:** a plugin manifest's resource is either pinned (`url`, `sha256`, `bytes`) or a slot
+  the caller fills (`supplied`, with `shape` `file` or `directory`, `required`, `max_bytes`,
+  `accept`). In Rust, `PluginResource` is `{ name, source }` with `ResourceSource::Pinned` or
+  `ResourceSource::Supplied`. The 4 GiB total counts pinned resources only.
+- **Breaking:** `made_by.plugin` gains `manifest_sha256` (required: data a plugin made before this
+  release is refused and extracted again) and `supplied`, the slot files the run read by name,
+  SHA-256 and length, never by path.
+- **Breaking:** `alpha2_host_core::plugins::load` takes a `LoadRequest` (manifest, its SHA-256,
+  params and the supplied slot paths); `Policy` gains `resource_root` (default `None`: no slot may
+  be filled) and `isolation` (default `InProcess`); `PluginExtractor::made_by` returns the
+  provenance with the files read, complete once the run has ended; `PluginError` and
+  `ExtractorError` gain `details`. A native artifact's `Fetch::prepare_native` is called for every
+  isolated run.
+- **Breaking:** `HostV1` gains `resource_path`, appended under the growth rule; the SDK takes a host
+  table down to `HOST_V1_BASE_BYTES` and its `Context` gains `supplied`. The mobile
+  `Plugin.load` takes `supplied`, and `Alpha2Error::Failed` gains `details`.
 - **Breaking:** `GpuSubmissionStats` gains `over_budget` (submissions still predicted over the
   submission budget, which the planner cuts passes to avoid) and `budget_ms`; the host's and the
   browser's `gpuSubmissions` add `overBudget`, and the host prints a warning when it is nonzero.
@@ -83,6 +106,21 @@ All notable changes to this project are documented in this file.
   The WGSL the runtime effect wrapper generates declares `source_sampler` there and renumbers group
   0: parameters at 2, the runtime block at 3, resources from 4, named inputs from 20. Effect bodies
   name these, not numbers, and are unaffected.
+
+### Added
+
+- Resource slots: a plugin can load a model the user already has on disk. A request fills a slot
+  with `plugin.supplied` (host protocol; `supplied` in the Node and Python plugin specs and in the
+  mobile `Plugin.load`); `alpha2-host` takes such files only within `--plugin-resource-root`
+  (`none` by default, `any` or a directory). A directory slot offers its files by relative name,
+  through links, so a Hugging Face snapshot works as it is. Files are read and hashed only when
+  the plugin asks for them, and a native plugin can ask for a path (`resource_path`) for runtimes
+  that open or map a model themselves. The new code `PLUGIN_RESOURCE_INVALID` names the slot and
+  the reason; the browser refuses a required slot with it.
+- `alpha2_host_core::plugins::Isolation::Child` and `plugins::worker::main` let another Rust
+  program run native plugins in a worker process of its own.
+- The Node and Python clients' `plugins` option gains `isolation` and `resourceRoot`
+  (`resource_root`), and their errors gain `details`.
 
 ### Removed
 

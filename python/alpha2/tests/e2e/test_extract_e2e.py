@@ -352,10 +352,15 @@ def plugin_dir(tmp: Path, name: str, *, wasm: bool = True, native: bool = False)
             file = f"lib{library}.so"
         place(release / triple / "release" / file, f"{triple}/{file}", triple, "cdylib")
     descriptor = json.loads((plugins / "fixtures" / name / "descriptor.json").read_text())
-    text = json.dumps(
-        {"id": descriptor["id"], "version": "0.1.0", "abi": "alpha2-plugin/1", "kind": "extractor",
-         "artifacts": artifacts, "descriptor": descriptor}
-    )  # fmt: skip
+    manifest: dict[str, Any] = {
+        "id": descriptor["id"], "version": "0.1.0", "abi": "alpha2-plugin/1", "kind": "extractor",
+        "artifacts": artifacts,
+    }  # fmt: skip
+    slots = plugins / "fixtures" / name / "resources.json"
+    if slots.is_file():
+        manifest["resources"] = json.loads(slots.read_text())
+    manifest["descriptor"] = descriptor
+    text = json.dumps(manifest)
     (tmp / "manifest.json").write_text(text)
     return str(tmp / "manifest.json"), hashlib.sha256(text.encode()).hexdigest()
 
@@ -406,10 +411,85 @@ def test_a_plugin_the_host_runs_records_the_bytes_the_rust_reader_pins(
     assert raised.value.code == "PLUGIN_HASH_MISMATCH"
 
 
+def test_a_native_plugin_that_crashes_in_its_worker_fails_its_request_alone(
+    tmp_path: Path,
+) -> None:
+    manifest, sha256 = plugin_dir(tmp_path, "scripted", wasm=False, native=True)
+    outputs = {"track": "t", "levels": "l", "correction": "c", "words": "w", "quiet": "q"}
+    allowed: ExtractPlugin = {"manifest": manifest, "sha256": sha256, "allow_native": True}
+    with HostClient(host_path=HOST, plugins={"mode": "native"}) as native:
+        with pytest.raises(Alpha2HostError) as crashed:
+            native.extract(
+                PROJECT,
+                plugin_request("alpha2.test.scripted", outputs, {"abort_at": 1}),
+                plugin=allowed,
+                assets=video(),
+            )
+        assert crashed.value.code == "PLUGIN_TRAPPED"
+        assert crashed.value.details is not None
+        if sys.platform != "win32":
+            assert crashed.value.details == {"signal": 6}
+        after = native.extract(
+            PROJECT,
+            plugin_request("alpha2.test.scripted", outputs, {}),
+            plugin=allowed,
+            assets=video(),
+        )
+    assert len(after["dataSets"]) == 5
+
+
+def test_a_plugin_reads_the_files_a_request_supplies_within_the_resource_root(
+    tmp_path: Path,
+) -> None:
+    manifest, sha256 = plugin_dir(tmp_path, "supplied", native=True)
+    models = tmp_path / "models"
+    (models / "extra").mkdir(parents=True)
+    (models / "model.bin").write_bytes(bytes([1, 2, 119]))
+    (models / "extra" / "a.txt").write_text("alpha")
+    supplied = {"model": models / "model.bin", "extra": models / "extra"}
+    request = plugin_request(
+        "alpha2.test.supplied", {"files": "files"}, {"read": ["model", "extra/a.txt"]}
+    )
+    with HostClient(host_path=HOST, plugins={"mode": "native", "resource_root": models}) as allowed:
+        for allow_native in (False, True):
+            plugin: ExtractPlugin = {
+                "manifest": manifest,
+                "sha256": sha256,
+                "supplied": supplied,
+                "allow_native": allow_native,
+            }
+            (found,) = allowed.extract(PROJECT, request, plugin=plugin, assets=video())["dataSets"]
+            assert [word["text"] for word in found["words"]] == [
+                "model 3 010277",
+                "extra/a.txt 5 616c706861",
+            ]
+            assert found["made_by"]["plugin"]["manifest_sha256"] == sha256
+            assert [file["name"] for file in found["made_by"]["plugin"]["supplied"]] == [
+                "extra/a.txt",
+                "model",
+            ]
+        with pytest.raises(Alpha2HostError) as missing:
+            allowed.extract(
+                PROJECT, request, plugin={"manifest": manifest, "sha256": sha256}, assets=video()
+            )
+        assert missing.value.code == "PLUGIN_RESOURCE_INVALID"
+        assert missing.value.details == {"slot": "model", "reason": "missing"}
+    with HostClient(host_path=HOST) as refusing:
+        with pytest.raises(Alpha2HostError) as refused:
+            refusing.extract(
+                PROJECT,
+                request,
+                plugin={"manifest": manifest, "sha256": sha256, "supplied": supplied},
+                assets=video(),
+            )
+    assert refused.value.code == "PLUGIN_REFUSED"
+    assert "--plugin-resource-root" in refused.value.message
+
+
 @pytest.mark.skipif(
     sys.platform == "win32", reason="the crash is an abort, which Windows reports by dialog"
 )
-def test_a_native_plugin_that_ends_the_host_fails_and_the_pool_starts_another(
+def test_a_native_plugin_in_the_host_process_that_ends_it_fails_and_the_pool_starts_another(
     client: HostClient, tmp_path: Path
 ) -> None:
     manifest, sha256 = plugin_dir(tmp_path, "scripted", wasm=False, native=True)
@@ -432,7 +512,9 @@ def test_a_native_plugin_that_ends_the_host_fails_and_the_pool_starts_another(
             assets=video(),
         )
     assert ignored.value.code == "PLUGIN_NATIVE_REFUSED"
-    with HostClient(host_path=HOST, plugins={"mode": "native"}) as native:
+    with HostClient(
+        host_path=HOST, plugins={"mode": "native", "isolation": "in-process"}
+    ) as native:
         with pytest.raises(Alpha2HostError) as ended:
             native.extract(
                 PROJECT,

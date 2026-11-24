@@ -22,7 +22,7 @@ dependencies {
 - The AAR carries R8 rules that keep what JNA and the bindings reach by name (`com.sun.jna`, the classes that implement or extend JNA types, and `sh.alpha2`), so a minified release build works without rules of its own.
 - The native libraries are linked for 16 KB pages.
 - The AAR carries `LICENSE.md`, `THIRD_PARTY_NOTICES.md` and, when the build named them with `ALPHA2_NOTICES`, the Rust crates' licences, under `META-INF/alpha2/`.
-- Compose is built in; extractor plugins (`Plugin`) are not, since the build script does not enable the crate's `plugins` feature.
+- Compose is built in; extractor plugins (`Plugin`) are not, since the build script does not enable the crate's `plugins` feature. A build that enables it loads a plugin with `Plugin.load(manifestPath, sha256, allowNative, supplied)`; `supplied` maps a resource slot of the manifest to the path of a file or directory the app may read (a model the user picked), read in the app's process. A `content:` document from the storage access framework is not a path: copy it into the app's storage first and pass that path.
 
 ## Start
 
@@ -147,11 +147,11 @@ Every failing call throws an `Alpha2Exception`, one subclass per kind:
 | `GpuInitFailed` | `GPU_INIT_FAILED` | `reason`, under `RendererMode.GPU` |
 | `OutputPublishFailed` | `OUTPUT_PUBLISH_FAILED` | `reason`, `keptPath`: the finished file kept beside the output, which the app then owns |
 | `Aborted` | `ABORTED` | cancelled |
-| `Failed` | `code` | `code`, `reason` |
+| `Failed` | `code` | `code`, `reason`, `details`: a JSON object for codes that carry one, such as `PLUGIN_RESOURCE_INVALID` (`{ "slot", "reason" }`), else `null` |
 
 `ConformFailed` (`CONFORM_FAILED`, with `reason` and `reportJson`) is part of the type, but no call of this release throws it: a source with no file in `assets` fails with `MISSING_INPUT`, and a file that does not open or decode with `SOURCE_FAILED` or `DECODE_FAILED`.
 
-`Failed` carries the other codes: `DECODE_FAILED`, `ENCODE_FAILED`, `RENDER_FAILED`, `AUDIO_RENDER_FAILED`, `SOURCE_FAILED` (a source that could not be read during the export), `MISSING_INPUT`, `OUTPUT_IN_USE`, `OUTPUT_IO_FAILED`, `RESOURCE_LIMIT` (including a library thread that could not start), `PROGRESS_CALLBACK_FAILED`, `INTERNAL` (a library thread panicked: a defect), and for extractions `EXTRACTOR_FAILED`, `INVALID_EMIT` and the extractor's own codes.
+`Failed` carries the other codes: `DECODE_FAILED`, `ENCODE_FAILED`, `RENDER_FAILED`, `AUDIO_RENDER_FAILED`, `SOURCE_FAILED` (a source that could not be read during the export), `MISSING_INPUT`, `OUTPUT_IN_USE`, `OUTPUT_IO_FAILED`, `RESOURCE_LIMIT` (including a library thread that could not start), `PROGRESS_CALLBACK_FAILED`, `INTERNAL` (a library thread panicked: a defect), and for extractions `EXTRACTOR_FAILED`, `INVALID_EMIT`, the extractor's own codes and the `PLUGIN_*` codes.
 
 ## License
 

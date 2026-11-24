@@ -19,14 +19,26 @@ export const DEFAULT_PLUGIN_MEMORY_BYTES = 1024 * 1024 * 1024;
 /** The memory a module's `i32` offsets address; a larger cap is taken as this. */
 const MAX_PLUGIN_MEMORY_BYTES = 2 ** 31;
 
-/** A plugin that was refused, did not load or failed, with the code every surface uses. */
+/**
+ * A plugin that was refused, did not load or failed, with the code every surface uses.
+ * `details` is what a caller reads besides the code: `{ slot, reason }` for
+ * `PLUGIN_RESOURCE_INVALID`.
+ */
 export class PluginError extends Error {
   readonly code: string;
+  readonly details?: Readonly<Record<string, unknown>>;
 
-  constructor(code: string, message: string, options?: ErrorOptions) {
+  constructor(
+    code: string,
+    message: string,
+    options?: ErrorOptions & {
+      readonly details?: Readonly<Record<string, unknown>>;
+    },
+  ) {
     super(message, options);
     this.name = "PluginError";
     this.code = code;
+    if (options?.details !== undefined) this.details = options.details;
   }
 }
 
@@ -46,9 +58,17 @@ interface Manifest {
     readonly target: string;
     readonly type: string;
   })[];
-  readonly resources?: readonly (PinnedFile & { readonly name: string })[];
+  readonly resources?: readonly ManifestResource[];
   readonly descriptor: ExtractorDescriptor;
 }
+
+/** A pinned resource, or a slot the caller fills, which this loader cannot. */
+type ManifestResource =
+  | (PinnedFile & { readonly name: string; readonly supplied?: undefined })
+  | {
+      readonly name: string;
+      readonly supplied: { readonly required?: boolean };
+    };
 
 /** Where {@link loadPlugin} reads a plugin from. */
 export interface LoadPluginOptions {
@@ -65,6 +85,8 @@ export interface LoadedPlugin {
   readonly version: string;
   /** SHA-256 of the artifact that runs, as `made_by.plugin` records it. */
   readonly artifactSha256: string;
+  /** SHA-256 of the manifest's bytes in lowercase, as `made_by.plugin` records it. */
+  readonly manifestSha256: string;
   readonly descriptor: ExtractorDescriptor;
   /** An extractor that runs the module with `params`; each run instantiates it anew. */
   extractor(params?: Readonly<Record<string, unknown>>): Extractor;
@@ -609,6 +631,7 @@ function abiContext(
           },
     frame_rate: raw.frameRate ?? null,
     params,
+    supplied: {},
   });
 }
 
@@ -617,9 +640,13 @@ function abiContext(
  * whose bytes have SHA-256 `sha256`, with its wasm artifact and resources, each checked against
  * the hash and length the manifest pins.
  *
+ * A resource slot the caller fills elsewhere is left empty here when it is optional; a required
+ * one is refused, since the browser fills no slots.
+ *
  * Rejects with a {@link PluginError} whose code is `PLUGIN_FETCH_FAILED`, `PLUGIN_HASH_MISMATCH`,
  * `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (no wasm artifact), `PLUGIN_UNSUPPORTED_FEATURE`,
- * `PLUGIN_LOAD_FAILED` or `PLUGIN_DESCRIPTOR_MISMATCH`.
+ * `PLUGIN_LOAD_FAILED`, `PLUGIN_DESCRIPTOR_MISMATCH` or `PLUGIN_RESOURCE_INVALID` (a required
+ * slot, `details` `{ slot, reason: "unsupported" }`).
  */
 export async function loadPlugin(
   manifest: string | URL,
@@ -661,13 +688,24 @@ export async function loadPlugin(
       "PLUGIN_NO_ARTIFACT",
       `${parsed.id} has no wasm artifact; it offers ${parsed.artifacts.map((entry) => `${entry.target} (${entry.type})`).join(", ")}`,
     );
+  const required = (parsed.resources ?? []).find(
+    (resource) =>
+      resource.supplied !== undefined && resource.supplied.required !== false,
+  );
+  if (required !== undefined)
+    throw new PluginError(
+      "PLUGIN_RESOURCE_INVALID",
+      `${parsed.id} needs a file for its resource slot ${required.name}, which the browser does not fill`,
+      { details: { slot: required.name, reason: "unsupported" } },
+    );
   const bytes = await verified(fetcher, base, artifact, options.signal);
   const resources = new Map<string, Uint8Array<ArrayBuffer>>();
   for (const resource of parsed.resources ?? [])
-    resources.set(
-      resource.name,
-      await verified(fetcher, base, resource, options.signal),
-    );
+    if (resource.supplied === undefined)
+      resources.set(
+        resource.name,
+        await verified(fetcher, base, resource, options.signal),
+      );
   let module: WebAssembly.Module;
   try {
     module = await WebAssembly.compile(bytes);
@@ -696,6 +734,7 @@ export async function loadPlugin(
     id: parsed.id,
     version: parsed.version,
     artifactSha256: artifact.sha256,
+    manifestSha256: found,
     descriptor,
     extractor(params = {}) {
       let run: Run | undefined;

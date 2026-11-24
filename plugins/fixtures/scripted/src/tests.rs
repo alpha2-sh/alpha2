@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use alpha2_plugin_abi::records::Record;
 use alpha2_plugin_abi::{direction, status, video_format};
@@ -181,8 +182,8 @@ fn the_descriptor_is_the_file() {
 }
 
 #[test]
-fn the_table_states_its_size_and_create_refuses_a_shorter_host_table() {
-    use alpha2_plugin_abi::{ABI_MAJOR, HostV1, PluginV1};
+fn the_table_states_its_size_and_create_takes_a_host_table_down_to_the_first_one() {
+    use alpha2_plugin_abi::{ABI_MAJOR, HOST_V1_BASE_BYTES, HostV1, PluginV1};
     use std::ffi::c_void;
 
     unsafe extern "C" fn emit(_: *mut c_void, _: *const u8, _: usize) -> i32 {
@@ -203,7 +204,8 @@ fn the_table_states_its_size_and_create_refuses_a_shorter_host_table() {
     let table = unsafe { *alpha2_plugin_v1() };
     assert_eq!(table.size as usize, size_of::<PluginV1>());
     let full = u32::try_from(size_of::<HostV1>()).expect("small");
-    for (size, created) in [(full, true), (full - 8, false)] {
+    let base = u32::try_from(HOST_V1_BASE_BYTES).expect("small");
+    for (size, created) in [(full, true), (base, true), (base - 8, false)] {
         let host = HostV1 {
             abi: ABI_MAJOR,
             size,
@@ -212,6 +214,7 @@ fn the_table_states_its_size_and_create_refuses_a_shorter_host_table() {
             resource,
             fail,
             log,
+            resource_path: resource,
         };
         // SAFETY: the host table outlives the instance, destroyed below.
         let instance = unsafe { (table.create)(&raw const host) };
@@ -221,4 +224,46 @@ fn the_table_states_its_size_and_create_refuses_a_shorter_host_table() {
             unsafe { (table.destroy)(instance) };
         }
     }
+}
+
+fn path_word(offered: alpha2_plugin_sdk::testing::Offered) -> Option<String> {
+    // SAFETY: the plugin's own entry returns its static table.
+    let mut plugin = unsafe { Instance::offering(alpha2_plugin_v1(), offered) };
+    assert_eq!(
+        plugin.begin(&context(&json!({ "path": "model" }))),
+        status::OK
+    );
+    assert_eq!(plugin.end(), status::OK);
+    plugin
+        .take()
+        .records
+        .into_iter()
+        .find_map(|record| match record {
+            Record::Word { text, .. } => Some(text),
+            _ => None,
+        })
+}
+
+#[test]
+fn a_path_reaches_the_plugin_only_from_a_host_table_that_has_the_entry() {
+    use alpha2_plugin_sdk::testing::Offered;
+    let paths = HashMap::from([("model".to_owned(), PathBuf::from("/models/a b/model.onnx"))]);
+    assert_eq!(
+        path_word(Offered {
+            paths: paths.clone(),
+            ..Offered::default()
+        })
+        .as_deref(),
+        Some("/models/a b/model.onnx")
+    );
+    assert_eq!(
+        path_word(Offered {
+            paths,
+            base_table: true,
+            ..Offered::default()
+        })
+        .as_deref(),
+        Some("none")
+    );
+    assert_eq!(path_word(Offered::default()).as_deref(), Some("none"));
 }

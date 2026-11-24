@@ -43,6 +43,8 @@ pub use runtime::Host;
 #[doc(hidden)]
 pub use runtime::Runtime;
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 /// An extractor a plugin provides. Every step but `begin` has a default that does nothing.
@@ -132,6 +134,37 @@ pub struct Context {
     /// The request's parameters.
     #[serde(default)]
     pub params: serde_json::Map<String, serde_json::Value>,
+    /// The filled resource slots by name, with the files and sizes each offers.
+    #[serde(default)]
+    pub supplied: BTreeMap<String, SuppliedSlot>,
+}
+
+/// A filled resource slot.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SuppliedSlot {
+    /// What the caller named.
+    pub shape: SlotShape,
+    /// Its files in byte order of name: `<slot>` for a file slot, else `<slot>/<relative path>`.
+    pub files: Vec<SuppliedFile>,
+}
+
+/// What the caller named for a slot.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SlotShape {
+    /// One file.
+    File,
+    /// A directory.
+    Directory,
+}
+
+/// A file a slot offers.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct SuppliedFile {
+    /// The resource name to read it by.
+    pub name: String,
+    /// Its length in bytes.
+    pub bytes: u64,
 }
 
 /// A time range in ticks.

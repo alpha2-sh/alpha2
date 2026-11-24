@@ -1528,6 +1528,20 @@ serve((request) => respond(request, { ok: true, result: { status: "ready", capab
   assert.deepEqual(await flagsOf({ origins: "none", root: "none" }), [
     ["--plugin-origins", "none", "--plugin-root", "none"],
   ]);
+  assert.deepEqual(
+    await flagsOf({ isolation: "in-process", resourceRoot: "models" }),
+    [
+      [
+        "--plugin-isolation",
+        "in-process",
+        "--plugin-resource-root",
+        join(root, "models"),
+      ],
+    ],
+  );
+  assert.deepEqual(await flagsOf({ resourceRoot: "any" }), [
+    ["--plugin-resource-root", "any"],
+  ]);
   await rm(starts, { force: true });
   for (const plugins of [
     { mode: "all" },
@@ -1535,6 +1549,8 @@ serve((request) => respond(request, { ok: true, result: { status: "ready", capab
     { origins: ["http://a.example"] },
     { origins: "https://a.example" },
     { root: "" },
+    { isolation: "worker" },
+    { resourceRoot: "" },
     "native",
   ])
     assert.throws(

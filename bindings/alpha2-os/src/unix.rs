@@ -396,6 +396,47 @@ pub(crate) fn claim_stream(
     Ok(claimed)
 }
 
+pub(crate) fn claim_stdin() -> io::Result<File> {
+    // SAFETY: `F_DUPFD_CLOEXEC` reads no memory; a closed standard input fails with `EBADF`.
+    let claimed = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_DUPFD_CLOEXEC, 3) };
+    if claimed < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `claimed` is a new descriptor nothing else owns.
+    let claimed = unsafe { File::from_raw_fd(claimed) };
+    let null = fs::File::open("/dev/null")?;
+    // SAFETY: `dup2` reads no memory; `null` stays open for the call.
+    if unsafe { libc::dup2(null.as_raw_fd(), libc::STDIN_FILENO) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(claimed)
+}
+
+/// The descriptors this process holds, from the descriptor directory.
+fn descriptors() -> Vec<std::os::fd::RawFd> {
+    let directory = if cfg!(any(target_os = "linux", target_os = "android")) {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    std::fs::read_dir(directory)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn close_descriptors_except(keep: &[std::os::fd::RawFd]) {
+    for descriptor in descriptors() {
+        if descriptor > libc::STDERR_FILENO && !keep.contains(&descriptor) {
+            // SAFETY: the caller owns no descriptor outside `keep` that it still uses.
+            let _ = unsafe { libc::close(descriptor) };
+        }
+    }
+}
+
 /// Counts the entries of the descriptor directory, less the one the listing itself opens.
 pub(crate) fn open_handles() -> Option<u64> {
     let directory = if cfg!(any(target_os = "linux", target_os = "android")) {

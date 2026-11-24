@@ -51,7 +51,7 @@ final class Alpha2Tests: XCTestCase {
             do {
                 _ = try await handle.outcome()
                 XCTFail("the export finished")
-            } catch Alpha2Error.Failed(let code, let reason) {
+            } catch Alpha2Error.Failed(let code, let reason, _) {
                 XCTAssertEqual(code, "PROGRESS_CALLBACK_FAILED")
                 XCTAssertTrue(reason.contains("the app broke"), reason)
             } catch {

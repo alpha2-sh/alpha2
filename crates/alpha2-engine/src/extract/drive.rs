@@ -25,6 +25,8 @@ pub struct ExtractorError {
     pub message: String,
     /// The error code a host reports instead of `EXTRACTOR_FAILED`, such as `PLUGIN_TRAPPED`.
     pub code: Option<&'static str>,
+    /// What a caller reads besides the code, such as the slot and reason of a refused resource.
+    pub details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl ExtractorError {
@@ -33,6 +35,7 @@ impl ExtractorError {
         Self {
             message: message.into(),
             code: None,
+            details: None,
         }
     }
 
@@ -41,7 +44,15 @@ impl ExtractorError {
         Self {
             message: message.into(),
             code: Some(code),
+            details: None,
         }
+    }
+
+    /// The failure with `details`.
+    #[must_use]
+    pub fn with_details(mut self, details: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.details = Some(details);
+        self
     }
 }
 

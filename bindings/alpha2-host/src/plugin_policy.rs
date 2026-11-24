@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use alpha2_host_core::plugins::{PluginError, codes};
+use alpha2_host_core::plugins::{PluginError, ResourceRoot, codes};
 
 /// Whether plugins run, and which kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +101,54 @@ pub enum Root {
     Dir(PathBuf),
 }
 
+/// The hidden subcommand a host runs a native plugin in, as its own child.
+pub const PLUGIN_WORKER: &str = "plugin-worker";
+
+fn worker_arguments() -> Vec<std::ffi::OsString> {
+    #[cfg(not(test))]
+    {
+        vec![PLUGIN_WORKER.into()]
+    }
+    #[cfg(test)]
+    {
+        [
+            "--exact",
+            TEST_WORKER,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]
+        .map(Into::into)
+        .to_vec()
+    }
+}
+
+fn worker_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    #[cfg(not(test))]
+    {
+        Vec::new()
+    }
+    #[cfg(test)]
+    {
+        vec![(TEST_WORKER_ENV.into(), "1".into())]
+    }
+}
+
+#[cfg(test)]
+pub const TEST_WORKER: &str = "tests::plugins::plugin_worker_child";
+
+#[cfg(test)]
+pub const TEST_WORKER_ENV: &str = "ALPHA2_TEST_PLUGIN_WORKER";
+
+/// Where native artifacts run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PluginIsolation {
+    /// In a worker process per run, `alpha2-host plugin-worker`.
+    Process,
+    /// In the host process.
+    InProcess,
+}
+
 /// The operator's plugin policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginPolicy {
@@ -110,6 +158,10 @@ pub struct PluginPolicy {
     pub origins: Origins,
     /// `--plugin-root`.
     pub root: Root,
+    /// `--plugin-isolation`.
+    pub isolation: PluginIsolation,
+    /// `--plugin-resource-root`.
+    pub resource_root: ResourceRoot,
 }
 
 fn refused(message: impl Into<String>) -> PluginError {
@@ -122,6 +174,8 @@ impl PluginPolicy {
         mode: PluginMode::Wasm,
         origins: Origins::ManifestOnly,
         root: Root::Any,
+        isolation: PluginIsolation::Process,
+        resource_root: ResourceRoot::None,
     };
 
     /// Reads `--plugins`.
@@ -159,6 +213,58 @@ impl PluginPolicy {
             })?),
         };
         Ok(())
+    }
+
+    /// Reads `--plugin-isolation`.
+    pub(crate) fn set_isolation(&mut self, value: &str) -> Result<(), String> {
+        self.isolation = match value {
+            "process" => PluginIsolation::Process,
+            "in-process" => PluginIsolation::InProcess,
+            _ => {
+                return Err(format!(
+                    "--plugin-isolation takes process or in-process, got {value}"
+                ));
+            }
+        };
+        Ok(())
+    }
+
+    /// Reads `--plugin-resource-root`; a directory must exist and resolves against the cwd.
+    pub(crate) fn set_resource_root(&mut self, value: &str) -> Result<(), String> {
+        self.resource_root = match value {
+            "any" => ResourceRoot::Any,
+            "none" => ResourceRoot::None,
+            directory => ResourceRoot::Dir(std::fs::canonicalize(directory).map_err(|error| {
+                format!(
+                    "--plugin-resource-root takes none, any or a directory, got {directory}: \
+                     {error}"
+                )
+            })?),
+        };
+        Ok(())
+    }
+
+    /// Where a native artifact runs under `--plugin-isolation`.
+    ///
+    /// # Errors
+    /// `PLUGIN_LOAD_FAILED` when this host cannot name its own program.
+    pub fn isolation(&self) -> Result<alpha2_host_core::plugins::Isolation, PluginError> {
+        use alpha2_host_core::plugins::{Isolation, WorkerCommand};
+        Ok(match self.isolation {
+            PluginIsolation::InProcess => Isolation::InProcess,
+            PluginIsolation::Process => Isolation::Child(WorkerCommand {
+                program: std::env::current_exe().map_err(|error| {
+                    PluginError::new(
+                        codes::LOAD_FAILED,
+                        format!(
+                            "the host cannot name its own program for a plugin worker: {error}"
+                        ),
+                    )
+                })?,
+                args: worker_arguments(),
+                envs: worker_environment(),
+            }),
+        })
     }
 
     /// Refuses every plugin under `--plugins off`.

@@ -93,6 +93,9 @@ pub enum Alpha2Error {
         code: String,
         /// The cause.
         reason: String,
+        /// What a caller reads besides the code, as a JSON object: for `PLUGIN_RESOURCE_INVALID`
+        /// `{ "slot", "reason" }`; `None` when the failure has none.
+        details: Option<String>,
     },
 }
 
@@ -125,6 +128,7 @@ impl From<DecodeError> for Alpha2Error {
             DecodeError::Cancelled => Self::Aborted,
             DecodeError::Unsupported(reason) => Self::Unsupported { reason },
             error => Self::Failed {
+                details: None,
                 code: "DECODE_FAILED".into(),
                 reason: error.to_string(),
             },
@@ -145,14 +149,17 @@ impl From<EncodeError> for Alpha2Error {
                 kept_path: kept.map(|path| path.to_string_lossy().into_owned()),
             },
             EncodeError::OutputInUse(reason) => Self::Failed {
+                details: None,
                 code: "OUTPUT_IN_USE".into(),
                 reason,
             },
             EncodeError::Output(reason) => Self::Failed {
+                details: None,
                 code: "OUTPUT_IO_FAILED".into(),
                 reason,
             },
             error => Self::Failed {
+                details: None,
                 code: "ENCODE_FAILED".into(),
                 reason: error.to_string(),
             },

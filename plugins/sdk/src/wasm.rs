@@ -183,6 +183,10 @@ impl Host {
         unsafe { host_log(level, message.as_ptr(), message.len()) }
     }
 
+    pub(crate) fn read_resource_path(&self, _name: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+
     pub(crate) fn read_resource(&self, name: &str) -> Option<Vec<u8>> {
         // SAFETY: as for `emit`; the host writes at most `len` bytes into the buffer.
         unsafe {

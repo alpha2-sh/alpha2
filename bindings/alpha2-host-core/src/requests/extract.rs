@@ -24,6 +24,9 @@ pub struct PluginRequest {
     /// The wasm artifact even where a native one is allowed.
     #[serde(default)]
     pub force_wasm: bool,
+    /// The absolute path of the file or directory that fills each resource slot, by slot name.
+    #[serde(default)]
+    pub supplied: std::collections::BTreeMap<String, PathBuf>,
 }
 
 /// An `extract` request.

@@ -39,6 +39,7 @@
     "PLUGIN_LOAD_FAILED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_TRAPPED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_LIMIT": { "code": "RESOURCE_LIMIT", "resource": "unknown" },
+    "PLUGIN_RESOURCE_INVALID": { "code": "INVALID_INPUT", "resource": "unknown" },
     "INTERNAL": { "code": "DEFECT", "resource": "unknown" },
     "ALPHA2_ERROR": { "code": "UNKNOWN", "resource": "unknown" }
   },

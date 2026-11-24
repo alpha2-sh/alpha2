@@ -9,7 +9,7 @@ use crate::{Audio, Context, Direction, Emitter, Error, Extractor, Frame, VideoFo
 #[derive(Debug)]
 pub struct Host {
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) table: alpha2_plugin_abi::HostV1,
+    pub(crate) table: crate::native::HostTable,
 }
 
 impl Host {
@@ -17,6 +17,16 @@ impl Host {
     #[must_use]
     pub fn resource(&self, name: &str) -> Option<Vec<u8>> {
         self.read_resource(name)
+    }
+
+    /// The absolute path of the supplied file, filled directory slot or directory under one named
+    /// `name`, for runtimes that open or map a model themselves. `None` for a pinned resource, an
+    /// empty or undeclared name, on a host that predates paths, and always as wasm. A path handed
+    /// out is hashed for the data's provenance; ask for every file a runtime opens, or for the
+    /// directory that holds them.
+    #[must_use]
+    pub fn resource_path(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.read_resource_path(name)
     }
 
     /// Writes a diagnostic at an [`alpha2_plugin_abi::log_level`].

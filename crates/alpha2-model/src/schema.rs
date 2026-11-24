@@ -310,6 +310,11 @@ pub fn project_limits_json() -> Value {
         ("MAX_DATA_INTERVALS", json!(crate::MAX_DATA_INTERVALS)),
         ("MAX_DATA_LABEL_BYTES", json!(crate::MAX_DATA_LABEL_BYTES)),
         ("MAX_DATA_ID_BYTES", json!(crate::MAX_DATA_ID_BYTES)),
+        ("MAX_SUPPLIED_FILES", json!(crate::MAX_SUPPLIED_FILES)),
+        (
+            "MAX_SUPPLIED_NAME_BYTES",
+            json!(crate::MAX_SUPPLIED_NAME_BYTES),
+        ),
         ("MAX_DATA_COORDINATE", json!(crate::MAX_DATA_COORDINATE)),
         ("MAX_DATA_SCALAR", json!(crate::MAX_DATA_SCALAR)),
         (

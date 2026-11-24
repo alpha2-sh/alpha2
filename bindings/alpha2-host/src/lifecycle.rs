@@ -69,12 +69,18 @@ impl ServeOptions {
                 extract.plugin_memory_bytes = bytes;
             } else if matches!(
                 flag.as_str(),
-                "--plugins" | "--plugin-origins" | "--plugin-root"
+                "--plugins"
+                    | "--plugin-origins"
+                    | "--plugin-root"
+                    | "--plugin-isolation"
+                    | "--plugin-resource-root"
             ) {
                 let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
                 match flag.as_str() {
                     "--plugins" => plugins.set_mode(&value)?,
                     "--plugin-origins" => plugins.set_origins(&value)?,
+                    "--plugin-isolation" => plugins.set_isolation(&value)?,
+                    "--plugin-resource-root" => plugins.set_resource_root(&value)?,
                     _ => plugins.set_root(&value)?,
                 }
             } else if flag == "--max-running" {
@@ -593,9 +599,41 @@ mod tests {
             "--plugin-origins https://a.example:port",
             "--plugin-origins https://a.example,",
             "--plugin-root /a/directory/that/does/not/exist",
+            "--plugin-isolation none",
+            "--plugin-isolation",
+            "--plugin-resource-root /a/directory/that/does/not/exist",
+            "--plugin-resource-root",
         ] {
             assert!(policy(refused).is_err(), "{refused}");
         }
+    }
+
+    #[test]
+    fn the_isolation_and_resource_root_flags_default_to_a_worker_and_no_supplied_files() {
+        use crate::plugin_policy::PluginIsolation;
+        use alpha2_host_core::plugins::ResourceRoot;
+        let policy = |flags: &str| ServeOptions::from_args(args(flags)).map(|o| o.extract.plugins);
+        let default = policy("").expect("default");
+        assert_eq!(default.isolation, PluginIsolation::Process);
+        assert_eq!(default.resource_root, ResourceRoot::None);
+        assert_eq!(
+            policy("--plugin-isolation in-process")
+                .expect("in-process")
+                .isolation,
+            PluginIsolation::InProcess
+        );
+        assert_eq!(
+            policy("--plugin-resource-root any")
+                .expect("any")
+                .resource_root,
+            ResourceRoot::Any
+        );
+        assert_eq!(
+            policy("--plugin-resource-root .")
+                .expect("relative")
+                .resource_root,
+            ResourceRoot::Dir(std::fs::canonicalize(".").expect("cwd"))
+        );
     }
 
     #[test]

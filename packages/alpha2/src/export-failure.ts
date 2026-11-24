@@ -254,6 +254,7 @@ type ProtocolErrorCode =
   | "PLUGIN_LOAD_FAILED"
   | "PLUGIN_TRAPPED"
   | "PLUGIN_LIMIT"
+  | "PLUGIN_RESOURCE_INVALID"
   | "GPU_INIT_FAILED"
   | "ENCODE_ERROR"
   | "ENCODER_BUSY"
@@ -346,6 +347,7 @@ const CODE_CLASSES: Readonly<Record<ClassifiedCode, FailureClass>> =
     PLUGIN_LOAD_FAILED: permanent,
     PLUGIN_TRAPPED: permanent,
     PLUGIN_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
+    PLUGIN_RESOURCE_INVALID: permanent,
     GPU_INIT_FAILED: unknown,
     ENCODE_ERROR: unknown,
     ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },

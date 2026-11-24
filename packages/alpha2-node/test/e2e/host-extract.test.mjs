@@ -415,12 +415,17 @@ async function pluginDir(name, { wasm = true, native = false } = {}) {
   const descriptor = JSON.parse(
     await readFile(join(plugins, "fixtures", name, "descriptor.json"), "utf8"),
   );
+  const slots = await readFile(
+    join(plugins, "fixtures", name, "resources.json"),
+    "utf8",
+  ).then(JSON.parse, () => undefined);
   const text = JSON.stringify({
     id: descriptor.id,
     version: "0.1.0",
     abi: "alpha2-plugin/1",
     kind: "extractor",
     artifacts,
+    ...(slots === undefined ? {} : { resources: slots }),
     descriptor,
   });
   await writeFile(join(dir, "manifest.json"), text);
@@ -491,7 +496,7 @@ test("a plugin the host runs records the bytes the Rust reader pins", async () =
   }
 });
 
-test("a native plugin that ends the host fails the request and the pool starts another", async () => {
+test("a native plugin that crashes fails its request; only in the host process does it end the host", async () => {
   const { dir, manifest, sha256 } = await pluginDir("scripted", {
     wasm: false,
     native: true,
@@ -505,9 +510,37 @@ test("a native plugin that ends the host fails the request and the pool starts a
   };
   const native = new Alpha2NodeClient({
     hostPath,
+    plugins: { mode: "native", isolation: "in-process" },
+  });
+  const isolated = new Alpha2NodeClient({
+    hostPath,
     plugins: { mode: "native" },
   });
   try {
+    await assert.rejects(
+      isolated.extract(
+        pluginRequest(
+          { manifest, sha256, allowNative: true },
+          "alpha2.test.scripted",
+          outputs,
+          { abort_at: 1 },
+        ),
+      ),
+      (error) => {
+        assert.equal(error.code, "PLUGIN_TRAPPED");
+        if (process.platform !== "win32")
+          assert.equal(error.details?.signal, 6);
+        return true;
+      },
+    );
+    const survived = await isolated.extract(
+      pluginRequest(
+        { manifest, sha256, allowNative: true },
+        "alpha2.test.scripted",
+        outputs,
+      ),
+    );
+    assert.equal(survived.dataSets.length, 5);
     await assert.rejects(
       client.extract(
         pluginRequest({ manifest, sha256 }, "alpha2.test.scripted", outputs, {
@@ -551,6 +584,62 @@ test("a native plugin that ends the host fails the request and the pool starts a
     assert.equal(after.dataSets.length, 5);
   } finally {
     await native.close();
+    await isolated.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a plugin reads the files a request supplies within the resource root", async () => {
+  const { dir, manifest, sha256 } = await pluginDir("supplied", {
+    native: true,
+  });
+  const models = join(dir, "models");
+  await mkdir(join(models, "extra"), { recursive: true });
+  await writeFile(join(models, "model.bin"), Buffer.from([1, 2, 119]));
+  await writeFile(join(models, "extra", "a.txt"), "alpha");
+  const allowed = new Alpha2NodeClient({
+    hostPath,
+    plugins: { mode: "native", resourceRoot: models },
+  });
+  const supplied = {
+    model: join(models, "model.bin"),
+    extra: join(models, "extra"),
+  };
+  const run = (target, plugin) =>
+    target.extract(
+      pluginRequest(
+        { manifest, sha256, ...plugin },
+        "alpha2.test.supplied",
+        { files: "files" },
+        { read: ["model", "extra/a.txt"] },
+      ),
+    );
+  try {
+    for (const allowNative of [false, true]) {
+      const { dataSets } = await run(allowed, { supplied, allowNative });
+      assert.deepEqual(
+        dataSets[0].words.map((word) => word.text),
+        ["model 3 010277", "extra/a.txt 5 616c706861"],
+      );
+      assert.equal(dataSets[0].made_by.plugin.manifest_sha256, sha256);
+      assert.deepEqual(
+        dataSets[0].made_by.plugin.supplied.map((file) => file.name),
+        ["extra/a.txt", "model"],
+      );
+    }
+    await assert.rejects(run(allowed, {}), (error) => {
+      assert.equal(error.code, "PLUGIN_RESOURCE_INVALID");
+      assert.deepEqual(error.details, { slot: "model", reason: "missing" });
+      return true;
+    });
+    await assert.rejects(
+      run(client, { supplied }),
+      (error) =>
+        error.code === "PLUGIN_REFUSED" &&
+        error.message.includes("--plugin-resource-root"),
+    );
+  } finally {
+    await allowed.close();
     await rm(dir, { recursive: true, force: true });
   }
 });
