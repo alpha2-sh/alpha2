@@ -4,7 +4,6 @@
 // writable OPFS keeps them in memory, for this page and within a size limit.
 import {
   ALL_FORMATS,
-  BlobSource,
   BufferTarget,
   Conversion,
   Input,
@@ -18,6 +17,7 @@ import {
   WritableFileDestination,
 } from "alpha2/export-destination";
 import { EditorError } from "../../core/document.js";
+import { mediaSource } from "./range-file.js";
 import { displaySize, probeEvidence } from "./fingerprint.js";
 import { DEFAULT_MEMORY_OUTPUT_LIMIT } from "./output.js";
 import {
@@ -158,7 +158,7 @@ export class ProxyStore {
   async #make(file, fingerprint, hash, { signal, onProgress }) {
     signal?.throwIfAborted();
     const input = new Input({
-      source: new BlobSource(file),
+      source: mediaSource(file),
       formats: ALL_FORMATS,
     });
     // Installed before setup awaits, so an earlier abort cancels the conversion once it exists.

@@ -255,3 +255,45 @@ await /** @type {{ release?: () => Promise<void> }} */ (artifact).release?.();
 await bridge.dispose();
 `;
 }
+
+export function editorImportReference() {
+  return `${prelude}
+const url = "/tests/corpus/h264-bt709-copy.mp4";
+const bytes = await (await fetch(url)).blob();
+const editor = createEditor();
+const bridge = createBrowserBridge({ editor, runtimeAssets, audio: false });
+const copy = await importVideo(bridge, bytes);
+const { assetIds: [id] } = await bridge.importFiles([{ url, name: "clip.mp4", path: "/srv/clip.mp4" }]);
+const held = bridge.getAsset(id).file;
+const same = (field) => JSON.stringify(editor.document.assets[id].fingerprint[field])
+  === JSON.stringify(editor.document.assets[copy].fingerprint[field]);
+const fingerprinted = ["content_sha256", "byte_length", "streams", "duration_ticks"].every(same);
+const span = { start: 0, end: 60000 };
+const placed = editor.dispatch({ type: "track.add", track: { id: "v", kind: "video", name: "V",
+  clips: [{ id: "c", source_id: id, timeline_range: span, source_range: span }] } });
+if (placed.ok === false) throw placed.error;
+const canvas = document.createElement("canvas");
+await bridge.bindPreview(canvas);
+const previewed = await bridge.seek(30000);
+await bridge.conform("export_original");
+const byPath = (await bridge.nativeAssets()).map((asset) => asset.path);
+await bridge.relink(id, { url: url + "?again", name: "clip.mp4" });
+const relinkedFile = bridge.getAsset(id).file;
+const relinked = relinkedFile !== undefined && "url" in relinkedFile && relinkedFile.url.endsWith("?again");
+const native = await bridge.nativeAssets();
+const artifact = await bridge.startExport({ output: { kind: "memory" } }).result;
+const blob = artifact.kind === "blob" ? artifact.blob : /** @type {{ readonly file: File }} */ (artifact).file;
+const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+const exported = (await (await input.getPrimaryVideoTrack())?.computePacketStats())?.packetCount ?? 0;
+input.dispose();
+report({
+  ok: held?.size === bytes.size && fingerprinted && previewed && relinked
+    && JSON.stringify(byPath) === JSON.stringify(["/srv/clip.mp4"]) && native.length === 1 && native[0].path === undefined && native[0].blob?.size === bytes.size
+    && exported > 0,
+  size: held?.size, fingerprinted, previewed, byPath, relinked,
+  native: native.map((asset) => ({ path: asset.path, bytes: asset.blob?.size })), exported,
+});
+await /** @type {{ release?: () => Promise<void> }} */ (artifact).release?.();
+await bridge.dispose();
+`;
+}

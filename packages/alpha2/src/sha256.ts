@@ -159,7 +159,7 @@ function yieldToEventLoop(): Promise<void> {
  * Rejects with `signal.reason` on abort, or with the stream's error when the blob cannot be read.
  */
 export async function sha256Blob(
-  blob: Blob,
+  blob: Pick<Blob, "stream">,
   options: {
     readonly signal?: AbortSignal;
     readonly onProgress?: (bytes: number) => void;

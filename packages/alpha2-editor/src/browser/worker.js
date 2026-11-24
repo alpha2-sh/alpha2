@@ -1,6 +1,7 @@
 import { Alpha2WasmError, serializeError } from "alpha2/worker-error";
 import { withinActiveTime } from "alpha2/active-clock";
 import { SourcePixels } from "./runtime/sources.js";
+import { reviveAssetFiles } from "./runtime/range-file.js";
 import { extensionWasmUrls } from "./runtime/extension-import.js";
 import { AudioWindowSupplier, mixBlock } from "./runtime/audio.js";
 
@@ -121,7 +122,7 @@ function serveEditorWorker(scope) {
               if (!keep.has(id)) assets.delete(id);
             await pixels.release(keep);
             for (const asset of request.assets ?? [])
-              assets.set(asset.id, asset);
+              assets.set(asset.id, reviveAssetFiles(asset));
             if (request.fonts) engine.setCaptionFonts(request.fonts);
             currentProject = request.project;
             if (hasContent(currentProject)) engine.loadProject(request.project);

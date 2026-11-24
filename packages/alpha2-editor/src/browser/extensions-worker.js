@@ -3,6 +3,7 @@
 // `@alpha2-sh/editor/extensions-worker` entry pass `runtimeAssets.extensionsWorkerFactory`; each
 // call gets its own worker, terminated on cancel or past `EXTENSIONS_CALL_TIMEOUT_MS`.
 import { EditorError } from "../core/document.js";
+import { reviveRangeFile } from "./runtime/range-file.js";
 import {
   exrFirstFrame,
   readProviderFile,
@@ -42,7 +43,7 @@ async function run(request, wasmUrl, load, signal) {
   const extensions = await load(wasmUrl);
   signal?.throwIfAborted();
   const bytes = request.file
-    ? new Uint8Array(await request.file.arrayBuffer())
+    ? new Uint8Array(await reviveRangeFile(request.file).arrayBuffer())
     : undefined;
   signal?.throwIfAborted();
   return call(extensions, bytes, request);

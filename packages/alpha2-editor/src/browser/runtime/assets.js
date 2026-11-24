@@ -18,7 +18,8 @@ import {
 } from "alpha2/mediabunny";
 import { TICKS_PER_SECOND } from "alpha2/project";
 import { OffscreenTextRasterizer } from "alpha2/text";
-import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from "mediabunny";
+import { ALL_FORMATS, AudioSampleSink, Input } from "mediabunny";
+import { isRangeFile, mediaSource } from "./range-file.js";
 const uid = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 import { drawGenerator, generatorLabel } from "./generators.js";
 import {
@@ -333,9 +334,10 @@ export class AssetLibrary {
     // hardware frames and no software decoder). Refuse it here by name rather than at its first
     // frame, unless the library takes it for a degraded preview.
     const planarDecode = await this.#planarDecode(file, probe);
-    const url = URL.createObjectURL(file);
-    this.#urls.push(url);
+    const url = isRangeFile(file) ? file.url : URL.createObjectURL(file);
+    if (!isRangeFile(file)) this.#urls.push(url);
     const video = document.createElement("video");
+    if (isRangeFile(file)) video.crossOrigin = "anonymous";
     Object.assign(video, {
       src: url,
       muted: true,
@@ -582,7 +584,7 @@ function mediaKindForFile(file) {
  */
 export async function probeVideo(file) {
   const input = new Input({
-    source: new BlobSource(file),
+    source: mediaSource(file),
     formats: ALL_FORMATS,
   });
   try {
@@ -665,7 +667,7 @@ export function importFailureReason(error, kind, facts) {
 /** A container's length in seconds, as its last packet ends; null when it cannot be read. */
 async function containerDuration(file) {
   const input = new Input({
-    source: new BlobSource(file),
+    source: mediaSource(file),
     formats: ALL_FORMATS,
   });
   try {
@@ -699,7 +701,7 @@ export async function audioDecoding(file) {
  */
 async function probeAudio(file) {
   const input = new Input({
-    source: new BlobSource(file),
+    source: mediaSource(file),
     formats: ALL_FORMATS,
   });
   try {
@@ -725,7 +727,7 @@ export async function streamPeaks(
   { signal, bucketsPerSecond = 100, maxBuckets = 360_000 } = {},
 ) {
   const input = new Input({
-    source: new BlobSource(file),
+    source: mediaSource(file),
     formats: ALL_FORMATS,
   });
   try {

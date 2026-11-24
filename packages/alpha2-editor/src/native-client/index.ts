@@ -17,10 +17,12 @@ import type { BrowserExportOptions } from "../browser/types.js";
 import type { ExportAttempt, ExportProgress } from "../ports/index.js";
 
 /**
- * A file uploaded for a native export, usually from the browser bridge's `nativeAssets`. The host
- * reads media only from these uploads, never from a path the document names.
+ * A file a native export reads, usually from the browser bridge's `nativeAssets`: its bytes,
+ * uploaded to the service (`blob`), or a `path` on the service's machine, sent in the render
+ * request's `paths` (`{ [kind]: { [id]: path } }`) and never uploaded. The host reads media only
+ * from these, never from a path the document names.
  */
-export interface NativeAsset {
+export type NativeAsset = {
   /** The source, resource or font id the file belongs to (for `frames`, the upload's own id). */
   readonly id: string;
   /**
@@ -29,12 +31,14 @@ export interface NativeAsset {
    */
   readonly kind:
     "assets" | "effect-assets" | "caption-fonts" | "proxies" | "frames";
-  readonly blob: Blob;
   /** The original file name, sent to the host percent-encoded. */
   readonly name: string;
   readonly madeFrom?: MediaFingerprint;
   readonly locator?: string;
-}
+} & (
+  | { readonly blob: Blob; readonly path?: undefined }
+  | { readonly path: string; readonly blob?: undefined }
+);
 /**
  * Export settings for a native job: the browser export's options plus the MPEG-4 Part 2 codec the
  * host can encode. An absent `container`, `videoCodec` or `audioCodec` takes the host's default, as
@@ -177,6 +181,15 @@ async function serviceFailure(
         : {}),
     },
   });
+}
+function pathsOf(
+  assets: readonly NativeAsset[],
+): Record<string, Record<string, string>> {
+  const paths: Record<string, Record<string, string>> = {};
+  for (const asset of assets)
+    if (asset.path !== undefined)
+      (paths[asset.kind] ??= {})[asset.id] = asset.path;
+  return paths;
 }
 /** Consecutive failed status requests before an attempt gives up on the job. */
 const STATUS_ATTEMPTS = 5;
@@ -323,7 +336,7 @@ export function createNativeClient(options: NativeClientOptions) {
         signal.throwIfAborted();
         for (const asset of captured) {
           const key = `${asset.kind}/${asset.id}`;
-          if (acknowledged.has(key)) continue;
+          if (asset.blob === undefined || acknowledged.has(key)) continue;
           await jobRequest(
             `/${asset.kind}/${encodeURIComponent(asset.id)}`,
             {
@@ -413,6 +426,9 @@ export function createNativeClient(options: NativeClientOptions) {
                 fonts: captured
                   .filter((a) => a.kind === "caption-fonts")
                   .map((a) => a.id),
+                ...(captured.some((a) => a.path !== undefined)
+                  ? { paths: pathsOf(captured) }
+                  : {}),
                 frames: Object.fromEntries(
                   project.sources.flatMap((source) =>
                     source.provider?.format === "image_sequence"

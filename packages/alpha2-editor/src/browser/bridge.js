@@ -38,6 +38,7 @@ import {
   sameProviderSettings,
 } from "./runtime/sources.js";
 import { fingerprintFile } from "./runtime/fingerprint.js";
+import { RangeFile, isRangeFile } from "./runtime/range-file.js";
 import { hashInWorker } from "./hash-worker.js";
 import { callExtensions } from "./extensions-worker.js";
 import {
@@ -2097,11 +2098,23 @@ export function createBrowserBridge(options) {
       },
     };
   }
+  function openMedia(file, signal) {
+    return file instanceof Blob || file?.url === undefined
+      ? file
+      : RangeFile.open(file, signal);
+  }
+  async function nativeBytes(file) {
+    if (!isRangeFile(file)) return { blob: file };
+    return file.path === undefined
+      ? { blob: await file.blob() }
+      : { path: file.path };
+  }
   function importFiles(files, options = {}) {
     return importUnits(
       files.map((file) => ({
         name: file.name,
-        stage: (signal) => mediaAdapter.stage(file, signal),
+        stage: async (signal) =>
+          mediaAdapter.stage(await openMedia(file, signal), signal),
       })),
       options,
     );
@@ -2148,7 +2161,12 @@ export function createBrowserBridge(options) {
       );
     return {
       name: null,
-      stage: (signal) => mediaAdapter.stageSequence(files, options, signal),
+      stage: async (signal) =>
+        mediaAdapter.stageSequence(
+          await Promise.all(files.map((file) => openMedia(file, signal))),
+          options,
+          signal,
+        ),
     };
   }
   /**
@@ -3252,7 +3270,7 @@ export function createBrowserBridge(options) {
               result.push({
                 id: `${asset.id}:${result.length}`,
                 kind: "frames",
-                blob: file,
+                ...(await nativeBytes(file)),
                 name: file.name,
                 locator,
               });
@@ -3265,6 +3283,21 @@ export function createBrowserBridge(options) {
               blob: runtime.file,
               name: `${asset.id}.proxy.mp4`,
               madeFrom: proxies.get(hashOf(asset)).record.made_from,
+            });
+            continue;
+          }
+          const kind =
+            asset.kind === "font"
+              ? "caption-fonts"
+              : asset.kind === "lut3d"
+                ? "effect-assets"
+                : "assets";
+          if (isRangeFile(runtime.file)) {
+            result.push({
+              id: asset.id,
+              kind,
+              ...(await nativeBytes(runtime.file)),
+              name: asset.name,
             });
             continue;
           }
@@ -3301,12 +3334,7 @@ export function createBrowserBridge(options) {
           if (!blob) throw Error(`Missing native bytes: ${asset.name}`);
           result.push({
             id: asset.id,
-            kind:
-              asset.kind === "font"
-                ? "caption-fonts"
-                : asset.kind === "lut3d"
-                  ? "effect-assets"
-                  : "assets",
+            kind,
             blob,
             name: asset.kind === "text" ? "text.png" : asset.name,
           });

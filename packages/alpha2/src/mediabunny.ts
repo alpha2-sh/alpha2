@@ -30,9 +30,7 @@ import {
   AudioSample,
   AudioSampleSink,
   AudioSampleSource,
-  BlobSource,
   BufferTarget,
-  BufferSource,
   canEncodeAudio,
   canEncodeVideo,
   StreamTarget,
@@ -67,7 +65,10 @@ import {
   ROUNDING_SCAN_BYTES,
   ROUNDING_SCAN_FRAMES,
   validateStallTimeout,
+  isRangeReader,
+  type RangeReader,
 } from "./media.js";
+import { mediaSource } from "./media-source.js";
 import type {
   AudioDecoderRefillRequest,
   AudioSpeaker,
@@ -108,7 +109,11 @@ const DEFAULT_ENCODER_STALL_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_REVERSE_FRAME_BYTES = 128 * 1024 * 1024;
 const TICKS_PER_SECOND = 120_000;
 
-export type MediabunnyInput = Blob | ArrayBuffer | ArrayBufferView;
+export type { RangeReader } from "./media.js";
+
+/** Media to read: a `Blob`, bytes, or a {@link RangeReader} read by byte range. */
+export type MediabunnyInput =
+  Blob | ArrayBuffer | ArrayBufferView | RangeReader;
 
 /** Limits for {@link MediabunnyVideoDecoder.open}, on top of the shared decoder options. */
 export interface MediabunnyVideoDecoderOptions extends BrowserVideoDecoderOptions {
@@ -218,10 +223,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
         `maxCachedFrames must be at least ${MIN_CACHED_FRAMES}`,
       );
     validateStallTimeout(limits.stallTimeoutMs);
-    const source: Source =
-      resource instanceof Blob
-        ? new BlobSource(resource)
-        : new BufferSource(resource);
+    const source: Source = mediaSource(resource);
     const input = new Input({ source, formats: ALL_FORMATS });
     try {
       const track = await input.getPrimaryVideoTrack();
@@ -930,6 +932,12 @@ function byteReader(resource: MediabunnyInput): ByteReader {
       new Uint8Array(
         await resource.slice(offset, offset + length).arrayBuffer(),
       );
+  if (isRangeReader(resource))
+    return (offset, length) =>
+      resource.read(
+        Math.min(offset, resource.size),
+        Math.min(offset + length, resource.size),
+      );
   const bytes =
     resource instanceof ArrayBuffer
       ? new Uint8Array(resource)
@@ -943,7 +951,9 @@ function byteReader(resource: MediabunnyInput): ByteReader {
 }
 
 function byteLength(resource: MediabunnyInput): number {
-  return resource instanceof Blob ? resource.size : resource.byteLength;
+  return resource instanceof Blob || isRangeReader(resource)
+    ? resource.size
+    : resource.byteLength;
 }
 
 function bufferBytes(
@@ -1072,11 +1082,11 @@ export async function probePlanarDecode(
   options: { declared: ColorMetadata | null; timeoutMs?: number },
 ): Promise<{ planes: "not-required" | "decoder" | "software" }> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
-  const name = resource instanceof File ? resource.name : "the video";
-  const source: Source =
-    resource instanceof Blob
-      ? new BlobSource(resource)
-      : new BufferSource(resource);
+  const name =
+    resource instanceof File || isRangeReader(resource)
+      ? (resource.name ?? "the video")
+      : "the video";
+  const source: Source = mediaSource(resource);
   const input = new Input({ source, formats: ALL_FORMATS });
   try {
     const track = await input.getPrimaryVideoTrack();
@@ -1289,10 +1299,7 @@ export async function probeAudioStreams(
   resource: MediabunnyInput,
 ): Promise<AudioStreamFacts[]> {
   const input = new Input({
-    source:
-      resource instanceof Blob
-        ? new BlobSource(resource)
-        : new BufferSource(resource),
+    source: mediaSource(resource),
     formats: ALL_FORMATS,
   });
   try {
@@ -1322,10 +1329,7 @@ export async function probeAudioSource(
   resource: MediabunnyInput,
 ): Promise<DecodableAudioTrack> {
   const input = new Input({
-    source:
-      resource instanceof Blob
-        ? new BlobSource(resource)
-        : new BufferSource(resource),
+    source: mediaSource(resource),
     formats: ALL_FORMATS,
   });
   try {
@@ -1429,10 +1433,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   ): Promise<MediabunnyAudioDecoder> {
     const stallTimeoutMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
     validateStallTimeout(stallTimeoutMs);
-    const source: Source =
-      resource instanceof Blob
-        ? new BlobSource(resource)
-        : new BufferSource(resource);
+    const source: Source = mediaSource(resource);
     const input = new Input({ source, formats: ALL_FORMATS });
     const track =
       options.stream === undefined
@@ -3330,10 +3331,11 @@ export class MediabunnyAdapterFactory implements OptionalMediaAdapterFactory {
     if (
       !(input instanceof Blob) &&
       !(input instanceof ArrayBuffer) &&
-      !ArrayBuffer.isView(input)
+      !ArrayBuffer.isView(input) &&
+      !isRangeReader(input)
     ) {
       throw new TypeError(
-        "mediabunny input must be a Blob or ArrayBuffer view",
+        "mediabunny input must be a Blob, ArrayBuffer view or range reader",
       );
     }
     return MediabunnyVideoDecoder.open(sourceId, input);
@@ -3350,10 +3352,11 @@ export class MediabunnyAdapterFactory implements OptionalMediaAdapterFactory {
     if (
       !(input instanceof Blob) &&
       !(input instanceof ArrayBuffer) &&
-      !ArrayBuffer.isView(input)
+      !ArrayBuffer.isView(input) &&
+      !isRangeReader(input)
     )
       throw new TypeError(
-        "mediabunny input must be a Blob or ArrayBuffer view",
+        "mediabunny input must be a Blob, ArrayBuffer view or range reader",
       );
     if (this.#audioResampler === undefined)
       throw new TypeError(

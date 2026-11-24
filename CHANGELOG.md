@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- The browser bridge imports, relinks and reads image sequence frames from media references,
+  `{ url, name, path? }` whose URL answers `Range` requests, in place of a `File`: every reader of
+  the media (probing, hashing, preview and its workers, proxies, extraction, browser export) reads
+  it by range. `alpha2/mediabunny` inputs and `alpha2/media` container readers take a
+  `RangeReader` (`size`, `read(start, end)`), and `sha256Blob` anything with `stream()`.
+- A native export reads a referenced file by its `path` instead of uploading it: `nativeAssets`
+  gives `{ path }` for it, and the native client sends such assets in the render request's
+  `paths` (`{ [kind]: { [id]: path } }`) without an upload. `NativeAsset` has either `blob` or
+  `path`.
 - `bridge.putProviderSource` takes `then`: commands, or a function of the new source's ID and
   opened size returning them, committed in the same undo step as the source, such as the clip that
   places it.

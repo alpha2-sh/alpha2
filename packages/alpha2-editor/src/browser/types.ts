@@ -64,6 +64,45 @@ export interface RuntimeFont {
   /** The face to read in a collection file (`.ttc`/`.otc`); 0 for a single-face file. */
   readonly faceIndex: number;
 }
+/**
+ * A file the bridge reads by byte range from `url` instead of holding a `File`, for media an
+ * application keeps on disk or a server. `url` must answer `Range` requests (RFC 9110) with `206`
+ * and `Content-Range`, from the page and its workers (cross-origin: with CORS). The import learns
+ * the size from a first range request; `type` and `lastModified` default to the response's
+ * `Content-Type` and `Last-Modified`.
+ */
+export interface MediaReference {
+  readonly url: string | URL;
+  readonly name: string;
+  readonly type?: string;
+  readonly lastModified?: number;
+  /**
+   * Where a native export service finds the same file on its machine. `nativeAssets` sends this
+   * path instead of the file's bytes; leave it out when the service runs elsewhere.
+   */
+  readonly path?: string;
+}
+/**
+ * A {@link MediaReference} the bridge opened, as a media adapter and {@link RuntimeAsset.file} see
+ * it: the `Blob` reading methods over range requests, and `read(start, end)` for bytes
+ * `[start, end)`.
+ */
+export interface RangeFile {
+  readonly url: string;
+  readonly name: string;
+  readonly size: number;
+  readonly type: string;
+  readonly lastModified: number;
+  readonly path?: string;
+  read(start: number, end: number): Promise<Uint8Array>;
+  slice(start?: number, end?: number, type?: string): RangeFile;
+  arrayBuffer(): Promise<ArrayBuffer>;
+  bytes(): Promise<Uint8Array>;
+  text(): Promise<string>;
+  stream(): ReadableStream<Uint8Array>;
+  /** The whole file read into a `Blob`. */
+  blob(): Promise<Blob>;
+}
 /** A source's media as this browser session holds it; never part of the document or its history. */
 export interface RuntimeAsset {
   readonly id: string;
@@ -74,7 +113,7 @@ export interface RuntimeAsset {
    * What the source is read from. A still is decoded from it on each raster cache miss; no decoded
    * picture is kept with the asset.
    */
-  readonly file?: File;
+  readonly file?: File | RangeFile;
   /** Small preview canvas; `dataUrl` is a ready-to-use image URL. */
   readonly thumbnail?: {
     readonly dataUrl?: string;
@@ -138,7 +177,7 @@ export interface BrowserMediaAdapter {
    * `provider_stalled` past `EXTENSIONS_CALL_TIMEOUT_MS`, and when `signal` aborts.
    */
   stage(
-    file: File,
+    file: File | RangeFile,
     signal: AbortSignal,
     options?: {
       /** Pass `false` to skip computing the fingerprint. Default `true`. */
@@ -147,7 +186,7 @@ export interface BrowserMediaAdapter {
   ): Promise<StagedAsset>;
   /** Stages numbered PNGs or OpenEXR images as one image sequence. */
   stageSequence?(
-    files: readonly File[],
+    files: readonly (File | RangeFile)[],
     options: {
       readonly frameRate: { readonly num: number; readonly den: number };
       readonly missing: "reject" | "hold" | "blank";
@@ -508,7 +547,9 @@ export interface BrowserBridge {
   }>;
   /**
    * Stages `files` and adds them to the document in one undoable transaction. With `relinkId`,
-   * the single file replaces that asset's media, keeping its ID and clips.
+   * the single file replaces that asset's media, keeping its ID and clips. A
+   * {@link MediaReference} is read by range from its URL rather than held, and a reference whose
+   * URL does not answer range requests is refused (`unreadable_media`).
    *
    * Rejects when staging fails, when `signal` aborts, when the session loads another project
    * meanwhile (`stale_import`), for an unknown relink target (`missing_asset`), and for a relink
@@ -516,13 +557,13 @@ export interface BrowserBridge {
    * when any file fails.
    */
   importFiles(
-    files: readonly File[],
+    files: readonly (File | MediaReference)[],
     options?: { signal?: AbortSignal; relinkId?: string },
   ): Promise<{ assetIds: string[] }>;
   /** `importFiles([file], { relinkId: id })`. */
   relink(
     id: string,
-    file: File,
+    file: File | MediaReference,
     options?: { signal?: AbortSignal },
   ): Promise<{ assetIds: string[] }>;
   /**
@@ -530,7 +571,7 @@ export interface BrowserBridge {
    * the numbering is refused unless `missing` holds or blanks it.
    */
   importSequence(
-    files: readonly File[],
+    files: readonly (File | MediaReference)[],
     options?: {
       frameRate?: { readonly num: number; readonly den: number };
       missing?: "reject" | "hold" | "blank";
@@ -544,7 +585,7 @@ export interface BrowserBridge {
    */
   relinkSequence(
     id: string,
-    files: readonly File[],
+    files: readonly (File | MediaReference)[],
     options?: { signal?: AbortSignal },
   ): Promise<{ assetIds: string[] }>;
   /**
@@ -613,8 +654,9 @@ export interface BrowserBridge {
   /**
    * The files a native export of `document` (the current one by default) needs, for upload:
    * shown media (or their proxies with `media: "proxies"`), an image sequence's frames, font
-   * files, LUTs, and text rendered to PNG. Rejects as `startExport` does when the media is not
-   * ready (`ConformError`) or the document does not compile.
+   * files, LUTs, and text rendered to PNG. Media imported from a {@link MediaReference} with a
+   * `path` is sent as that path, and without one as its bytes read whole. Rejects as `startExport`
+   * does when the media is not ready (`ConformError`) or the document does not compile.
    */
   nativeAssets(
     document?: import("../core/document.js").EditorDocument,

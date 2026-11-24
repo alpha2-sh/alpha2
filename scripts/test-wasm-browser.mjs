@@ -145,6 +145,25 @@ const server = createServer(async (request, response) => {
       ".webm": "video/webm",
     }[path.slice(path.lastIndexOf("."))];
     response.setHeader("content-type", type ?? "application/octet-stream");
+    const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range ?? "");
+    if (range) {
+      const first = Number(range[1]);
+      const last = Math.min(
+        range[2] === "" ? bytes.length - 1 : Number(range[2]),
+        bytes.length - 1,
+      );
+      if (first > last) {
+        response
+          .writeHead(416, { "content-range": `bytes */${bytes.length}` })
+          .end();
+        return;
+      }
+      response.writeHead(206, {
+        "content-range": `bytes ${first}-${last}/${bytes.length}`,
+      });
+      response.end(bytes.subarray(first, last + 1));
+      return;
+    }
     response.end(bytes);
   } catch {
     response.writeHead(404).end();
