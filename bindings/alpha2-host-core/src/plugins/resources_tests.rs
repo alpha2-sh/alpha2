@@ -346,20 +346,22 @@ fn links_are_followed_by_name_and_loops_broken_links_and_odd_names_are_refused()
     let broken = dir.join("broken");
     std::fs::create_dir_all(&broken).expect("dir");
     symlink("nowhere", broken.join("gone")).expect("broken link");
-    let mut cases = vec![
-        (looped, slot_reasons::TOO_DEEP),
-        (broken, slot_reasons::MISSING),
-    ];
     #[cfg(target_os = "linux")]
-    {
+    let not_utf8 = {
         use std::os::unix::ffi::OsStrExt;
         let odd = dir.join("odd");
         std::fs::create_dir_all(&odd).expect("dir");
         std::fs::write(odd.join(std::ffi::OsStr::from_bytes(b"bad\xffname")), b"")
             .expect("a name that is not UTF-8");
-        cases.push((odd, slot_reasons::NOT_UTF8));
-    }
-    for (extra, expected) in cases {
+        Some((odd, slot_reasons::NOT_UTF8))
+    };
+    #[cfg(not(target_os = "linux"))]
+    let not_utf8 = None;
+    let cases = [
+        (looped, slot_reasons::TOO_DEEP),
+        (broken, slot_reasons::MISSING),
+    ];
+    for (extra, expected) in cases.into_iter().chain(not_utf8) {
         let refused = resolve(
             &slots(),
             &[("model", &model), ("extra", &extra)],
