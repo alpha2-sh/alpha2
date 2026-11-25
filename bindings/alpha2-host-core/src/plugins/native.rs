@@ -99,7 +99,7 @@ unsafe fn borrowed<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
 }
 
 /// # Safety
-/// `context` is the `RefCell<State>` [`NativeTransport::new`] put in the host table.
+/// `context` is the `RefCell<State>` [`NativeInstance::new`] put in the host table.
 unsafe fn state<'a>(context: *mut c_void) -> &'a RefCell<State> {
     // SAFETY: as documented; the box outlives every call.
     unsafe { &*context.cast::<RefCell<State>>() }

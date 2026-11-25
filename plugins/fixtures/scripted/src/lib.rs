@@ -14,9 +14,11 @@
 //!
 //! As a native library, for isolation tests: a delivery index in `segv_at` makes that delivery
 //! write through a null pointer, in `write_input_at` write into its frame, in `sleep_at` sleep
-//! for good, and in `print_at` print to standard output first; `spawn_at` (`delivery`, `pid_file`, `then`) starts a long-lived process, writes
-//! its id to `pid_file`, then sleeps for good, or with `then` `abort` or `return` does that. `report` names a file `begin` writes this process's id and open
-//! descriptors to, and `stderr_lines` makes `begin` write that many lines to standard error.
+//! for good, and in `print_at` print to standard output first; `spawn_at` (`delivery`,
+//! `pid_file`, `then`) starts a long-lived process, writes its id to `pid_file`, then sleeps for
+//! good, or with `then` `abort` or `return` does that. `report` names a file `begin` writes this
+//! process's id and open descriptors to, and `stderr_lines` makes `begin` write that many lines to
+//! standard error.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
 use serde_json::Value;

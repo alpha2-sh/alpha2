@@ -699,9 +699,9 @@ pub struct LoadRequest<'a> {
 
 /// Loads the artifact `policy` picks from the request's manifest, fetching it and every pinned
 /// resource through `fetch`. Slots are resolved before any download; their files are read only
-/// when the plugin asks for them. Once `cancel` is
-/// set, the load stops before the next file, and a wasm call of the plugin it returns stops within
-/// about 50 ms; a module compile and a native call run to their end.
+/// when the plugin asks for them. Once `cancel` is set, the load stops before the next file, and
+/// a wasm call of the plugin it returns or its [`Isolation::Child`] worker stops within about
+/// 50 ms; a module compile and a native call in this process run to their end.
 ///
 /// # Errors
 /// A [`PluginError`] for the first check that fails, [`CANCELLED`] once `cancel` is set.
