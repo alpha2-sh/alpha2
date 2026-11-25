@@ -1,7 +1,3 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
-
 use alpha2_engine::extract::{
     Direction, DriveError, ExtractRequest, ExtractSession, FrameFrom, Need, SuppliedAudio,
     SuppliedFrame, Supplier, drive,
@@ -10,7 +6,7 @@ use alpha2_eval::edit::{DataRef, EditRequest, Target, Times, apply};
 use alpha2_model::{DataSet, DataValues, Project};
 use serde_json::{Value, json};
 
-use super::tests::MANIFEST_SHA256;
+use super::tests::{MANIFEST_SHA256, Packed, packed};
 use super::*;
 
 const WIDTH: u32 = 160;
@@ -18,39 +14,6 @@ const HEIGHT: u32 = 90;
 const TICKS_PER_FRAME: i64 = 4_000;
 const CUT_FRAMES: [i64; 3] = [111, 141, 166];
 const BLACK_FRAMES: (i64, i64) = (141, 166);
-
-fn packed() -> &'static Path {
-    static PACKED: OnceLock<PathBuf> = OnceLock::new();
-    PACKED.get_or_init(|| {
-        let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-        let out = plugins.join("target/tmp/scenes-packed");
-        let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .args(["run", "--manifest-path"])
-            .arg(plugins.join("Cargo.toml"))
-            .arg("--target-dir")
-            .arg(plugins.join("target"))
-            .args(["-p", "alpha2-plugin-pack", "--"])
-            .arg(plugins.join("first-party/scenes"))
-            .arg("--out")
-            .arg(&out)
-            .env_remove("CARGO_TARGET_DIR")
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "plugins/first-party/scenes packs");
-        out
-    })
-}
-
-struct Packed;
-
-impl Fetch for Packed {
-    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
-        Ok(Fetched {
-            path: packed().join(url),
-            local: true,
-        })
-    }
-}
 
 struct SplitMix64(u64);
 
@@ -169,8 +132,10 @@ fn project(duration: i64, data: &[DataSet]) -> Project {
 }
 
 fn packed_manifest() -> PluginManifest {
-    parse_manifest(&std::fs::read_to_string(packed().join("manifest.json")).expect("manifest"))
-        .expect("manifest")
+    parse_manifest(
+        &std::fs::read_to_string(packed("scenes").join("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest")
 }
 
 fn extract(
@@ -188,7 +153,7 @@ fn extract(
             supplied: &BTreeMap::new(),
         },
         policy,
-        &mut Packed,
+        &mut Packed("scenes"),
         &CancelToken::default(),
     )
     .expect("plugin loads");

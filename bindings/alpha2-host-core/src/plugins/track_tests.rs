@@ -5,17 +5,13 @@
     clippy::cast_sign_loss
 )]
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
-
 use alpha2_engine::extract::{
     Direction, ExtractSession, FrameFrom, Need, SuppliedAudio, SuppliedFrame, Supplier, drive,
 };
 use alpha2_model::{DataSet, DataValues, Project};
 use serde_json::{Value, json};
 
-use super::tests::MANIFEST_SHA256;
+use super::tests::{MANIFEST_SHA256, Packed, packed};
 use super::*;
 
 const WIDTH: u32 = 320;
@@ -27,39 +23,6 @@ const PATCH_SIDE: f64 = 56.0;
 const CENTRE_PIXELS: f64 = 0.1;
 const ROTATION_DEGREES: f64 = 0.1;
 const SCALE_SHARE: f64 = 0.002;
-
-fn packed() -> &'static Path {
-    static PACKED: OnceLock<PathBuf> = OnceLock::new();
-    PACKED.get_or_init(|| {
-        let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-        let out = plugins.join("target/tmp/track-packed");
-        let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .args(["run", "--manifest-path"])
-            .arg(plugins.join("Cargo.toml"))
-            .arg("--target-dir")
-            .arg(plugins.join("target"))
-            .args(["-p", "alpha2-plugin-pack", "--"])
-            .arg(plugins.join("first-party/track"))
-            .arg("--out")
-            .arg(&out)
-            .env_remove("CARGO_TARGET_DIR")
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "plugins/first-party/track packs");
-        out
-    })
-}
-
-struct Packed;
-
-impl Fetch for Packed {
-    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
-        Ok(Fetched {
-            path: packed().join(url),
-            local: true,
-        })
-    }
-}
 
 fn hash(seed: u32, x: i32, y: i32) -> f64 {
     let mut h = seed.wrapping_mul(0x9e37_79b1)
@@ -194,9 +157,10 @@ fn region_inside_picked_patch() -> Value {
 }
 
 fn track_from_picked_both_ways(policy: &Policy) -> (DataSet, DataSet) {
-    let manifest =
-        parse_manifest(&std::fs::read_to_string(packed().join("manifest.json")).expect("manifest"))
-            .expect("manifest");
+    let manifest = parse_manifest(
+        &std::fs::read_to_string(packed("track").join("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest");
     let params = json!({ "region": region_inside_picked_patch() });
     let mut plugin = load(
         LoadRequest {
@@ -206,7 +170,7 @@ fn track_from_picked_both_ways(policy: &Policy) -> (DataSet, DataSet) {
             supplied: &BTreeMap::new(),
         },
         policy,
-        &mut Packed,
+        &mut Packed("track"),
         &CancelToken::default(),
     )
     .expect("plugin loads");
@@ -312,7 +276,9 @@ fn the_track_plugin_follows_the_patch_both_ways_alike_as_wasm_and_native() {
 }
 
 fn packed_descriptor() -> Descriptor {
-    parse_manifest(&std::fs::read_to_string(packed().join("manifest.json")).expect("manifest"))
-        .expect("manifest")
-        .descriptor
+    parse_manifest(
+        &std::fs::read_to_string(packed("track").join("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest")
+    .descriptor
 }

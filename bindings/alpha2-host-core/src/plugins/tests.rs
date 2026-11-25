@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use alpha2_engine::extract::fixtures::{Digest, Scripted, digest_descriptor, video_input};
 use alpha2_engine::extract::{
@@ -101,6 +101,43 @@ fn entry(path: &Path) -> Value {
 }
 
 /// A fresh directory under `built().dir` for files a test manifest names.
+pub(super) fn packed(name: &'static str) -> PathBuf {
+    static PACKED: Mutex<BTreeMap<&str, PathBuf>> = Mutex::new(BTreeMap::new());
+    let mut packed = PACKED.lock().unwrap_or_else(PoisonError::into_inner);
+    packed
+        .entry(name)
+        .or_insert_with(|| {
+            let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+            let out = plugins.join(format!("target/tmp/{name}-packed"));
+            let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+                .args(["run", "--manifest-path"])
+                .arg(plugins.join("Cargo.toml"))
+                .arg("--target-dir")
+                .arg(plugins.join("target"))
+                .args(["-p", "alpha2-plugin-pack", "--"])
+                .arg(plugins.join("first-party").join(name))
+                .arg("--out")
+                .arg(&out)
+                .env_remove("CARGO_TARGET_DIR")
+                .status()
+                .expect("cargo runs");
+            assert!(status.success(), "plugins/first-party/{name} packs");
+            out
+        })
+        .clone()
+}
+
+pub(super) struct Packed(pub(super) &'static str);
+
+impl Fetch for Packed {
+    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
+        Ok(Fetched {
+            path: packed(self.0).join(url),
+            local: true,
+        })
+    }
+}
+
 pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = built()
         .dir
