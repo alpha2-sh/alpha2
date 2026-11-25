@@ -1,6 +1,6 @@
 //! Rust extractors, the inputs they are supplied, and the loop that runs them.
 
-use super::descriptor::{Descriptor, Direction};
+use super::descriptor::{Descriptor, Direction, VideoFormat};
 use super::session::{
     AudioInput, Delivery, Emit, ExtractSession, Need, RunContext, SessionError, Step,
     SuppliedAudio, SuppliedFrame, VideoInput,
@@ -136,6 +136,15 @@ pub trait Extractor {
     /// The extractor's failure, which ends the run.
     fn video(&mut self, frame: &VideoInput, out: &mut Emitter) -> Result<(), ExtractorError>;
 
+    /// Memory of exactly `len` bytes for the next supplied frame's delivered pixels, for an
+    /// extractor that would otherwise copy them. When it gives some and the frame is written
+    /// there, the `video` call that delivers it gets empty [`VideoInput::bytes`]. `None`, the
+    /// default, keeps the pixels in `bytes`.
+    fn frame_buffer(&mut self, len: usize) -> Option<&mut [u8]> {
+        let _ = len;
+        None
+    }
+
     /// An audio block of the current pass.
     ///
     /// # Errors
@@ -157,6 +166,21 @@ pub trait Supplier {
     /// # Errors
     /// A decode or render failure, which ends the run.
     fn frame(&mut self, need: &Need) -> Result<Option<SuppliedFrame>, String>;
+
+    /// [`Self::frame`] for a [`Need`] of RGBA frames, writing the pixels into the memory
+    /// [`FramePlace::buffer`] gives for their length when it gives some; the returned frame's
+    /// `rgba` is then empty. The default supplies the frame as [`Self::frame`] does.
+    ///
+    /// # Errors
+    /// As [`Self::frame`].
+    fn frame_into(
+        &mut self,
+        need: &Need,
+        place: &mut FramePlace<'_>,
+    ) -> Result<Option<SuppliedFrame>, String> {
+        let _ = place;
+        self.frame(need)
+    }
 
     /// The block a [`Need::SourceAudio`] or [`Need::TimelineAudio`] asks for.
     ///
@@ -195,6 +219,78 @@ impl From<SessionError> for DriveError {
     }
 }
 
+/// Where a supplier may write a frame's pixels: memory the extractor offers.
+pub struct FramePlace<'a> {
+    extractor: &'a mut dyn Extractor,
+    placed: Option<usize>,
+}
+
+impl FramePlace<'_> {
+    /// The extractor's memory for a frame of `len` bytes, which the supplier then fills; `None`
+    /// when it offers none, and the frame goes in `rgba`.
+    pub fn buffer(&mut self, len: usize) -> Option<&mut [u8]> {
+        let buffer = self.extractor.frame_buffer(len)?;
+        self.placed = Some(len);
+        Some(buffer)
+    }
+}
+
+/// Answers a frame need of `session` from `supplier`, in memory `extractor` offers when it
+/// offers some: the supplier writes RGBA frames there, the session a frame's luma; [`drive`]
+/// does this for every frame need.
+///
+/// # Errors
+/// [`DriveError::Supplier`] for the supplier's failure, [`DriveError::Session`] for a frame the
+/// session refuses.
+pub fn supply_frame(
+    session: &mut ExtractSession,
+    need: &Need,
+    extractor: &mut dyn Extractor,
+    supplier: &mut dyn Supplier,
+) -> Result<(), DriveError> {
+    let rgba = matches!(
+        need,
+        Need::SourceFrame {
+            format: VideoFormat::Rgba8,
+            ..
+        } | Need::TimelineFrame {
+            format: VideoFormat::Rgba8,
+            ..
+        }
+    );
+    if !rgba {
+        let Some(frame) = supplier.frame(need).map_err(DriveError::Supplier)? else {
+            return Ok(session.supply_end()?);
+        };
+        let luma = usize::try_from(u64::from(frame.width) * u64::from(frame.height)).ok();
+        return match luma.and_then(|len| extractor.frame_buffer(len)) {
+            Some(buffer) => Ok(session.supply_video_into(frame, buffer)?),
+            None => Ok(session.supply_video(frame)?),
+        };
+    }
+    let mut place = FramePlace {
+        extractor,
+        placed: None,
+    };
+    let frame = supplier
+        .frame_into(need, &mut place)
+        .map_err(DriveError::Supplier)?;
+    match (frame, place.placed) {
+        (None, _) => Ok(session.supply_end()?),
+        (Some(frame), None) => Ok(session.supply_video(frame)?),
+        (Some(frame), Some(len)) => {
+            let packed = u64::from(frame.width) * u64::from(frame.height) * 4;
+            if u64::try_from(len).ok() != Some(packed) {
+                return Err(DriveError::Supplier(format!(
+                    "a frame of {}x{} placed in {len} bytes",
+                    frame.width, frame.height
+                )));
+            }
+            Ok(session.supply_placed_video(frame)?)
+        }
+    }
+}
+
 /// Runs `extractor` through `session`, supplying inputs from `supplier`, and returns the
 /// session's data sets.
 ///
@@ -213,10 +309,7 @@ pub fn drive(
         match session.next() {
             Step::Need(need) => match &need {
                 Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
-                    match supplier.frame(&need).map_err(DriveError::Supplier)? {
-                        Some(frame) => session.supply_video(frame)?,
-                        None => session.supply_end()?,
-                    }
+                    supply_frame(&mut session, &need, extractor, supplier)?;
                 }
                 Need::SourceAudio { .. } | Need::TimelineAudio { .. } => {
                     let block = supplier.audio(&need).map_err(DriveError::Supplier)?;

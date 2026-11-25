@@ -13,8 +13,8 @@
 //! `words`, or `none` when the host gives none.
 //!
 //! As a native library, for isolation tests: a delivery index in `segv_at` makes that delivery
-//! write through a null pointer, in `sleep_at` sleep for good, and in `print_at` print to standard
-//! output first; `spawn_at` (`delivery`, `pid_file`, `then`) starts a long-lived process, writes
+//! write through a null pointer, in `write_input_at` write into its frame, in `sleep_at` sleep
+//! for good, and in `print_at` print to standard output first; `spawn_at` (`delivery`, `pid_file`, `then`) starts a long-lived process, writes
 //! its id to `pid_file`, then sleeps for good, or with `then` `abort` or `return` does that. `report` names a file `begin` writes this process's id and open
 //! descriptors to, and `stderr_lines` makes `begin` write that many lines to standard error.
 
@@ -32,6 +32,7 @@ pub struct Scripted {
     hog_at: Option<u64>,
     abort_at: Option<u64>,
     segv_at: Option<u64>,
+    write_input_at: Option<u64>,
     sleep_at: Option<u64>,
     print_at: Option<u64>,
     spawn_at: Option<(u64, String, String)>,
@@ -242,6 +243,7 @@ impl Extractor for Scripted {
             hog_at: index("hog_at"),
             abort_at: index("abort_at"),
             segv_at: index("segv_at"),
+            write_input_at: index("write_input_at"),
             sleep_at: index("sleep_at"),
             print_at: index("print_at"),
             spawn_at: context.params.get("spawn_at").and_then(|spawn| {
@@ -277,7 +279,7 @@ impl Extractor for Scripted {
         })
     }
 
-    fn video(&mut self, _frame: &Frame<'_>, out: &mut Emitter) -> Result<(), Error> {
+    fn video(&mut self, frame: &Frame<'_>, out: &mut Emitter) -> Result<(), Error> {
         let delivery = self.delivered;
         self.delivered += 1;
         assert!(
@@ -302,6 +304,10 @@ impl Extractor for Scripted {
             unsafe {
                 std::ptr::write_volatile(std::hint::black_box(std::ptr::null_mut::<u8>()), 1);
             };
+        }
+        if self.write_input_at == Some(delivery) {
+            // SAFETY: not sound by design: the frame is borrowed read-only from the host.
+            unsafe { frame.data.as_ptr().cast_mut().write_volatile(1) };
         }
         if self.sleep_at == Some(delivery) {
             sleep_for_good();

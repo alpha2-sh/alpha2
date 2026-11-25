@@ -5,7 +5,7 @@ use super::descriptor::{
     MAX_EXTRACTOR_OUTPUTS, MAX_EXTRACTOR_PASSES, MAX_OUTPUT_DESCRIPTION_CHARS,
     MAX_OUTPUT_LABEL_CHARS, OutputSpec, Pass, VideoFormat, plain_text,
 };
-use super::pixels::luma8_from_rgba8;
+use super::pixels::{luma8_from_rgba8, luma8_into};
 use alpha2_media::SourceId;
 use alpha2_model::{
     DataAnchor, DataInterval, DataKind, DataSamples, DataSet, DataSetId, DataValues, DataWord,
@@ -98,6 +98,49 @@ pub struct SuppliedAudio {
     pub channels: u32,
     /// `channels * frames` samples.
     pub samples: Vec<f32>,
+}
+
+enum Placement<'a> {
+    Bytes,
+    Placed,
+    Into(&'a mut [u8]),
+}
+
+fn frame_fits(
+    frame: &SuppliedFrame,
+    size: u32,
+    format: VideoFormat,
+    placement: &Placement<'_>,
+) -> Result<(), SessionError> {
+    let placed = matches!(placement, Placement::Placed);
+    if frame.width == 0 || frame.height == 0 || frame.width.max(frame.height) > size {
+        return Err(SessionError::UnexpectedSupply(
+            "the frame's size breaks the asked size".to_owned(),
+        ));
+    }
+    if placed && (format != VideoFormat::Rgba8 || !frame.rgba.is_empty()) {
+        return Err(SessionError::UnexpectedSupply(
+            "a placed frame answers an RGBA need and carries no buffer".to_owned(),
+        ));
+    }
+    let pixels = u64::from(frame.width) * u64::from(frame.height);
+    if !placed && u64::try_from(frame.rgba.len()).ok() != pixels.checked_mul(4) {
+        return Err(SessionError::UnexpectedSupply(
+            "the buffer is not width * height * 4 bytes".to_owned(),
+        ));
+    }
+    let bytes_per_pixel = match format {
+        VideoFormat::Rgba8 => 4,
+        VideoFormat::Luma8 => 1,
+    };
+    if let Placement::Into(buffer) = placement
+        && u64::try_from(buffer.len()).ok() != pixels.checked_mul(bytes_per_pixel)
+    {
+        return Err(SessionError::UnexpectedSupply(
+            "the memory for the frame is not its delivered length".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// A frame handed to the extractor.
@@ -905,6 +948,38 @@ impl ExtractSession {
     /// [`SessionError::UnexpectedSupply`] when no frame is asked for, or the frame's size, buffer
     /// or pts does not answer the need.
     pub fn supply_video(&mut self, frame: SuppliedFrame) -> Result<(), SessionError> {
+        self.supply_frame(frame, Placement::Bytes)
+    }
+
+    /// Answers an outstanding RGBA frame need with a frame whose pixels the supplier wrote into
+    /// the extractor's [`crate::extract::Extractor::frame_buffer`]: its `rgba` is empty, and so
+    /// is the delivered [`VideoInput::bytes`].
+    ///
+    /// # Errors
+    /// As [`Self::supply_video`], and when the need is not for RGBA frames.
+    pub fn supply_placed_video(&mut self, frame: SuppliedFrame) -> Result<(), SessionError> {
+        self.supply_frame(frame, Placement::Placed)
+    }
+
+    /// Answers an outstanding frame need, writing the delivered pixels (RGBA, or their luma)
+    /// into `buffer`, which holds exactly their bytes; the delivered [`VideoInput::bytes`] is
+    /// then empty.
+    ///
+    /// # Errors
+    /// As [`Self::supply_video`], and when `buffer` has another length.
+    pub fn supply_video_into(
+        &mut self,
+        frame: SuppliedFrame,
+        buffer: &mut [u8],
+    ) -> Result<(), SessionError> {
+        self.supply_frame(frame, Placement::Into(buffer))
+    }
+
+    fn supply_frame(
+        &mut self,
+        frame: SuppliedFrame,
+        placement: Placement<'_>,
+    ) -> Result<(), SessionError> {
         let Phase::Waiting(cursor, need) = &self.phase else {
             return Err(SessionError::UnexpectedSupply(
                 "no frame is asked for".to_owned(),
@@ -922,17 +997,7 @@ impl ExtractSession {
                 ));
             }
         };
-        if frame.width == 0 || frame.height == 0 || frame.width.max(frame.height) > size {
-            return Err(SessionError::UnexpectedSupply(
-                "the frame's size breaks the asked size".to_owned(),
-            ));
-        }
-        let pixels = u64::from(frame.width) * u64::from(frame.height);
-        if u64::try_from(frame.rgba.len()).ok() != pixels.checked_mul(4) {
-            return Err(SessionError::UnexpectedSupply(
-                "the buffer is not width * height * 4 bytes".to_owned(),
-            ));
-        }
+        frame_fits(&frame, size, format, &placement)?;
         if expected_pts.is_some_and(|time| time != frame.pts) {
             return Err(SessionError::UnexpectedSupply(
                 "the frame is not the asked time".to_owned(),
@@ -985,9 +1050,18 @@ impl ExtractSession {
         }
         self.delivered = Some(frame.pts);
         self.delivered_pts.insert(frame.pts);
-        let bytes = match format {
-            VideoFormat::Rgba8 => frame.rgba,
-            VideoFormat::Luma8 => luma8_from_rgba8(&frame.rgba),
+        let bytes = match (placement, format) {
+            (Placement::Placed, _) => Vec::new(),
+            (Placement::Into(buffer), VideoFormat::Rgba8) => {
+                buffer.copy_from_slice(&frame.rgba);
+                Vec::new()
+            }
+            (Placement::Into(buffer), VideoFormat::Luma8) => {
+                luma8_into(&frame.rgba, buffer);
+                Vec::new()
+            }
+            (Placement::Bytes, VideoFormat::Rgba8) => frame.rgba,
+            (Placement::Bytes, VideoFormat::Luma8) => luma8_from_rgba8(&frame.rgba),
         };
         let delivery = Delivery::Video(VideoInput {
             time: frame.pts,

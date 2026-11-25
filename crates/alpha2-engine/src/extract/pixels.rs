@@ -9,7 +9,7 @@ use alpha2_render::{
     SourceView,
 };
 
-use super::SuppliedFrame;
+use super::{FramePlace, SuppliedFrame};
 
 /// The size a frame of displayed size `(width, height)` is delivered at for a request `size`:
 /// contain-fit so the long edge is at most `size`, never upscaled, each edge rounded half up and
@@ -36,13 +36,20 @@ pub fn luma8_from_rgba8(rgba: &[u8]) -> Vec<u8> {
     rgba.as_chunks::<4>()
         .0
         .iter()
-        .map(|pixel| {
-            let weighted = 2_126 * u32::from(pixel[0])
-                + 7_152 * u32::from(pixel[1])
-                + 722 * u32::from(pixel[2]);
-            u8::try_from((weighted + 5_000) / 10_000).unwrap_or(u8::MAX)
-        })
+        .map(|pixel| luma(*pixel))
         .collect()
+}
+
+pub(crate) fn luma8_into(rgba: &[u8], out: &mut [u8]) {
+    for (to, pixel) in out.iter_mut().zip(rgba.as_chunks::<4>().0) {
+        *to = luma(*pixel);
+    }
+}
+
+fn luma(pixel: [u8; 4]) -> u8 {
+    let weighted =
+        2_126 * u32::from(pixel[0]) + 7_152 * u32::from(pixel[1]) + 722 * u32::from(pixel[2]);
+    u8::try_from((weighted + 5_000) / 10_000).unwrap_or(u8::MAX)
 }
 
 /// The mixer's mono fold of `planes`, whose speakers are `speakers`. Each plane is weighted by the
@@ -88,6 +95,29 @@ pub fn present_for_extraction(
     frame: Arc<DecodedVideoFrame>,
     size: u32,
 ) -> Result<SuppliedFrame, String> {
+    present(renderer, frame, size, None)
+}
+
+/// [`present_for_extraction`], writing the pixels into the memory `place` gives when it gives
+/// some; the returned frame's `rgba` is then empty.
+///
+/// # Errors
+/// A frame the renderer cannot present.
+pub fn present_for_extraction_into(
+    renderer: &CpuRenderer,
+    frame: Arc<DecodedVideoFrame>,
+    size: u32,
+    place: &mut FramePlace<'_>,
+) -> Result<SuppliedFrame, String> {
+    present(renderer, frame, size, Some(place))
+}
+
+fn present(
+    renderer: &CpuRenderer,
+    frame: Arc<DecodedVideoFrame>,
+    size: u32,
+    place: Option<&mut FramePlace<'_>>,
+) -> Result<SuppliedFrame, String> {
     let (width, height) = delivered_size(displayed_size(&frame), size);
     let target = RenderSize::new(width, height).map_err(|error| error.to_string())?;
     let pts = frame.pts;
@@ -118,27 +148,44 @@ pub fn present_for_extraction(
     let image = renderer
         .execute_graph(&graph)
         .map_err(|error| error.to_string())?;
+    let premultiplied = image.read_rgba8();
+    let placed = place.and_then(|place| place.buffer(premultiplied.len()));
+    let rgba = if let Some(buffer) = placed {
+        for (to, from) in buffer
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(premultiplied.as_chunks::<4>().0)
+        {
+            *to = unpremultiplied(*from);
+        }
+        Vec::new()
+    } else {
+        let mut rgba = premultiplied;
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            *pixel = unpremultiplied(*pixel);
+        }
+        rgba
+    };
     Ok(SuppliedFrame {
         pts,
         width,
         height,
-        rgba: unpremultiply(image.read_rgba8()),
+        rgba,
     })
 }
 
 /// Straight alpha from premultiplied RGBA8, rounded half up.
-fn unpremultiply(mut rgba: Vec<u8>) -> Vec<u8> {
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        let alpha = u32::from(pixel[3]);
-        if alpha == 0 {
-            pixel[..3].fill(0);
-        } else if alpha < 255 {
-            for channel in &mut pixel[..3] {
-                *channel =
-                    u8::try_from(((u32::from(*channel) * 255 * 2 + alpha) / (2 * alpha)).min(255))
-                        .unwrap_or(u8::MAX);
-            }
+fn unpremultiplied(mut pixel: [u8; 4]) -> [u8; 4] {
+    let alpha = u32::from(pixel[3]);
+    if alpha == 0 {
+        pixel[..3].fill(0);
+    } else if alpha < 255 {
+        for channel in &mut pixel[..3] {
+            *channel =
+                u8::try_from(((u32::from(*channel) * 255 * 2 + alpha) / (2 * alpha)).min(255))
+                    .unwrap_or(u8::MAX);
         }
     }
-    rgba
+    pixel
 }

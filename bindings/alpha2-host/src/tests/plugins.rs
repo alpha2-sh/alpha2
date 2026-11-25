@@ -895,3 +895,54 @@ fn capabilities_report_what_the_operator_allows_plugins() {
         json!({ "mode": "off", "slots": false, "isolation": "process" })
     );
 }
+
+#[test]
+fn a_native_plugin_in_a_worker_digests_the_timeline_frames_a_wasm_one_does() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-timeline");
+    let (manifest, sha256) = plugin_dir(&dir, "digest", true, true);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            (
+                "ALPHA2_PLUGIN_CACHE",
+                dir.join("cache").to_str().expect("utf-8"),
+            ),
+            ("ALPHA2_TEST_SERVE_ARGS", "--plugins native"),
+        ],
+    );
+    let mut digests = Vec::new();
+    for (id, plugin) in [
+        ("wasm", json!({})),
+        ("native", json!({ "allow_native": true })),
+    ] {
+        let mut request: Value = serde_json::from_str(&extract(
+            id,
+            "alpha2.test.digest",
+            &manifest,
+            &sha256,
+            &plugin,
+            &json!({}),
+        ))
+        .expect("request");
+        request["project"]["timeline"] = json!({ "tracks": [{ "id": "t", "name": "V", "kind": "video", "clips": [{
+            "id": "clip", "source_id": "v",
+            "timeline_range": { "start": 0, "end": 40_000 },
+            "source_range": { "start": 0, "end": 40_000 }
+        }]}]});
+        request["request"]["input"] =
+            json!({ "from": "timeline", "range": { "start": 0, "end": 40_000 }, "size": 96 });
+        serving.write(&request.to_string());
+        let response = answer(&serving, id);
+        assert_eq!(response["ok"], true, "{response}");
+        digests.push(response["result"]["dataSets"][0]["values"].clone());
+    }
+    assert!(
+        digests[0]
+            .as_array()
+            .is_some_and(|values| !values.is_empty()),
+        "{digests:?}"
+    );
+    assert_eq!(digests[0], digests[1]);
+    assert_eq!(serving.finish(), Some(0));
+}

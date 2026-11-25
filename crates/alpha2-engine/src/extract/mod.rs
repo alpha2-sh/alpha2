@@ -125,7 +125,10 @@ pub use descriptor::{
     MAX_EXTRACTOR_PASSES, MAX_OUTPUT_DESCRIPTION_CHARS, MAX_OUTPUT_LABEL_CHARS, OutputSpec, Pass,
     RequestInput, Suggest, VideoFormat,
 };
-pub use drive::{DriveError, Emitter, Extractor, ExtractorError, PassInfo, Supplier, drive};
+pub use drive::{
+    DriveError, Emitter, Extractor, ExtractorError, FramePlace, PassInfo, Supplier, drive,
+    supply_frame,
+};
 #[cfg(feature = "schema")]
 pub use manifest::plugin_manifest_json_schema;
 pub use manifest::{
@@ -139,6 +142,7 @@ pub use manifest::{
 };
 pub use pixels::{
     delivered_size, displayed_size, luma8_from_rgba8, mono_downmix, present_for_extraction,
+    present_for_extraction_into,
 };
 pub use session::{
     AudioInput, Delivery, Emit, ExtractSession, FrameFrom, Need, PassProgress, RequestError,

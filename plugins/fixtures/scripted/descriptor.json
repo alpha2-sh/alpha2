@@ -18,6 +18,7 @@
       "hog_at": { "type": "integer" },
       "abort_at": { "type": "integer" },
       "segv_at": { "type": "integer" },
+      "write_input_at": { "type": "integer" },
       "sleep_at": { "type": "integer" },
       "print_at": { "type": "integer" },
       "spawn_at": { "type": "object" },

@@ -7,6 +7,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::rc::Rc;
 
 use alpha2_media::CancelToken;
+use alpha2_os::MappedRegion;
+use alpha2_plugin_abi::video_format;
 
 use super::native::{Forward, NativeInstance};
 use super::resources::ResourceReader;
@@ -15,8 +17,14 @@ use super::{OutputCap, PluginError, codes, sha256_hex};
 
 /// The exit status of a worker whose host broke the wire or went away.
 const BROKEN: u8 = 3;
+const VIDEO_SHARED_BYTES: usize = 36;
 
 type Writer = Rc<RefCell<BufWriter<File>>>;
+
+#[cfg(unix)]
+type Input = alpha2_os::DescriptorReader;
+#[cfg(not(unix))]
+type Input = File;
 
 /// Writes a frame, or ends the process when the host is gone.
 fn send(writer: &Writer, tag: u8, parts: &[&[u8]]) {
@@ -56,6 +64,8 @@ pub fn main() -> ! {
         }
     };
     alpha2_os::close_descriptors_except(&[&input, &output]);
+    #[cfg(unix)]
+    let input = alpha2_os::DescriptorReader::new(input);
     let _ = alpha2_os::on_termination(|termination| {
         alpha2_os::exit_without_handlers(termination.exit_code());
     });
@@ -80,10 +90,11 @@ pub fn main() -> ! {
 }
 
 /// Answers the host's requests until it asks the worker to end.
-fn serve(input: &mut BufReader<File>, writer: &Writer) -> ! {
+fn serve(input: &mut BufReader<Input>, writer: &Writer) -> ! {
     let mut instance: Option<NativeInstance> = None;
     let mut reported = BTreeSet::new();
     let mut sequence = 0_u32;
+    let mut mapped: Option<MappedRegion> = None;
     loop {
         let frame = match wire::read_frame(input, wire::MAX_HOST_FRAME_BYTES) {
             Ok(frame) => frame,
@@ -93,6 +104,10 @@ fn serve(input: &mut BufReader<File>, writer: &Writer) -> ! {
             }
             Err(_) => alpha2_os::exit_without_handlers(BROKEN),
         };
+        let region = (frame.tag == host::REGION).then(|| open_region(input, &frame.payload));
+        if descriptors_pending(input) {
+            alpha2_os::exit_without_handlers(BROKEN);
+        }
         sequence = sequence.wrapping_add(1);
         let seq = sequence.to_le_bytes();
         match (frame.tag, instance.as_mut()) {
@@ -110,6 +125,28 @@ fn serve(input: &mut BufReader<File>, writer: &Writer) -> ! {
                     send(writer, child::LOAD_FAILED, &[&seq, &failure]);
                 }
             },
+            (host::REGION, _) => match region.flatten() {
+                Some(Ok(region)) => {
+                    mapped = Some(region);
+                    send(writer, child::REGION_MAPPED, &[&seq]);
+                }
+                Some(Err(error)) => {
+                    mapped = None;
+                    let error = PluginError::new(
+                        codes::LOAD_FAILED,
+                        format!("the worker cannot map the frames' memory: {error}"),
+                    );
+                    let failure = serde_json::to_vec(&Failure::from(&error)).unwrap_or_default();
+                    send(writer, child::REGION_FAILED, &[&seq, &failure]);
+                }
+                None => alpha2_os::exit_without_handlers(BROKEN),
+            },
+            (host::VIDEO_SHARED, Some(plugin)) => {
+                let Some(status) = shared_video(plugin, mapped.as_ref(), &frame.payload) else {
+                    alpha2_os::exit_without_handlers(BROKEN);
+                };
+                finish_call(plugin, writer, &mut reported, &seq, status);
+            }
             (host::DESCRIBE, Some(plugin)) => {
                 send(writer, child::DESCRIBED, &[&seq, &plugin.describe()]);
             }
@@ -122,6 +159,64 @@ fn serve(input: &mut BufReader<File>, writer: &Writer) -> ! {
             (_, None) => alpha2_os::exit_without_handlers(BROKEN),
         }
     }
+}
+
+#[cfg(unix)]
+fn open_region(
+    input: &mut BufReader<Input>,
+    payload: &[u8],
+) -> Option<std::io::Result<MappedRegion>> {
+    let len = usize::try_from(u64::from_le_bytes(payload.try_into().ok()?)).ok()?;
+    Some(MappedRegion::open(input.get_mut().take_descriptor()?, len))
+}
+
+#[cfg(not(unix))]
+fn open_region(
+    _input: &mut BufReader<Input>,
+    payload: &[u8],
+) -> Option<std::io::Result<MappedRegion>> {
+    let (len, handle) = payload.split_first_chunk::<8>()?;
+    let handle = u64::from_le_bytes(handle.try_into().ok()?);
+    let len = usize::try_from(u64::from_le_bytes(*len)).ok()?;
+    Some(MappedRegion::open(handle, len))
+}
+
+fn shared_video(
+    plugin: &mut NativeInstance,
+    region: Option<&MappedRegion>,
+    payload: &[u8],
+) -> Option<i32> {
+    if payload.len() != VIDEO_SHARED_BYTES {
+        return None;
+    }
+    let (width, height, format) = (
+        u32_at(payload, 8)?,
+        u32_at(payload, 12)?,
+        u32_at(payload, 16)?,
+    );
+    let offset = usize::try_from(u64_at(payload, 20)?).ok()?;
+    let len = usize::try_from(u64_at(payload, 28)?).ok()?;
+    let bytes_per_pixel = match format {
+        video_format::RGBA8 => 4,
+        video_format::LUMA8 => 1,
+        _ => return None,
+    };
+    let packed = u64::from(width) * u64::from(height) * bytes_per_pixel;
+    if usize::try_from(packed).ok()? != len {
+        return None;
+    }
+    let pixels = region?.as_slice().get(offset..offset.checked_add(len)?)?;
+    Some(plugin.video(i64_at(payload, 0)?, (width, height, format), pixels))
+}
+
+#[cfg(unix)]
+fn descriptors_pending(input: &BufReader<Input>) -> bool {
+    input.get_ref().pending() > 0
+}
+
+#[cfg(not(unix))]
+const fn descriptors_pending(_input: &BufReader<Input>) -> bool {
+    false
 }
 
 /// Loads the library a `load` frame names.
@@ -158,6 +253,10 @@ fn load(payload: &[u8], writer: &Writer) -> Result<NativeInstance, PluginError> 
 
 fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(*bytes.get(at..at + 4)?.first_chunk()?))
+}
+
+fn u64_at(bytes: &[u8], at: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(*bytes.get(at..at + 8)?.first_chunk()?))
 }
 
 fn i64_at(bytes: &[u8], at: usize) -> Option<i64> {
