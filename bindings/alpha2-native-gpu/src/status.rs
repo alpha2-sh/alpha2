@@ -1,10 +1,12 @@
 //! A native GPU helper's failure as a typed error.
 //!
 //! Each helper returns the failing step and its platform status
-//! (`include/alpha2_native_gpu_status.h`). This maps the status through its backend's codes so
-//! a lost device, exhausted memory, or timeout reaches the host as a [`GpuFault`]. Every
-//! backend's table compiles on every target, so the D3D12 and Metal codes are tested on Linux.
+//! (`include/alpha2_native_gpu_status.h`). [`classify`] names the step without `FFmpeg` types;
+//! with `hwdevice`, [`helper_failure`] maps the status through its backend's codes so a lost
+//! device, exhausted memory, or timeout reaches the host as a [`GpuFault`]. Every backend's table
+//! compiles on every target, so the D3D12 and Metal codes are tested on Linux.
 
+#[cfg(feature = "hwdevice")]
 use alpha2_ffmpeg_bridge::{BridgeError, GpuFault, NativeGpuBackend, NativeGpuFailure};
 
 use crate::interop::{
@@ -21,6 +23,31 @@ use crate::interop::{
     ALPHA2_GPU_STEP_RESET_COMMAND_POOL, ALPHA2_GPU_STEP_RESET_FENCE, ALPHA2_GPU_STEP_UNSUPPORTED,
     ALPHA2_GPU_STEP_WAIT_FENCE, ALPHA2_GPU_STEP_WAIT_SEMAPHORE,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HelperFailure {
+    Arguments,
+    Unsupported,
+    Call(&'static str),
+}
+
+impl HelperFailure {
+    pub(crate) const fn refusal(self) -> Option<&'static str> {
+        match self {
+            Self::Arguments => Some("native GPU helper arguments do not belong together"),
+            Self::Unsupported => Some("frame is not one the native GPU helper handles"),
+            Self::Call(_) => None,
+        }
+    }
+}
+
+pub(crate) const fn classify(step: i32) -> HelperFailure {
+    match step {
+        ALPHA2_GPU_STEP_ARGUMENTS => HelperFailure::Arguments,
+        ALPHA2_GPU_STEP_UNSUPPORTED => HelperFailure::Unsupported,
+        step => HelperFailure::Call(step_name(step)),
+    }
+}
 
 const fn step_name(step: i32) -> &'static str {
     match step {
@@ -55,6 +82,7 @@ const fn step_name(step: i32) -> &'static str {
     }
 }
 
+#[cfg(feature = "hwdevice")]
 const fn vulkan_fault(status: i32) -> Option<GpuFault> {
     match status {
         // VK_TIMEOUT
@@ -69,6 +97,7 @@ const fn vulkan_fault(status: i32) -> Option<GpuFault> {
     }
 }
 
+#[cfg(feature = "hwdevice")]
 #[allow(clippy::cast_possible_wrap)] // HRESULTs are the bits of these u32 codes.
 const fn d3d12_fault(status: i32) -> Option<GpuFault> {
     const E_OUTOFMEMORY: i32 = 0x8007_000E_u32 as i32;
@@ -91,6 +120,7 @@ const fn d3d12_fault(status: i32) -> Option<GpuFault> {
     }
 }
 
+#[cfg(feature = "hwdevice")]
 /// Fault named by a `CVReturn` from `CoreVideo`'s Metal texture cache.
 const fn metal_fault(status: i32) -> Option<GpuFault> {
     match status {
@@ -104,20 +134,15 @@ const fn metal_fault(status: i32) -> Option<GpuFault> {
 ///
 /// A helper's refusal of its inputs is invalid input; everything else is a
 /// [`BridgeError::NativeGpu`] carrying the step, the raw status and any fault it names.
+#[cfg(feature = "hwdevice")]
 pub(crate) fn helper_failure(
     backend: NativeGpuBackend,
     operation: &'static str,
     step: i32,
     status: i32,
 ) -> BridgeError {
-    match step {
-        ALPHA2_GPU_STEP_ARGUMENTS => {
-            return BridgeError::InvalidInput("native GPU helper arguments do not belong together");
-        }
-        ALPHA2_GPU_STEP_UNSUPPORTED => {
-            return BridgeError::InvalidInput("frame is not one the native GPU helper handles");
-        }
-        _ => {}
+    if let Some(refusal) = classify(step).refusal() {
+        return BridgeError::InvalidInput(refusal);
     }
     let fault = if step == ALPHA2_GPU_STEP_HOST_ALLOCATION {
         Some(GpuFault::HostMemory)
@@ -137,7 +162,7 @@ pub(crate) fn helper_failure(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "hwdevice"))]
 mod tests {
     use super::*;
 

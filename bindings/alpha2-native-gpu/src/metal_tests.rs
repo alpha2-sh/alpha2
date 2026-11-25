@@ -5,10 +5,14 @@
 //! recorded as the `metal` capability.
 
 use std::ffi::c_void;
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
 use std::sync::Arc;
 
-use alpha2_ffmpeg_bridge::VideoToolboxFrameLease;
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
+use alpha2_ffmpeg_bridge::{BridgeError, VideoToolboxFrameLease};
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
 use rsmpeg::avutil::AVFrame;
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
 use rsmpeg::ffi;
 
 use super::*;
@@ -85,6 +89,12 @@ fn shared_context_without(withheld: wgpu::Features) -> Option<SharedMetalContext
 }
 
 struct PixelBuffer(CVPixelBufferRef);
+
+// SAFETY: CoreVideo pixel buffers are reference counted thread-safely, and the tests write one
+// only while nothing samples it.
+unsafe impl Send for PixelBuffer {}
+// SAFETY: shared references never touch the buffer.
+unsafe impl Sync for PixelBuffer {}
 
 impl Drop for PixelBuffer {
     fn drop(&mut self) {
@@ -242,6 +252,7 @@ fn fill(buffer: &PixelBuffer, ten_bit: bool) {
 
 /// An `AV_PIX_FMT_VIDEOTOOLBOX` frame holding `buffer`, as a decoder or encoder pool hands it
 /// over.
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
 fn frame(buffer: PixelBuffer, width: i32, height: i32) -> AVFrame {
     unsafe extern "C" fn release(_: *mut c_void, data: *mut u8) {
         // SAFETY: `data` is the pixel buffer whose reference the frame took.
@@ -423,11 +434,10 @@ fn validated<T>(context: &SharedMetalContext, test: impl FnOnce() -> T) -> T {
 fn import(
     context: &SharedMetalContext,
     buffer: PixelBuffer,
-    (width, height): (i32, i32),
-) -> Result<ImportedMetalFrame, BridgeError> {
-    context.import_surface(Arc::new(VideoToolboxFrameLease::new(frame(
-        buffer, width, height,
-    ))))
+) -> Result<ImportedMetalFrame, MetalImportError> {
+    let raw = buffer.0;
+    // SAFETY: the owner keeps the buffer alive, and nothing writes it while imported.
+    unsafe { context.import_pixel_buffer(raw, Box::new(buffer)) }
 }
 
 #[test]
@@ -450,8 +460,8 @@ fn a_decoded_surface_imports_as_the_planes_it_holds_at_either_depth() {
         let buffer = pixel_buffer(width as usize, height as usize, format, true);
         fill(&buffer, ten_bit);
         validated(&context, || {
-            let imported = import(&context, buffer, (64, 32))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let imported =
+                import(&context, buffer).unwrap_or_else(|error| panic!("{name}: {error}"));
             let layout = if ten_bit {
                 NativePlaneLayout::P010
             } else {
@@ -495,7 +505,7 @@ fn a_ten_bit_surface_is_refused_on_a_device_without_sixteen_bit_planes() {
         "a device without 16-bit textures imports 10-bit planes"
     );
     let buffer = pixel_buffer(64, 32, PIXEL_FORMAT_420_10_VIDEO_RANGE, true);
-    let error = import(&context, buffer, (64, 32)).expect_err("refused");
+    let error = import(&context, buffer).expect_err("refused");
     assert!(error.to_string().contains("16-bit"), "{error}");
 }
 
@@ -517,13 +527,9 @@ fn only_an_iosurface_backed_four_two_zero_buffer_imports() {
             "420v (64x32, 2 planes) is not an IOSurface-backed 4:2:0 buffer: no IOSurface",
         ),
     ] {
-        let error = import(&context, buffer, (64, 32)).expect_err(name);
-        assert!(error.to_string().contains(described), "{name}: {error}");
+        let error = import(&context, buffer).expect_err(name);
+        assert_eq!(error.to_string(), described, "{name}");
     }
-    let error = context
-        .import_surface(Arc::new(VideoToolboxFrameLease::new(AVFrame::new())))
-        .expect_err("a software frame");
-    assert_ne!(error.to_string(), "");
 }
 
 #[test]
@@ -567,8 +573,7 @@ fn the_visible_rectangle_is_the_clean_aperture_inside_the_buffer() {
         if let Some(size) = size {
             set_clean_aperture(&buffer, size, offset);
         }
-        let imported =
-            import(&context, buffer, (64, 32)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let imported = import(&context, buffer).unwrap_or_else(|error| panic!("{name}: {error}"));
         let [x, y, visible_width, visible_height] = imported.visible_rect;
         assert!(
             x + visible_width <= width && y + visible_height <= height,
@@ -642,18 +647,10 @@ fn a_render_into_the_encoder_planes_is_what_the_pixel_buffer_holds() {
     };
     // The second size has an odd-sized chroma plane.
     for (width, height) in [(64_usize, 32_usize), (66, 34)] {
-        let buffer = pixel_buffer(width, height, NV12_VIDEO, true);
-        let pointer = buffer.0;
-        // An extra reference keeps the buffer readable after the frame and planes are gone.
-        // SAFETY: a live buffer; `kept` releases the extra reference.
-        let kept = PixelBuffer(unsafe { CVPixelBufferRetain(pointer) });
-        let frame = frame(
-            buffer,
-            i32::try_from(width).expect("w"),
-            i32::try_from(height).expect("h"),
-        );
+        let kept = pixel_buffer(width, height, NV12_VIDEO, true);
         validated(&context, || {
-            let planes = context.encoder_planes(&frame).expect("encoder planes");
+            // SAFETY: `kept` is a live buffer for the call.
+            let planes = unsafe { context.pixel_buffer_planes(kept.0) }.expect("encoder planes");
             let extent = |value: usize| u32::try_from(value).expect("extent");
             assert_eq!(
                 (planes.luma.width(), planes.luma.height()),
@@ -672,7 +669,6 @@ fn a_render_into_the_encoder_planes_is_what_the_pixel_buffer_holds() {
                 (128.0 / 255.0, 192.0 / 255.0),
             );
         });
-        drop(frame);
         let mismatches = with_planes(&kept, |plane, bytes, stride| {
             let (columns, rows, expected): (usize, usize, &[u8]) = if plane == 0 {
                 (width, height, &[64])
@@ -713,8 +709,16 @@ fn only_an_iosurface_backed_eight_bit_video_range_buffer_is_an_encoder_target() 
             -4,
         ),
     ] {
-        let frame = frame(buffer, 64, 32);
-        let error = context.encoder_planes(&frame).expect_err(name);
+        // SAFETY: a live buffer for the call.
+        let error = unsafe { context.pixel_buffer_planes(buffer.0) }.expect_err(name);
+        assert_eq!(
+            error,
+            MetalImportError::NotRenderTarget {
+                plane: 0,
+                code: status
+            },
+            "{name}"
+        );
         assert!(
             error
                 .to_string()
@@ -722,10 +726,40 @@ fn only_an_iosurface_backed_eight_bit_video_range_buffer_is_an_encoder_target() 
             "{name}: {error}"
         );
     }
-    let error = context
-        .encoder_planes(&AVFrame::new())
-        .expect_err("a software frame");
-    assert!(error.to_string().starts_with("encoder frame:"), "{error}");
+}
+
+#[test]
+fn a_failed_plane_import_releases_the_planes_it_made_and_the_next_import_works() {
+    let Some(context) = shared_context() else {
+        return;
+    };
+    inject::fail_next_import_with(1, -6683);
+    let error = import(&context, pixel_buffer(64, 32, NV12_VIDEO, true)).expect_err("injected");
+    assert_eq!(
+        error.to_string(),
+        "Metal texture import failed at texture creation (CVReturn -6683)"
+    );
+    assert_eq!(inject::live_textures(), 0);
+    let imported = import(&context, pixel_buffer(64, 32, NV12_VIDEO, true)).expect("imports");
+    assert_eq!(inject::live_textures(), 2);
+    drop(imported);
+    assert_eq!(inject::live_textures(), 0);
+}
+
+#[test]
+fn a_pixel_buffer_names_its_iosurface() {
+    let backed = pixel_buffer(64, 32, NV12_VIDEO, true);
+    let plain = pixel_buffer(64, 32, NV12_VIDEO, false);
+    // SAFETY: live buffers and null, which the helper accepts.
+    let ids = unsafe {
+        [
+            pixel_buffer_surface_id(backed.0),
+            pixel_buffer_surface_id(plain.0),
+            pixel_buffer_surface_id(std::ptr::null_mut()),
+        ]
+    };
+    assert!(ids[0].is_some_and(|id| id != 0), "{ids:?}");
+    assert_eq!(ids[1..], [None, None]);
 }
 
 #[test]
@@ -757,15 +791,62 @@ fn helper_codes_have_words() {
     assert_eq!(four_cc_text(NV12_VIDEO), "420v");
     assert_eq!(four_cc_text(PIXEL_FORMAT_420_10_FULL_RANGE), "xf20");
     assert_eq!(four_cc_text(32), "0x00000020");
+    let helper = |step, status| MetalImportError::Helper {
+        operation: "texture import",
+        step,
+        status,
+    };
+    assert_eq!(
+        helper(crate::interop::ALPHA2_GPU_STEP_NO_OUTPUT, 0).to_string(),
+        "Metal texture import failed at result check"
+    );
+    assert_eq!(
+        helper(crate::interop::ALPHA2_GPU_STEP_ARGUMENTS, 0).to_string(),
+        "native GPU helper arguments do not belong together"
+    );
 }
 
-#[link(name = "CoreVideo", kind = "framework")]
-unsafe extern "C" {
-    fn CVPixelBufferRetain(buffer: CVPixelBufferRef) -> CVPixelBufferRef;
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
+#[test]
+fn the_videotoolbox_adapters_take_frames_and_refuse_software_ones() {
+    let Some(context) = shared_context() else {
+        return;
+    };
+    let buffer = pixel_buffer(64, 32, NV12_VIDEO, true);
+    fill(&buffer, false);
+    let imported = context
+        .import_surface(Arc::new(VideoToolboxFrameLease::new(frame(buffer, 64, 32))))
+        .expect("a hardware frame imports");
+    assert_eq!(imported.coded_size, [64, 32]);
+    let error = context
+        .import_surface(Arc::new(VideoToolboxFrameLease::new(frame(
+            pixel_buffer(64, 32, BGRA, true),
+            64,
+            32,
+        ))))
+        .expect_err("BGRA");
+    assert!(
+        matches!(&error, BridgeError::UnsupportedSurface(message)
+            if message.starts_with("VideoToolbox frame BGRA (64x32, 0 planes)")),
+        "{error}"
+    );
+    let error = context
+        .import_surface(Arc::new(VideoToolboxFrameLease::new(AVFrame::new())))
+        .expect_err("a software frame");
+    assert_ne!(error.to_string(), "");
+    let frame = frame(pixel_buffer(64, 32, NV12_VIDEO, true), 64, 32);
+    let planes = context.encoder_planes(&frame).expect("encoder planes");
+    assert_eq!((planes.luma.width(), planes.chroma.width()), (64, 32));
+    let error = context
+        .encoder_planes(&AVFrame::new())
+        .expect_err("a software frame");
+    assert!(error.to_string().starts_with("encoder frame:"), "{error}");
 }
 
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
 struct Conformance;
 
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
 impl crate::conformance::Backend for Conformance {
     type Context = SharedMetalContext;
     type Surface = VideoToolboxFrameLease;
@@ -813,6 +894,7 @@ impl crate::conformance::Backend for Conformance {
     }
 }
 
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
 #[test]
 fn the_metal_import_keeps_the_interop_contract() {
     crate::conformance::check::<Conformance>();

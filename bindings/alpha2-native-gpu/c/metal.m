@@ -1,5 +1,5 @@
 #include <CoreVideo/CoreVideo.h>
-#include <IOSurface/IOSurface.h>
+#include <IOSurface/IOSurfaceRef.h>
 #include <Metal/Metal.h>
 #include <VideoToolbox/VideoToolbox.h>
 #include <math.h>
@@ -185,7 +185,7 @@ int32_t alpha2_native_gpu_metal_encoder_plane(void *device, void *pixel_buffer,
  */
 int32_t alpha2_native_gpu_vt_hardware_decodes(uint32_t codec_type) {
     @autoreleasepool {
-        if (@available(macOS 11.0, *)) {
+        if (@available(macOS 11.0, iOS 26.2, *)) {
             VTRegisterSupplementalVideoDecoderIfAvailable((CMVideoCodecType)codec_type);
         }
         return VTIsHardwareDecodeSupported((CMVideoCodecType)codec_type) ? 1 : 0;
