@@ -1,6 +1,6 @@
 // The extractor contract every surface shares and its pure helpers; imports no media library.
 
-import type { DataSet } from "./generated/project-schema.js";
+import type { DataSet, MadeByPlugin } from "./generated/project-schema.js";
 
 /** What an extractor reads and emits; the same object `describe()` returns on every surface. */
 export interface ExtractorDescriptor {
@@ -143,6 +143,11 @@ export interface Extractor {
   audio?(block: ExtractAudio, out: ExtractEmitter): void | Promise<void>;
   /** Whole-range work (speech recognition) belongs here and may emit anywhere in the range. */
   end?(out: ExtractEmitter): void | Promise<void>;
+  /**
+   * The plugin build that ran, as the data's `made_by.plugin` records it; read once the run has
+   * ended. A plugin's extractor (`LoadedPlugin.extractor`) has it; an app's own has none.
+   */
+  madeByPlugin?(): MadeByPlugin;
 }
 
 /** Progress of one pass; `total` is `null` for source frames, whose count is not known ahead. */

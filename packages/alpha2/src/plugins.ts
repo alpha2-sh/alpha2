@@ -10,6 +10,12 @@ import type {
   ExtractorDescriptor,
 } from "./extract.js";
 import {
+  resolveSupplied,
+  SuppliedReader,
+  type SuppliedSet,
+  type SuppliedSource,
+} from "./plugin-supplied.js";
+import {
   MAX_MANIFEST_BYTES,
   PluginError,
   type PluginAbout,
@@ -41,6 +47,7 @@ export {
   PluginError,
   parsePluginManifest,
 } from "./plugin-manifest.js";
+export { MAX_SLOT_DEPTH, type SuppliedSource } from "./plugin-supplied.js";
 export type {
   PinnedPluginResource,
   PluginAbout,
@@ -136,6 +143,8 @@ export interface LoadPluginOptions {
   readonly signal?: AbortSignal;
   /** Called as each artifact and resource arrives, after each chunk of its body. */
   readonly onProgress?: (progress: PluginLoadProgress) => void;
+  /** What fills each resource slot, by the slot's name. */
+  readonly supplied?: Readonly<Record<string, SuppliedSource>>;
 }
 
 /** A loaded plugin: its manifest's identity and an extractor per run. */
@@ -517,6 +526,8 @@ class Run {
   #failure: string | undefined;
   #logLeft = LOG_BUDGET_BYTES;
   #logExhausted = false;
+  /** A failed read of a resource, which ends the call it happened in whatever it returns. */
+  #readFailure: PluginError | undefined;
 
   private constructor(descriptor: ExtractorDescriptor, memoryBytes: number) {
     this.#descriptor = descriptor;
@@ -524,15 +535,13 @@ class Run {
   }
 
   static async start(
-    module: WebAssembly.Module,
-    descriptor: ExtractorDescriptor,
-    resources: ReadonlyMap<string, Uint8Array>,
-    memoryBytes: number,
+    parts: PluginParts,
+    supplied: SuppliedReader | undefined,
   ): Promise<Run> {
-    const run = new Run(descriptor, memoryBytes);
+    const run = new Run(parts.descriptor, parts.memoryBytes);
     const instance = await WebAssembly.instantiate(
-      module,
-      run.#imports(resources),
+      parts.module,
+      run.#imports(parts.resources, supplied),
     );
     run.#exports = instance.exports as unknown as Exports;
     if (run.#exports.alpha2_abi() !== 1)
@@ -543,7 +552,10 @@ class Run {
     return run;
   }
 
-  #imports(resources: ReadonlyMap<string, Uint8Array>): WebAssembly.Imports {
+  #imports(
+    resources: ReadonlyMap<string, Uint8Array>,
+    supplied: SuppliedReader | undefined,
+  ): WebAssembly.Imports {
     const bytes = (ptr: number, len: number): Uint8Array =>
       new Uint8Array(this.#exports.memory.buffer, ptr, len);
     const utf8 = (ptr: number, len: number): string =>
@@ -570,8 +582,10 @@ class Run {
           }
         },
         resource_size: (name: number, nameLength: number): bigint => {
-          const found = resources.get(utf8(name, nameLength));
-          return found === undefined ? -1n : BigInt(found.byteLength);
+          const named = utf8(name, nameLength);
+          const size =
+            resources.get(named)?.byteLength ?? supplied?.size(named);
+          return size === undefined ? -1n : BigInt(size);
         },
         resource_read: (
           name: number,
@@ -579,10 +593,25 @@ class Run {
           dst: number,
           dstLength: number,
         ): number => {
-          const found = resources.get(utf8(name, nameLength));
-          if (found === undefined || found.byteLength !== dstLength) return 1;
-          bytes(dst, dstLength).set(found);
-          return 0;
+          if (this.#readFailure !== undefined) return 1;
+          const named = utf8(name, nameLength);
+          const found = resources.get(named);
+          if (found !== undefined) {
+            if (found.byteLength !== dstLength) return 1;
+            bytes(dst, dstLength).set(found);
+            return 0;
+          }
+          if (supplied?.size(named) !== dstLength) return 1;
+          try {
+            supplied.read(named, bytes(dst, dstLength));
+            return 0;
+          } catch (error) {
+            this.#readFailure =
+              error instanceof PluginError
+                ? error
+                : new PluginError("PLUGIN_FETCH_FAILED", String(error));
+            return 1;
+          }
         },
         fail: (ptr: number, len: number): void => {
           this.#failure = new TextDecoder().decode(
@@ -656,6 +685,9 @@ class Run {
       );
     const records = this.#records;
     this.#records = [];
+    const readFailure = this.#readFailure;
+    this.#readFailure = undefined;
+    if (readFailure !== undefined) throw readFailure;
     if (status === 0) return records;
     if (status === 1) {
       if (this.#undecodable !== undefined) throw this.#undecodable;
@@ -737,6 +769,7 @@ function nothingEmitted(records: readonly PluginRecord[], step: string): void {
 function abiContext(
   context: ExtractContext,
   params: Readonly<Record<string, unknown>>,
+  supplied: SuppliedSet,
 ): string {
   const raw = context as unknown as Record<string, unknown>;
   return JSON.stringify({
@@ -754,7 +787,7 @@ function abiContext(
           },
     frame_rate: raw.frameRate ?? null,
     params,
-    supplied: {},
+    supplied: supplied.context,
   });
 }
 
@@ -763,8 +796,12 @@ function abiContext(
  * whose bytes have SHA-256 `sha256`, with its wasm artifact and resources, each checked against
  * the hash and length the manifest pins.
  *
- * A resource slot the caller fills elsewhere is left empty here when it is optional; a required
- * one is refused, since the browser fills no slots.
+ * `supplied` fills the manifest's resource slots as `docs/plugin-abi.md` describes, with the
+ * limits and refusals of the native loaders: a `File` for a `file` slot, a directory handle or a
+ * directory picker's `File`s for a `directory` slot. They are resolved before any file is fetched
+ * and read when the plugin asks for one, in a worker; on a page, where browsers read files only
+ * asynchronously, every file of the filled slots is read into memory as a run begins. A run records
+ * the files it read in `made_by.plugin.supplied`.
  *
  * The manifest is checked as {@link parsePluginManifest} checks it before any other file is
  * fetched; a file is refused as soon as more bytes arrive than the manifest pins. `onProgress`
@@ -772,8 +809,8 @@ function abiContext(
  *
  * Rejects with a {@link PluginError} whose code is `PLUGIN_FETCH_FAILED`, `PLUGIN_HASH_MISMATCH`,
  * `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (no wasm artifact), `PLUGIN_UNSUPPORTED_FEATURE`,
- * `PLUGIN_LOAD_FAILED`, `PLUGIN_DESCRIPTOR_MISMATCH` or `PLUGIN_RESOURCE_INVALID` (a required
- * slot, `details` `{ slot, reason: "unsupported" }`).
+ * `PLUGIN_LOAD_FAILED`, `PLUGIN_DESCRIPTOR_MISMATCH` or `PLUGIN_RESOURCE_INVALID` (a slot
+ * `supplied` does not fill as the manifest asks, `details` `{ slot, reason }`).
  */
 export async function loadPlugin(
   manifest: string | URL,
@@ -819,16 +856,7 @@ export async function loadPlugin(
       "PLUGIN_NO_ARTIFACT",
       `${parsed.id} has no wasm artifact; it offers ${parsed.artifacts.map((entry) => `${entry.target} (${entry.type})`).join(", ")}`,
     );
-  const required = (parsed.resources ?? []).find(
-    (resource) =>
-      resource.supplied !== undefined && resource.supplied.required !== false,
-  );
-  if (required !== undefined)
-    throw new PluginError(
-      "PLUGIN_RESOURCE_INVALID",
-      `${parsed.id} needs a file for its resource slot ${required.name}, which the browser does not fill`,
-      { details: { slot: required.name, reason: "unsupported" } },
-    );
+  const supplied = await resolveSupplied(parsed, options.supplied ?? {});
   const bytes = await verified(fetcher, base, artifact, options);
   const resources = new Map<string, Uint8Array<ArrayBuffer>>();
   for (const resource of parsed.resources ?? [])
@@ -852,9 +880,19 @@ export async function loadPlugin(
     options.memoryBytes ?? DEFAULT_PLUGIN_MEMORY_BYTES,
     MAX_PLUGIN_MEMORY_BYTES,
   );
-  const described = (
-    await Run.start(module, parsed.descriptor, resources, memoryBytes)
-  ).describe();
+  const parts: PluginParts = {
+    id: parsed.id,
+    version: parsed.version,
+    artifactSha256: artifact.sha256,
+    manifestSha256: found,
+    ...(parsed.about === undefined ? {} : { about: parsed.about }),
+    descriptor: parsed.descriptor,
+    module,
+    resources,
+    supplied,
+    memoryBytes,
+  };
+  const described = (await Run.start(parts, undefined)).describe();
   let own: unknown;
   try {
     own = readPluginDescriptor(JSON.parse(described));
@@ -870,16 +908,35 @@ export async function loadPlugin(
       "PLUGIN_DESCRIPTOR_MISMATCH",
       `the artifact ${artifact.url} describes another extractor than the manifest`,
     );
-  const descriptor = parsed.descriptor;
-  return {
-    id: parsed.id,
-    version: parsed.version,
-    artifactSha256: artifact.sha256,
-    manifestSha256: found,
-    ...(parsed.about === undefined ? {} : { about: parsed.about }),
+  return pluginOf(parts);
+}
+
+/** What a loaded plugin is made of; a worker can be handed it (`structuredClone` keeps it). */
+interface PluginParts {
+  readonly id: string;
+  readonly version: string;
+  readonly artifactSha256: string;
+  readonly manifestSha256: string;
+  readonly about?: PluginAbout;
+  readonly descriptor: ExtractorDescriptor;
+  readonly module: WebAssembly.Module;
+  readonly resources: ReadonlyMap<string, Uint8Array>;
+  readonly supplied: SuppliedSet;
+  readonly memoryBytes: number;
+}
+
+function pluginOf(parts: PluginParts): LoadedPlugin {
+  const { descriptor } = parts;
+  const plugin: LoadedPlugin = {
+    id: parts.id,
+    version: parts.version,
+    artifactSha256: parts.artifactSha256,
+    manifestSha256: parts.manifestSha256,
+    ...(parts.about === undefined ? {} : { about: parts.about }),
     descriptor,
     extractor(params = {}) {
       let run: Run | undefined;
+      const reader = new SuppliedReader(parts.supplied);
       const current = (): Run => {
         if (run === undefined)
           throw new PluginError("PLUGIN_LOAD_FAILED", "the run has not begun");
@@ -887,10 +944,21 @@ export async function loadPlugin(
       };
       return {
         describe: () => descriptor,
+        madeByPlugin: () => ({
+          version: parts.version,
+          artifact_sha256: parts.artifactSha256,
+          manifest_sha256: parts.manifestSha256,
+          ...(parts.supplied.files.size === 0
+            ? {}
+            : { supplied: reader.supplied() }),
+        }),
         async begin(context: ExtractContext) {
-          run = await Run.start(module, descriptor, resources, memoryBytes);
+          await reader.prepare();
+          run = await Run.start(parts, reader);
           const live = run;
-          const json = new TextEncoder().encode(abiContext(context, params));
+          const json = new TextEncoder().encode(
+            abiContext(context, params, parts.supplied),
+          );
           const records = live.withBytes(json, 1, (ptr) =>
             live.exports.alpha2_begin(ptr, json.byteLength),
           );
@@ -954,6 +1022,7 @@ export async function loadPlugin(
       };
     },
   };
+  return plugin;
 }
 
 function sameJson(a: unknown, b: unknown): boolean {

@@ -140,6 +140,45 @@ report({
 `;
 }
 
+// A plugin's resource slots are filled with a File and a directory picker's files: it reads them
+// as the native hosts serve them, and its data records what it read.
+export function pluginEditorSupplied() {
+  return `${prelude}
+const fixture = table.extract.find((c) => c.name === "plugin-digest-timeline-cpu");
+const manifest = "/plugins/target/browser-fixtures/fixtures/supplied/manifest.json";
+const sha = await sha256(await (await fetch(manifest)).arrayBuffer());
+const picked = (path, text) =>
+  Object.defineProperty(new File([text], path.split("/").at(-1)), "webkitRelativePath", { value: path });
+const supplied = {
+  model: new File([new Uint8Array([1, 2, 0x77])], "model.bin"),
+  extra: [picked("extra/a.txt", "alpha"), picked("extra/.cache/b", "b")],
+};
+const editor = createEditor({ document: createDocument(table.projects[fixture.project]) });
+const bridge = createBrowserBridge({ editor, runtimeAssets, audio: false });
+/** @type {import("/packages/alpha2/dist/extractor.js").ExtractRun} */
+const run = { ...fixture.request, extractor: "alpha2.test.supplied", outputs: { files: "files" },
+  params: { read: ["model", "extra/a.txt", "extra/.cache/b"], context: true } };
+const { result } = await bridge.extract(run, { plugin: { manifest, sha256: sha, supplied } });
+const set = /** @type {Extract<import("/packages/alpha2/dist/project.js").DataSet, { kind: "words" }>} */ (result.dataSets[0]);
+const words = set.words.map((word) => word.text);
+const context = JSON.parse(words.at(-1).slice("context ".length));
+const recorded = set.made_by.plugin?.supplied?.map((file) => file.name);
+const missing = await codeOf(bridge.extract(run, { plugin: { manifest, sha256: sha } }));
+await bridge.dispose();
+report({
+  ok: words[0] === "model 3 010277" && words[1] === "extra/a.txt 5 616c706861"
+    && words[2] === "extra/.cache/b none"
+    && JSON.stringify(context) === JSON.stringify({
+      extra: { files: [{ bytes: 5, name: "extra/a.txt" }] },
+      model: { files: [{ bytes: 3, name: "model" }] },
+    })
+    && JSON.stringify(recorded) === JSON.stringify(["extra/a.txt", "model"])
+    && missing === "PLUGIN_RESOURCE_INVALID",
+  words, context, recorded, missing,
+});
+`;
+}
+
 // bridge.applyEdit called before the engine has loaded waits for it, then commits one step.
 export function editorApplyEdit() {
   return `${prelude}

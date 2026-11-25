@@ -199,7 +199,7 @@ const plugin = await loadPlugin(manifestUrl, sha256);
 const pinned = await (await fetch("/tests/golden/extract-recipe.json")).json();
 const name = "h264-bt709-copy.mp4";
 const { dataSets } = await runExtractor({
-  binding: wasm, project, media: { v: await media(name) }, plugin,
+  binding: wasm, project, media: { v: await media(name) },
   request: {
     extractor: "alpha2.test.digest", version: 1,
     input: { from: "source", source_id: "v", range: { start: 0, end: 40000 }, size: 96 },
@@ -282,7 +282,7 @@ for (const fixture of table.extract) {
   let result;
   try {
     result = await runExtractor({
-      binding: wasm, audioBinding: wasm, project, media, timelineFrame, plugin: loaded,
+      binding: wasm, audioBinding: wasm, project, media, timelineFrame,
       request: fixture.request,
     }, extractor);
   } catch (error) {

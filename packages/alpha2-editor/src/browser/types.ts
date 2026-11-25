@@ -678,6 +678,10 @@ export interface BrowserBridge {
             readonly memoryBytes?: number;
             /** Fetches the plugin's files; `globalThis.fetch` when left out. */
             readonly fetch?: typeof fetch;
+            /** What fills each resource slot, as `loadPlugin` takes it. */
+            readonly supplied?: Readonly<
+              Record<string, import("alpha2/plugins").SuppliedSource>
+            >;
           }
         | import("alpha2/plugins").LoadedPlugin;
       readonly extractor?: import("alpha2/extractor").Extractor;

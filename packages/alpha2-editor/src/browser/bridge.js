@@ -23,7 +23,7 @@ const EXTRACT_CAPABILITIES = Object.freeze({
     audio: Object.freeze(["source"]),
   }),
   artifacts: Object.freeze(["wasm"]),
-  slots: false,
+  slots: true,
 });
 import {
   DecodeUnavailableError,
@@ -3135,6 +3135,9 @@ export function createBrowserBridge(options) {
                   ...(plugin.fetch === undefined
                     ? {}
                     : { fetch: plugin.fetch }),
+                  ...(plugin.supplied === undefined
+                    ? {}
+                    : { supplied: plugin.supplied }),
                   ...(onProgress ? { onProgress } : {}),
                   signal: aborted,
                 });
@@ -3147,7 +3150,6 @@ export function createBrowserBridge(options) {
               ...(file ? { media: { [id]: file } } : {}),
               ...(frames ? { timelineFrame: frames.frame } : {}),
               ...(madeFrom ? { madeFrom } : {}),
-              ...(loaded ? { plugin: loaded } : {}),
               signal: aborted,
               ...(onProgress ? { onProgress } : {}),
             },

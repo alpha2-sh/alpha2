@@ -16,6 +16,7 @@ import {
   editorExportUndecodableAudio,
   editorImportUndecodable,
   pluginEditorExtract,
+  pluginEditorSupplied,
   pluginEditorTimeline,
 } from "./editor.mjs";
 import {
@@ -139,6 +140,7 @@ export const cases = {
   "plugin-conformance": pluginConformance,
   "plugin-editor-extract": pluginEditorExtract,
   "plugin-editor-timeline": pluginEditorTimeline,
+  "plugin-editor-supplied": pluginEditorSupplied,
   "editor-apply-edit": editorApplyEdit,
   "editor-conform-stale-data": editorConformStaleData,
   "editor-audio-lane-failure": editorAudioLaneFailure,

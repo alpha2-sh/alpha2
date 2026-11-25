@@ -33,8 +33,15 @@ All notable changes to this project are documented in this file.
   of its own at export quality, the bytes every surface reads timeline frames as. Timeline audio
   is not supplied (`INVALID_INPUT`), as on the native hosts.
 
+- The browser fills a plugin's resource slots: `loadPlugin(manifest, sha256, { supplied })` takes a
+  `File` for a `file` slot and a directory handle or a directory picker's files for a `directory`
+  slot, checked with the native loaders' limits and reasons, and the run records the files it
+  read in `made_by.plugin.supplied`. `bridge.extract` passes `plugin.supplied` on.
+
 ### Changed
 
+- **Breaking:** `runExtractor` takes no `plugin`: a plugin's extractor records `made_by.plugin`
+  itself (`Extractor.madeByPlugin`), with the slot files that run read.
 - **Breaking:** the browser's `loadPlugin` checks the whole manifest as the native loaders do
   (unknown fields, URLs, limits, the descriptor's rules) before it fetches a file, and refuses a
   file as soon as more bytes arrive than the manifest pins. `LoadedPlugin.descriptor` is the
