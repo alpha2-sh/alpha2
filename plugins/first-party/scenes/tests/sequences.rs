@@ -430,6 +430,16 @@ fn a_cut_closer_than_the_shortest_shot_to_the_previous_is_dropped() {
         run(&sequence, &json!({ "min_scene_ms": 2_000 })).cut_frames(),
         [30]
     );
+    let range = (0, sequence.len() * TICKS_PER_FRAME);
+    let backward = run_over(&sequence.frames, range, &[Way::Backward], &json!({}));
+    assert_eq!(backward.cut_frames(), [36]);
+    for (ways, kept) in [
+        ([Way::Forward, Way::Backward], 30),
+        ([Way::Backward, Way::Forward], 36),
+    ] {
+        let both = run_over(&sequence.frames, range, &ways, &json!({}));
+        assert_eq!(both.cut_frames(), [kept]);
+    }
 }
 
 fn black_runs() -> Sequence {

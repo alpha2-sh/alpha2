@@ -6,9 +6,10 @@
 //! A frame starts a new shot when its distance to the frame before is above `max(0.03, 3 x the
 //! median of the 15 distances before it)` times `(3 - 2 sensitivity) / (1 + 2 sensitivity)`, at
 //! least twice every other distance within 3 frames on either side, and at least `min_scene_ms`
-//! after the previous cut; its `score` is `1 - threshold / distance`. Frames with a mean luma under
-//! `black_level` are black; runs of at least `min_black_ms` are stretches, scored by the mean of
-//! `1 - mean luma / black_level`. A param the descriptor does not declare or bound fails `begin`.
+//! from every cut found before it in any pass; its `score` is `1 - threshold / distance`. Frames
+//! with a mean luma under `black_level` are black; runs of at least `min_black_ms` are stretches,
+//! scored by the mean of `1 - mean luma / black_level`. A param the descriptor does not declare or
+//! bound fails `begin`.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -171,7 +172,6 @@ struct PassState {
     previous: Option<(i64, Picture)>,
     steps: VecDeque<Step>,
     unjudged: usize,
-    last_cut: Option<i64>,
     black: Option<BlackRun>,
 }
 
@@ -183,7 +183,6 @@ impl PassState {
             previous: None,
             steps: VecDeque::with_capacity(MEDIAN_WINDOW + NEIGHBORS + 2),
             unjudged: 0,
-            last_cut: None,
             black: None,
         }
     }
@@ -198,7 +197,7 @@ pub struct Scenes {
     range: (i64, i64),
     passes: Vec<(i64, Direction)>,
     state: PassState,
-    cuts_emitted: BTreeSet<i64>,
+    cuts: BTreeSet<i64>,
     black_emitted: BTreeSet<(i64, i64)>,
     deferred_cuts: Vec<Found>,
     deferred_black: Vec<Found>,
@@ -227,10 +226,12 @@ impl Scenes {
             .map(|step| step.distance)
             .fold(0.0, f64::max);
         let isolated = step.distance >= SPIKE_RATIO * nearest;
+        let gap = self.min_scene.max(1);
         let spaced = self
-            .state
-            .last_cut
-            .is_none_or(|last| (step.cut_at - last).abs() >= self.min_scene);
+            .cuts
+            .range(step.cut_at - gap + 1..step.cut_at + gap)
+            .next()
+            .is_none();
         let inside = (self.range.0..self.range.1).contains(&step.cut_at);
         #[expect(clippy::cast_possible_truncation, reason = "a score from 0 to 1")]
         (step.distance > threshold && isolated && spaced && inside).then(|| Found {
@@ -245,7 +246,7 @@ impl Scenes {
         self.state.unjudged -= 1;
         let found = self.judge(index);
         if let Some(cut) = &found {
-            self.state.last_cut = Some(cut.start);
+            self.cuts.insert(cut.start);
         }
         found
     }
@@ -258,10 +259,8 @@ impl Scenes {
         (end - start >= self.min_black.max(1)).then_some(Found { start, end, score })
     }
 
-    fn emit_cut(&mut self, out: &mut Emitter, cut: &Found) {
-        if self.cuts_emitted.insert(cut.start) {
-            out.interval("cuts", cut.start, cut.end, None, Some(cut.score));
-        }
+    fn emit_cut(out: &mut Emitter, cut: &Found) {
+        out.interval("cuts", cut.start, cut.end, None, Some(cut.score));
     }
 
     fn emit_black(&mut self, out: &mut Emitter, black: &Found) {
@@ -305,7 +304,7 @@ impl Extractor for Scenes {
             range: (context.range.start, context.range.end),
             passes,
             state: PassState::new(Direction::Forward, context.range.end),
-            cuts_emitted: BTreeSet::new(),
+            cuts: BTreeSet::new(),
             black_emitted: BTreeSet::new(),
             deferred_cuts: Vec::new(),
             deferred_black: Vec::new(),
@@ -367,7 +366,7 @@ impl Extractor for Scenes {
             if self.state.unjudged > NEIGHBORS
                 && let Some(found) = self.judge_next()
             {
-                self.emit_cut(out, &found);
+                Self::emit_cut(out, &found);
             }
         }
         self.state.previous = Some((frame.time, picture));
@@ -377,7 +376,7 @@ impl Extractor for Scenes {
     fn end(&mut self, out: &mut Emitter) -> Result<(), Error> {
         self.close_pass();
         for found in std::mem::take(&mut self.deferred_cuts) {
-            self.emit_cut(out, &found);
+            Self::emit_cut(out, &found);
         }
         for found in std::mem::take(&mut self.deferred_black) {
             self.emit_black(out, &found);
