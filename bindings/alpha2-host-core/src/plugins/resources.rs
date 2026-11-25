@@ -16,7 +16,7 @@ use super::{CANCELLED, PluginError, ResourceRoot, codes, slot_reasons};
 /// Bytes read or hashed between two checks of the cancel and the call's deadline.
 const STEP_BYTES: usize = 1 << 20;
 /// The deepest directory below a directory slot's own.
-pub const MAX_SLOT_DEPTH: usize = 8;
+pub(super) const MAX_SLOT_DEPTH: usize = 8;
 
 /// A pinned file, checked against its pin at load.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -54,7 +54,7 @@ struct FilledSlot {
 
 /// What one run may read by resource name: pinned resources and the files of filled slots.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
-pub struct ResourceSet {
+pub(super) struct ResourceSet {
     entries: BTreeMap<String, Entry>,
     slots: BTreeMap<String, FilledSlot>,
     /// A wasm module reads it, which addresses at most [`MAX_PLUGIN_RESOURCE_BYTES`] per file.
