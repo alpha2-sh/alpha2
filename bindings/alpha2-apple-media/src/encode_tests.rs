@@ -179,8 +179,12 @@ fn check_video(path: &std::path::Path, layout: PixelLayout) -> (Vec<String>, Vec
         failures.push(format!("{packets} packets with keyframes at {keyframes:?}"));
     }
 
-    let mut stream = VideoStream::open_file(path, Arc::new(AppleVideo), StreamOptions::default())
-        .expect("video opens");
+    let mut stream = VideoStream::open_file(
+        path,
+        Arc::new(AppleVideo::default()),
+        StreamOptions::default(),
+    )
+    .expect("video opens");
     let cancel = CancelToken::default();
     let mut index = 0;
     while let Some(frame) = stream.next(&cancel).expect("frame") {

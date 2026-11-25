@@ -1,8 +1,9 @@
-//! Video decoding through `VideoToolbox` into CPU planes.
+//! Video decoding through `VideoToolbox` into CPU planes or retained pixel buffers.
 //!
-//! Sessions decode synchronously and copy each picture out of its pixel buffer inside the output
-//! callback, so the decoder's buffer pool never waits on a frame the host still holds. For H.264
-//! and HEVC a copy is the SPS's whole coded picture, with the SPS's window as its visible part.
+//! Sessions decode synchronously. In CPU mode the output callback copies each picture out of its
+//! pixel buffer; in surface mode it keeps the buffer as an [`AppleSurface`] when the renderer can
+//! sample it in place, and copies it otherwise. For H.264 and HEVC a copy is the SPS's whole coded
+//! picture, with the SPS's window as its visible part.
 
 // Every call into the media frameworks is FFI.
 #![allow(unsafe_code)]
@@ -10,17 +11,18 @@
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
-use std::sync::{Mutex, Once, PoisonError};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Once, PoisonError};
 
 use alpha2_container::{Packet, TrackInfo, VideoCodec, VideoTrack};
 use alpha2_host_core::parameter_sets::{ParameterSetCodec, sequence_facts, vp9_format};
 use alpha2_host_core::video_stream::{
-    BackendError, BackendFrame, BackendImage, BackendKind, Poll, Submit, VideoBackends,
-    VideoDecodeBackend,
+    BackendError, BackendFrame, BackendImage, BackendKind, Poll, Submit, SurfaceLease,
+    VideoBackends, VideoDecodeBackend,
 };
 use alpha2_media::{ColorRange, Plane, Rect, YuvFormat};
 use bytes::Bytes;
-use objc2_core_foundation::{CFBoolean, CFData, CFDictionary, CFRetained, CFString};
+use objc2_core_foundation::{CFBoolean, CFData, CFDictionary, CFRetained, CFString, CFType};
 use objc2_core_media::{
     CMBlockBuffer, CMFormatDescription, CMSampleBuffer, CMSampleTimingInfo, CMTime, CMTimeFlags,
     CMVideoFormatDescriptionCreate, CMVideoFormatDescriptionCreateFromH264ParameterSets,
@@ -30,9 +32,10 @@ use objc2_core_media::{
 use objc2_core_video::{
     CVImageBuffer, CVPixelBuffer, CVPixelBufferGetBaseAddressOfPlane,
     CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetExtendedPixels, CVPixelBufferGetHeight,
-    CVPixelBufferGetPixelFormatType, CVPixelBufferGetPlaneCount, CVPixelBufferGetWidth,
-    CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
-    kCVPixelBufferPixelFormatTypeKey,
+    CVPixelBufferGetHeightOfPlane, CVPixelBufferGetIOSurface, CVPixelBufferGetPixelFormatType,
+    CVPixelBufferGetPlaneCount, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress,
+    CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress, kCVPixelBufferIOSurfacePropertiesKey,
+    kCVPixelBufferMetalCompatibilityKey, kCVPixelBufferPixelFormatTypeKey,
 };
 use objc2_video_toolbox::{
     VTDecodeFrameFlags, VTDecodeInfoFlags, VTDecompressionOutputCallbackRecord,
@@ -319,12 +322,23 @@ fn mpeg4_advanced_simple(video: &VideoTrack) -> bool {
             .is_some_and(|window| matches!(window[4], 0xf0..=0xf7))
 }
 
-/// What the output callback hands the session.
-struct Outputs {
+#[derive(Clone, Copy, Debug)]
+struct Layout {
     pixel_format: u32,
     format: YuvFormat,
     /// The SPS's coded size and window, for H.264 and HEVC.
     window: Option<Window>,
+}
+
+struct Surfaces {
+    live: Arc<AtomicUsize>,
+    cap: usize,
+}
+
+/// What the output callback hands the session.
+struct Outputs {
+    layout: Layout,
+    surfaces: Option<Surfaces>,
     timescale: i32,
     frames: VecDeque<BackendFrame>,
     /// The first failure the callback saw since it was last taken.
@@ -432,17 +446,7 @@ fn region(size: (usize, usize), extended: Extended, window: Option<Window>) -> R
     }
 }
 
-/// Copies a picture out of `buffer`, rows of each plane `stride` bytes apart. The last row's
-/// padding is not read, since the buffer may end before it, and is zero in the copy.
-fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, String> {
-    let actual = CVPixelBufferGetPixelFormatType(buffer);
-    if actual != outputs.pixel_format {
-        return Err(format!(
-            "the decoder gave {} pixels, not the {} asked for",
-            fourcc(actual),
-            fourcc(outputs.pixel_format)
-        ));
-    }
+fn picture_region(buffer: &CVPixelBuffer, window: Option<Window>) -> ((usize, usize), Region) {
     let (mut left, mut right, mut top, mut bottom) = (0, 0, 0, 0);
     // SAFETY: `buffer` is a live pixel buffer and the out pointers are valid.
     unsafe {
@@ -464,9 +468,23 @@ fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, Str
         top,
         bottom,
     };
-    let region = region(size, extended, outputs.window);
+    (size, region(size, extended, window))
+}
+
+/// Copies a picture out of `buffer`, rows of each plane `stride` bytes apart. The last row's
+/// padding is not read, since the buffer may end before it, and is zero in the copy.
+fn copy_picture(buffer: &CVPixelBuffer, layout: &Layout) -> Result<Copied, String> {
+    let actual = CVPixelBufferGetPixelFormatType(buffer);
+    if actual != layout.pixel_format {
+        return Err(format!(
+            "the decoder gave {} pixels, not the {} asked for",
+            fourcc(actual),
+            fourcc(layout.pixel_format)
+        ));
+    }
+    let (_, region) = picture_region(buffer, layout.window);
     let (width, height) = region.size;
-    let format = outputs.format;
+    let format = layout.format;
     let (shift_x, shift_y) = (format.chroma_shift_x, format.chroma_shift_y);
     // SAFETY: `buffer` is a live pixel buffer; the lock is released below.
     let locked = unsafe { CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) };
@@ -541,26 +559,144 @@ unsafe extern "C-unwind" fn decoded(
     let Some(buffer) = (unsafe { image.as_ref() }) else {
         return;
     };
-    match copy_picture(buffer, &outputs) {
-        Ok(copied) => {
-            let pts = rescale(pts.value, pts.timescale, outputs.timescale);
-            let format = outputs.format;
-            outputs.frames.push_back(BackendFrame {
-                pts,
-                image: BackendImage::Cpu {
-                    format,
-                    planes: copied.planes,
-                },
-                coded: copied.coded,
-                visible: Some(copied.visible),
-                sample_aspect_ratio: None,
-                color: None,
-                chroma_location: None,
-            });
-        }
+    let pts = rescale(pts.value, pts.timescale, outputs.timescale);
+    let picture = if let Some((surface, coded, visible)) = surface(buffer, &outputs) {
+        Ok((BackendImage::Surface(Arc::new(surface)), coded, visible))
+    } else {
+        copy_picture(buffer, &outputs.layout).map(|copied| {
+            let image = BackendImage::Cpu {
+                format: outputs.layout.format,
+                planes: copied.planes,
+            };
+            (image, copied.coded, copied.visible)
+        })
+    };
+    match picture {
+        Ok((image, coded, visible)) => outputs.frames.push_back(BackendFrame {
+            pts,
+            image,
+            coded,
+            visible: Some(visible),
+            sample_aspect_ratio: None,
+            color: None,
+            chroma_location: None,
+        }),
         Err(reason) => {
             outputs.copy_error.get_or_insert(reason);
         }
+    }
+}
+
+fn surface(buffer: &CVPixelBuffer, outputs: &Outputs) -> Option<(AppleSurface, (u32, u32), Rect)> {
+    let surfaces = outputs.surfaces.as_ref()?;
+    let format = CVPixelBufferGetPixelFormatType(buffer);
+    if format != outputs.layout.pixel_format
+        || !SURFACE_FORMATS.contains(&format)
+        || CVPixelBufferGetIOSurface(Some(buffer)).is_none()
+    {
+        return None;
+    }
+    let ((width, height), region) = picture_region(buffer, outputs.layout.window);
+    if !in_place((width, height), &region) {
+        return None;
+    }
+    let visible = region.visible;
+    let live = Arc::clone(&surfaces.live);
+    live.try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+        (count < surfaces.cap).then_some(count + 1)
+    })
+    .ok()?;
+    let retained_bytes = (0..CVPixelBufferGetPlaneCount(buffer))
+        .map(|plane| {
+            CVPixelBufferGetBytesPerRowOfPlane(buffer, plane)
+                * CVPixelBufferGetHeightOfPlane(buffer, plane)
+        })
+        .sum::<usize>();
+    let retained_bytes = u64::try_from(retained_bytes).unwrap_or(u64::MAX);
+    let dimension = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+    let surface = AppleSurface {
+        // SAFETY: a live pixel buffer for the duration of the callback.
+        buffer: PixelBuffer(unsafe { CFRetained::retain(NonNull::from(buffer)) }),
+        layout: outputs.layout,
+        retained_bytes,
+        _live: LiveSurface(live),
+    };
+    Some((surface, (dimension(width), dimension(height)), visible))
+}
+
+fn in_place(size: (usize, usize), region: &Region) -> bool {
+    let visible = region.visible;
+    region.before == (0, 0)
+        && visible.x as usize + visible.width as usize <= size.0
+        && visible.y as usize + visible.height as usize <= size.1
+}
+
+const SURFACE_FORMATS: [u32; 4] = [
+    code(*b"420v"),
+    code(*b"420f"),
+    code(*b"x420"),
+    code(*b"xf20"),
+];
+
+const STREAM_HOLDS: usize = 2;
+const RENDERER_HOLDS: usize = 2;
+const SURFACES_BEYOND_REORDER: usize = STREAM_HOLDS + RENDERER_HOLDS;
+
+// H.264 A.3.1 and HEVC A.4.2 cap a decoded picture buffer at 16 pictures.
+const UNKNOWN_REORDER_DEPTH: usize = 16;
+
+#[derive(Debug)]
+struct PixelBuffer(CFRetained<CVPixelBuffer>);
+
+// SAFETY: CoreVideo pixel buffers are reference counted thread-safely, and a decoded picture is
+// only read once the session handed it over.
+unsafe impl Send for PixelBuffer {}
+// SAFETY: as for `Send`; shared references only read the buffer.
+unsafe impl Sync for PixelBuffer {}
+
+#[derive(Debug)]
+struct LiveSurface(Arc<AtomicUsize>);
+
+impl Drop for LiveSurface {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A decoded picture kept in its `IOSurface`-backed pixel buffer, which the decoder's pool does
+/// not reuse until this drops.
+#[derive(Debug)]
+pub struct AppleSurface {
+    buffer: PixelBuffer,
+    layout: Layout,
+    retained_bytes: u64,
+    _live: LiveSurface,
+}
+
+impl AppleSurface {
+    /// The `CVPixelBufferRef`, valid while this lives.
+    #[must_use]
+    pub fn pixel_buffer(&self) -> *mut c_void {
+        CFRetained::as_ptr(&self.buffer.0).as_ptr().cast()
+    }
+
+    /// The picture copied into memory as CPU mode decodes it: the planes of the whole coded
+    /// picture, whose visible rectangle is the surface's.
+    ///
+    /// # Errors
+    /// A buffer that cannot be read.
+    pub fn copy(&self) -> Result<(YuvFormat, Vec<Plane>), String> {
+        copy_picture(&self.buffer.0, &self.layout).map(|copied| (self.layout.format, copied.planes))
+    }
+}
+
+impl SurfaceLease for AppleSurface {
+    fn retained_bytes(&self) -> u64 {
+        self.retained_bytes
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -601,6 +737,7 @@ pub struct VideoToolboxVideo {
     /// The track, for a session opened at the first packet.
     video: VideoTrack,
     kind: BackendKind,
+    output: VideoOutput,
     codec: VideoCodec,
     timescale: i32,
     ended: bool,
@@ -616,11 +753,45 @@ impl std::fmt::Debug for VideoToolboxVideo {
     }
 }
 
+fn surfaces(
+    video: &VideoTrack,
+    output: VideoOutput,
+    pixel_format: u32,
+    format: YuvFormat,
+) -> Option<Surfaces> {
+    let VideoOutput::Surfaces { ten_bit } = output else {
+        return None;
+    };
+    (SURFACE_FORMATS.contains(&pixel_format) && (ten_bit || format.bit_depth == 8)).then(|| {
+        Surfaces {
+            live: Arc::default(),
+            cap: video.reorder_depth.unwrap_or(UNKNOWN_REORDER_DEPTH) + SURFACES_BEYOND_REORDER,
+        }
+    })
+}
+
+fn attributes(pixel_format: u32, surfaces: bool) -> CFRetained<CFDictionary<CFString, CFType>> {
+    let pixel_format = sys::int(i64::from(pixel_format));
+    let empty = CFDictionary::<CFString, CFType>::empty();
+    // SAFETY: framework constants.
+    let mut attributes: Vec<(&CFString, &CFType)> =
+        vec![(unsafe { kCVPixelBufferPixelFormatTypeKey }, &pixel_format)];
+    if surfaces {
+        // SAFETY: framework constants.
+        unsafe {
+            attributes.push((kCVPixelBufferIOSurfacePropertiesKey, &empty));
+            attributes.push((kCVPixelBufferMetalCompatibilityKey, sys::boolean(true)));
+        }
+    }
+    dictionary(&attributes)
+}
+
 /// Opens a session of `kind` for `video`, and the kind `VideoToolbox` reports it chose.
 fn start(
     video: &VideoTrack,
     timescale: i32,
     kind: BackendKind,
+    output: VideoOutput,
 ) -> Result<(Open, BackendKind), BackendError> {
     let picture = picture(video)?;
     let (pixel_format, format) = picture.output()?;
@@ -628,10 +799,15 @@ fn start(
         register_supplemental_decoders();
     }
     let description = description(video)?;
+    let surfaces = surfaces(video, output, pixel_format, format);
+    let attributes = attributes(pixel_format, surfaces.is_some());
     let outputs = Box::new(Mutex::new(Outputs {
-        pixel_format,
-        format,
-        window: sps_window(video),
+        layout: Layout {
+            pixel_format,
+            format,
+            window: sps_window(video),
+        },
+        surfaces,
         timescale,
         frames: VecDeque::new(),
         error: None,
@@ -650,11 +826,6 @@ fn start(
             )]),
         }
     };
-    // SAFETY: a framework constant.
-    let attributes = dictionary(&[(
-        unsafe { kCVPixelBufferPixelFormatTypeKey },
-        &sys::int(i64::from(pixel_format)),
-    )]);
     let callback = VTDecompressionOutputCallbackRecord {
         decompressionOutputCallback: Some(decoded),
         decompressionOutputRefCon: ptr::from_ref::<Mutex<Outputs>>(&outputs).cast_mut().cast(),
@@ -740,11 +911,16 @@ impl Open {
 }
 
 impl VideoToolboxVideo {
-    /// A session of `kind` for `track`; its kind is the one `VideoToolbox` reports it chose.
+    /// A session of `kind` for `track` that hands pictures over as `output` says; its kind is
+    /// the one `VideoToolbox` reports it chose.
     ///
     /// # Errors
     /// [`BackendError::Unsupported`] when no decoder of that kind opens for the track.
-    pub fn open(track: &TrackInfo, kind: BackendKind) -> Result<Self, BackendError> {
+    pub fn open(
+        track: &TrackInfo,
+        kind: BackendKind,
+        output: VideoOutput,
+    ) -> Result<Self, BackendError> {
         let video = track
             .video
             .clone()
@@ -753,7 +929,7 @@ impl VideoToolboxVideo {
         let (open, kind) = if video.codec == VideoCodec::Vp9 && video.codec_private.is_empty() {
             (None, kind)
         } else {
-            let (open, kind) = start(&video, timescale, kind)?;
+            let (open, kind) = start(&video, timescale, kind, output)?;
             (Some(open), kind)
         };
         Ok(Self {
@@ -761,6 +937,7 @@ impl VideoToolboxVideo {
             codec: video.codec,
             video,
             kind,
+            output,
             timescale,
             ended: false,
         })
@@ -770,7 +947,7 @@ impl VideoToolboxVideo {
     fn open_at(&mut self, packet: &Packet) -> Result<(), BackendError> {
         if self.open.is_none() {
             let video = with_vp9_record(&self.video, packet)?;
-            let (open, kind) = start(&video, self.timescale, self.kind)?;
+            let (open, kind) = start(&video, self.timescale, self.kind, self.output)?;
             self.kind = kind;
             self.open = Some(open);
         }
@@ -990,9 +1167,30 @@ impl VideoDecodeBackend for VideoToolboxVideo {
     }
 }
 
+/// How sessions hand decoded pictures over.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VideoOutput {
+    /// Planes copied into memory.
+    #[default]
+    Cpu,
+    /// [`AppleSurface`] frames where the renderer samples the pixel buffer in place, copies
+    /// otherwise; `ten_bit` says whether 10-bit tracks may use them too.
+    ///
+    /// A session keeps at most its track's reorder depth plus four surfaces alive (sixteen plus
+    /// four when the depth is unknown) and copies the pictures beyond them, so it never waits on
+    /// a frame the host holds.
+    Surfaces {
+        /// Whether 10-bit tracks hand over surfaces.
+        ten_bit: bool,
+    },
+}
+
 /// Opens `VideoToolbox` video sessions.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct AppleVideo;
+pub struct AppleVideo {
+    /// How sessions hand pictures over.
+    pub output: VideoOutput,
+}
 
 impl VideoBackends for AppleVideo {
     fn open(
@@ -1000,9 +1198,13 @@ impl VideoBackends for AppleVideo {
         track: &TrackInfo,
         kind: BackendKind,
     ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
-        Ok(Box::new(VideoToolboxVideo::open(track, kind)?))
+        Ok(Box::new(VideoToolboxVideo::open(track, kind, self.output)?))
     }
 }
+
+#[cfg(test)]
+#[path = "video_surface_tests.rs"]
+mod surface_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1014,7 +1216,7 @@ mod tests {
     use alpha2_media::DecodeError;
     use bytes::Bytes;
 
-    use super::{AppleVideo, Extended, Rect, Region, Window, picture, region};
+    use super::{AppleVideo, Extended, Rect, Region, Window, in_place, picture, region};
 
     fn corpus_video(name: &str) -> VideoTrack {
         let reader = alpha2_container::open(&corpus(name)).expect(name);
@@ -1054,7 +1256,7 @@ mod tests {
         // The corpus stream with that SPS field, through a whole stream open.
         let opened = VideoStream::open_file(
             &corpus("hostile/container_mp4/avc-sps-depth-overflow"),
-            Arc::new(AppleVideo),
+            Arc::new(AppleVideo::default()),
             StreamOptions::default(),
         );
         assert!(
@@ -1133,6 +1335,55 @@ mod tests {
             region((128, 96), Extended::default(), Some(CROPPED)).visible,
             CROPPED.visible
         );
+    }
+
+    #[test]
+    fn only_a_window_inside_the_buffer_from_its_base_address_is_sampled_in_place() {
+        let cases = [
+            ("left crop", (120, 90), extended(0, 8, 0, 6), CROPPED, false),
+            (
+                "window in place",
+                (120, 90),
+                extended(8, 0, 6, 0),
+                CROPPED,
+                false,
+            ),
+            (
+                "whole coded buffer",
+                (128, 96),
+                Extended::default(),
+                CROPPED,
+                true,
+            ),
+            (
+                "top crop",
+                (128, 88),
+                extended(0, 0, 0, 8),
+                Window {
+                    coded: (128, 96),
+                    visible: rect(0, 8, 128, 88),
+                },
+                false,
+            ),
+            (
+                "bottom crop",
+                (128, 90),
+                extended(0, 0, 0, 6),
+                Window {
+                    coded: (128, 96),
+                    visible: rect(0, 0, 128, 90),
+                },
+                true,
+            ),
+        ];
+        for (name, size, extended, window, sampled) in cases {
+            let region = region(size, extended, Some(window));
+            assert_eq!(in_place(size, &region), sampled, "{name}: {region:?}");
+        }
+        assert!(in_place(
+            (64, 48),
+            &region((64, 48), extended(4, 4, 4, 4), None)
+        ));
     }
 
     #[test]
