@@ -13,6 +13,7 @@ import {
   MAX_MANIFEST_BYTES,
   PluginError,
   type PluginAbout,
+  type PluginManifest,
   parsePluginManifest,
   readPluginDescriptor,
 } from "./plugin-manifest.js";
@@ -48,6 +49,66 @@ export type {
   PluginResource,
   SuppliedPluginResource,
 } from "./plugin-manifest.js";
+
+/** What a place that runs plugins can run, so an interface offers only the plugins it can. */
+export interface PluginCapabilities {
+  /** The clocks each media is read on. */
+  readonly inputs: {
+    readonly video: readonly ("source" | "timeline")[];
+    readonly audio: readonly ("source" | "timeline")[];
+  };
+  /**
+   * The artifacts that run: `wasm`, and `native` where native code is allowed, for the runner's
+   * own target, which a manifest alone does not show.
+   */
+  readonly artifacts: readonly ("wasm" | "native")[];
+  /** Whether a run may fill resource slots. */
+  readonly slots: boolean;
+}
+
+/** Why a plugin cannot run somewhere, by {@link pluginProblem}. */
+export interface PluginProblem {
+  /**
+   * `artifact`: no artifact of a kind that runs there; `slots`: a required slot, where none is
+   * filled; `input`: none of the clocks it reads its media on.
+   */
+  readonly reason: "artifact" | "slots" | "input";
+  readonly message: string;
+}
+
+/** Why `manifest`'s plugin cannot run where `capabilities` say, or `undefined` when it can. */
+export function pluginProblem(
+  manifest: PluginManifest,
+  capabilities: PluginCapabilities,
+): PluginProblem | undefined {
+  const runs = manifest.artifacts.some((artifact) =>
+    capabilities.artifacts.includes(
+      artifact.type === "wasm" ? "wasm" : "native",
+    ),
+  );
+  if (!runs)
+    return {
+      reason: "artifact",
+      message: `${manifest.id} has no artifact of a kind that runs here (${capabilities.artifacts.join(", ") || "none"})`,
+    };
+  const required = (manifest.resources ?? []).find(
+    (resource) =>
+      resource.supplied !== undefined && resource.supplied.required !== false,
+  );
+  if (required !== undefined && !capabilities.slots)
+    return {
+      reason: "slots",
+      message: `${manifest.id} needs a file for its resource slot ${required.name}, and no slot is filled here`,
+    };
+  const { media, from } = manifest.descriptor.input;
+  const read = capabilities.inputs[media];
+  if (!from.some((clock) => read.includes(clock)))
+    return {
+      reason: "input",
+      message: `${manifest.id} reads ${media} from the ${from.join(" or the ")}, which is not read here`,
+    };
+  return undefined;
+}
 
 /** Linear memory a plugin may grow to when the caller sets no cap. */
 export const DEFAULT_PLUGIN_MEMORY_BYTES = 1024 * 1024 * 1024;

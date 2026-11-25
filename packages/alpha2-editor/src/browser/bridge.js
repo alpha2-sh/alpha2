@@ -15,6 +15,16 @@ import { containerPolicy } from "alpha2/containers";
 import { applyEdit as applyEngineEdit } from "alpha2/apply-edit";
 import { runExtractor } from "alpha2/extract";
 import { loadPlugin } from "alpha2/plugins";
+
+/** @type {import("alpha2/plugins").PluginCapabilities} */
+const EXTRACT_CAPABILITIES = Object.freeze({
+  inputs: Object.freeze({
+    video: Object.freeze(["source"]),
+    audio: Object.freeze(["source"]),
+  }),
+  artifacts: Object.freeze(["wasm"]),
+  slots: false,
+});
 import {
   DecodeUnavailableError,
   PlanarDecodeUnavailableError,
@@ -2985,6 +2995,9 @@ export function createBrowserBridge(options) {
       const result = editor.applyEdit(applied, { read, request, then, label });
       if (!result.ok) throw result.error;
       return result.value;
+    },
+    extractCapabilities() {
+      return EXTRACT_CAPABILITIES;
     },
     async extract(run, { plugin, extractor, signal, onProgress } = {}) {
       if (disposed)

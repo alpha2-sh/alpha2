@@ -869,3 +869,29 @@ fn a_request_fills_resource_slots_only_where_the_operator_allows() {
         answers[4]
     );
 }
+
+#[test]
+fn capabilities_report_what_the_operator_allows_plugins() {
+    let _gpu = gpu_test_lock();
+    let capabilities = r#"{"protocolVersion":2,"requestId":"caps","operation":"capabilities"}"#;
+    let reported = |flags: &str| {
+        let answers = run_with_flags(flags, &[("caps", capabilities.to_owned())]);
+        answers[0]["result"]["plugins"].clone()
+    };
+    assert_eq!(
+        reported(""),
+        json!({ "mode": "wasm", "slots": false, "isolation": "process" })
+    );
+    let root = scratch_directory("plugin-capabilities");
+    assert_eq!(
+        reported(&format!(
+            "--plugins native --plugin-isolation in-process --plugin-resource-root {}",
+            root.display()
+        )),
+        json!({ "mode": "native", "slots": true, "isolation": "in-process" })
+    );
+    assert_eq!(
+        reported("--plugins off --plugin-resource-root any"),
+        json!({ "mode": "off", "slots": false, "isolation": "process" })
+    );
+}

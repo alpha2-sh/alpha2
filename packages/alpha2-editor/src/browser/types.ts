@@ -642,6 +642,12 @@ export interface BrowserBridge {
     readonly report: import("alpha2/apply-edit").EditReport;
   }>;
   /**
+   * What {@link extract} runs: the inputs it reads for each media, the artifacts it runs and
+   * whether it fills resource slots. `pluginProblem` from `alpha2/plugins` says, from a manifest,
+   * why a plugin would not run here.
+   */
+  extractCapabilities(): import("alpha2/plugins").PluginCapabilities;
+  /**
    * Runs an extractor over a source's original media on this page (`runExtractor` from
    * `alpha2/extract`), with an app's `extractor` or a `plugin`: one the app loaded with
    * `loadPlugin` from `alpha2/plugins`, which many runs share (its module compiles once), or a

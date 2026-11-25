@@ -169,6 +169,24 @@ fn refused(message: impl Into<String>) -> PluginError {
 }
 
 impl PluginPolicy {
+    /// What `capabilities` reports of the policy: `mode`, whether a request may fill a resource
+    /// slot (`slots`) and where native artifacts run (`isolation`).
+    #[must_use]
+    pub fn capabilities_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "mode": match self.mode {
+                PluginMode::Off => "off",
+                PluginMode::Wasm => "wasm",
+                PluginMode::Native => "native",
+            },
+            "slots": self.mode != PluginMode::Off && self.resource_root != ResourceRoot::None,
+            "isolation": match self.isolation {
+                PluginIsolation::Process => "process",
+                PluginIsolation::InProcess => "in-process",
+            },
+        })
+    }
+
     /// A host started without plugin flags.
     pub const DEFAULT: Self = Self {
         mode: PluginMode::Wasm,

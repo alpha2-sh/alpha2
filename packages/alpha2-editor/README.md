@@ -90,7 +90,7 @@ const { dataSets } = await client.extract({ project, assets, request, plugin: { 
 editor.applyExtraction({ dataSets, timings: {} }, { read });
 ```
 
-- In a page, `bridge.extract(run, { plugin, signal, onProgress })` reads the source's original media held by the bridge and resolves with `{ result, read }` for `applyExtraction`. `plugin` is a plugin the app loaded with `loadPlugin`, shared by many runs, or `{ manifest, sha256, fetch? }` for the bridge to load; `onProgress` reports its files as they arrive (`phase: "load"`), then the extraction. It reads source input; timeline input is refused there.
+- In a page, `bridge.extract(run, { plugin, signal, onProgress })` reads the source's original media held by the bridge and resolves with `{ result, read }` for `applyExtraction`. `plugin` is a plugin the app loaded with `loadPlugin`, shared by many runs, or `{ manifest, sha256, fetch? }` for the bridge to load; `onProgress` reports its files as they arrive (`phase: "load"`), then the extraction. `bridge.extractCapabilities()` says what it runs, for `pluginProblem` from `alpha2/plugins`. It reads source input; timeline input is refused there.
 - `bridge.conform()` lists data sets made from media that has since changed in `stale_data`; their `made_by` says how to run them again.
 
 ## Browser bridge

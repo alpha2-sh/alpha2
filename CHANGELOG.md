@@ -24,6 +24,11 @@ All notable changes to this project are documented in this file.
 - `bridge.extract` takes a plugin the app loaded with `loadPlugin`, which many runs share, or a
   `fetch` beside the manifest; its `onProgress` reports the plugin's files (`phase: "load"`).
 
+- `bridge.extractCapabilities()` says what `bridge.extract` runs (the inputs of each media, the
+  artifacts, whether it fills resource slots), and `pluginProblem(manifest, capabilities)` in
+  `alpha2/plugins` says why a plugin would not run there. A host's `capabilities` result reports
+  its plugin policy as `plugins` (`mode`, `slots`, `isolation`), typed in `@alpha2-sh/node`.
+
 ### Changed
 
 - **Breaking:** the browser's `loadPlugin` checks the whole manifest as the native loaders do

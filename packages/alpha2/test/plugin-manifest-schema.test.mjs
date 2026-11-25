@@ -64,3 +64,39 @@ test("parsePluginManifest refuses text past the manifest limit and text that is 
     code: "PLUGIN_LOAD_FAILED",
   });
 });
+
+test("pluginProblem says why a manifest's plugin does not run with given capabilities", async () => {
+  const { parsePluginManifest, pluginProblem } =
+    await import("../dist/plugins.js");
+  const read = (name) =>
+    parsePluginManifest(
+      JSON.stringify(corpus.find((entry) => entry.name === name).manifest),
+    );
+  const browser = {
+    inputs: { video: ["source", "timeline"], audio: ["source"] },
+    artifacts: ["wasm"],
+    slots: false,
+  };
+  const complete = read("complete");
+  assert.equal(pluginProblem(complete, browser), undefined);
+  const nativeOnly = {
+    ...complete,
+    artifacts: complete.artifacts.filter((entry) => entry.type !== "wasm"),
+  };
+  assert.equal(pluginProblem(nativeOnly, browser)?.reason, "artifact");
+  assert.equal(
+    pluginProblem(nativeOnly, { ...browser, artifacts: ["wasm", "native"] }),
+    undefined,
+  );
+  const slots = read("supplied-slots");
+  assert.equal(pluginProblem(slots, browser)?.reason, "slots");
+  assert.equal(pluginProblem(slots, { ...browser, slots: true }), undefined);
+  const timelineAudio = {
+    ...complete,
+    descriptor: {
+      ...complete.descriptor,
+      input: { ...complete.descriptor.input, from: ["timeline"] },
+    },
+  };
+  assert.equal(pluginProblem(timelineAudio, browser)?.reason, "input");
+});
