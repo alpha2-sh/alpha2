@@ -15,7 +15,10 @@ mod seam;
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void};
 
-use alpha2_plugin_sdk::{Audio, Context, Direction, Emitter, Error, Extractor, Host, SlotShape};
+use alpha2_plugin_sdk::{
+    Audio, Context, Direction, Emitter, Error, Extractor, Host, MAX_DATA_LABEL_BYTES,
+    MAX_DATA_WORDS, SlotShape, TICKS_PER_SECOND,
+};
 use seam::Word;
 use whisper_rs::whisper_rs_sys::ggml_log_level;
 use whisper_rs::{
@@ -34,12 +37,7 @@ const SAMPLES_PER_TIMESTAMP: i64 = RATE / 100;
 const VOICE_FRAME: usize = 320;
 const VOICE_FLOOR_DB: f32 = -30.0;
 const SILENT_RMS: f32 = 1e-4;
-/// alpha2's clock.
-const TICKS_PER_SECOND: i64 = 120_000;
 const SHORTEST_WORD_TICKS: i64 = TICKS_PER_SECOND / 50;
-/// The most words one data set holds and the longest text a word may have, per the plugin ABI.
-const MAX_WORDS: usize = 200_000;
-const MAX_TEXT_BYTES: usize = 256;
 const MAX_THREADS: usize = 8;
 const MODEL: &str = "model";
 const OUTPUT: &str = "words";
@@ -219,7 +217,7 @@ fn trimmed(start: i64, end: i64, window_start: i64, voiced: &[bool]) -> (i64, i6
 }
 
 fn truncated(text: &str) -> &str {
-    let mut end = text.len().min(MAX_TEXT_BYTES);
+    let mut end = text.len().min(MAX_DATA_LABEL_BYTES);
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -316,9 +314,9 @@ impl Transcribe {
     fn emit(&mut self, out: &mut Emitter) -> Result<(), Error> {
         let (range_start, range_end) = self.range;
         for word in std::mem::take(&mut self.unemitted) {
-            if self.emitted == MAX_WORDS {
+            if self.emitted == MAX_DATA_WORDS {
                 return Err(Error(format!(
-                    "the range holds more than {MAX_WORDS} words, the most one data set holds"
+                    "the range holds more than {MAX_DATA_WORDS} words, the most one data set holds"
                 )));
             }
             let start = to_ticks(word.start).max(range_start).max(self.emitted_end);
@@ -509,8 +507,8 @@ mod tests {
     #[test]
     fn a_long_text_is_cut_at_a_character_boundary() {
         let text = "\u{e9}".repeat(200);
-        assert_eq!(truncated(&text).len(), MAX_TEXT_BYTES);
+        assert_eq!(truncated(&text).len(), MAX_DATA_LABEL_BYTES);
         let text = format!("a{}", "\u{e9}".repeat(200));
-        assert_eq!(truncated(&text).len(), MAX_TEXT_BYTES - 1);
+        assert_eq!(truncated(&text).len(), MAX_DATA_LABEL_BYTES - 1);
     }
 }

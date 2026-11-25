@@ -12,9 +12,13 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use alpha2_plugin_sdk::{Context, Direction, Emitter, Error, Extractor, Frame, Host, VideoFormat};
+use alpha2_plugin_sdk::{
+    Context, Direction, Emitter, Error, Extractor, Frame, Host, NumberParam, TICKS_PER_SECOND,
+    VideoFormat,
+};
 
-const TICKS_PER_MS: f64 = 120.0;
+#[expect(clippy::cast_precision_loss, reason = "120 is exact")]
+const TICKS_PER_MS: f64 = (TICKS_PER_SECOND / 1_000) as f64;
 const GRID: usize = 4;
 const CELLS: usize = GRID * GRID;
 const LEVELS: usize = 256;
@@ -24,37 +28,32 @@ const MEDIAN_WINDOW: usize = 15;
 const SPIKE_RATIO: f64 = 2.0;
 const NEIGHBORS: usize = 3;
 
-const PARAMS: [(&str, f64, f64, f64); 4] = [
-    ("sensitivity", 0.5, 0.0, 1.0),
-    ("min_scene_ms", 500.0, 0.0, 60_000.0),
-    ("black_level", 0.06, 0.01, 0.5),
-    ("min_black_ms", 500.0, 0.0, 60_000.0),
+const PARAMS: [NumberParam; 4] = [
+    NumberParam {
+        key: "sensitivity",
+        default: 0.5,
+        min: 0.0,
+        max: 1.0,
+    },
+    NumberParam {
+        key: "min_scene_ms",
+        default: 500.0,
+        min: 0.0,
+        max: 60_000.0,
+    },
+    NumberParam {
+        key: "black_level",
+        default: 0.06,
+        min: 0.01,
+        max: 0.5,
+    },
+    NumberParam {
+        key: "min_black_ms",
+        default: 500.0,
+        min: 0.0,
+        max: 60_000.0,
+    },
 ];
-
-fn params(context: &Context) -> Result<[f64; 4], Error> {
-    if let Some(key) = context
-        .params
-        .keys()
-        .find(|key| PARAMS.iter().all(|(name, ..)| name != key))
-    {
-        return Err(Error(format!(
-            "params.{key} is not a param of alpha2.scenes"
-        )));
-    }
-    let mut values = [0.0; 4];
-    for (value, (key, default, min, max)) in values.iter_mut().zip(PARAMS) {
-        *value = match context.params.get(key) {
-            None => default,
-            Some(given) => given
-                .as_f64()
-                .filter(|number| (min..=max).contains(number))
-                .ok_or_else(|| {
-                    Error(format!("params.{key} must be a number from {min} to {max}"))
-                })?,
-        };
-    }
-    Ok(values)
-}
 
 #[expect(
     clippy::cast_possible_truncation,
@@ -291,7 +290,8 @@ impl Extractor for Scenes {
     const DESCRIPTOR: &'static str = include_str!("../descriptor.json");
 
     fn begin(context: &Context, _host: &Host) -> Result<Self, Error> {
-        let [sensitivity, min_scene_ms, black_level, min_black_ms] = params(context)?;
+        let [sensitivity, min_scene_ms, black_level, min_black_ms] =
+            context.number_params("alpha2.scenes", &PARAMS)?;
         let passes = context
             .passes
             .iter()
@@ -396,11 +396,11 @@ mod tests {
     fn the_descriptor_declares_the_defaults_and_bounds_the_plugin_uses() {
         let descriptor: serde_json::Value =
             serde_json::from_str(<Scenes as Extractor>::DESCRIPTOR).expect("descriptor");
-        for (name, default, min, max) in PARAMS {
-            let schema = &descriptor["params_schema"]["properties"][name];
-            assert_eq!(schema["default"].as_f64(), Some(default), "{name}");
-            assert_eq!(schema["minimum"].as_f64(), Some(min), "{name}");
-            assert_eq!(schema["maximum"].as_f64(), Some(max), "{name}");
+        for param in PARAMS {
+            let schema = &descriptor["params_schema"]["properties"][param.key];
+            assert_eq!(schema["default"].as_f64(), Some(param.default), "{param:?}");
+            assert_eq!(schema["minimum"].as_f64(), Some(param.min), "{param:?}");
+            assert_eq!(schema["maximum"].as_f64(), Some(param.max), "{param:?}");
         }
     }
 

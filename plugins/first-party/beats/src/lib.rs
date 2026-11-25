@@ -14,7 +14,10 @@ mod analysis;
 use std::f64::consts::TAU;
 use std::sync::Arc;
 
-use alpha2_plugin_sdk::{Audio, Context, Direction, Emitter, Error, Extractor, Host};
+use alpha2_plugin_sdk::{
+    Audio, Context, Direction, Emitter, Error, Extractor, Host, MAX_DATA_INTERVALS,
+    MAX_DATA_VALUES, NumberParam, TICKS_PER_SECOND,
+};
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
@@ -24,46 +27,36 @@ const HOP: usize = HOP_SAMPLES as usize;
 const WINDOW: usize = 1_024;
 const BINS: usize = WINDOW / 2 + 1;
 const FRAMES_PER_SECOND: f64 = RATE as f64 / HOP_SAMPLES as f64;
-const TICKS_PER_SECOND: i64 = 120_000;
 const MAGNITUDE_GAIN_BEFORE_LOG: f64 = 1_000.0;
 const SILENT_FLUX: f32 = 0.01;
 const SILENT_RMS: f32 = 1e-4;
 const ONSET_RISE_AT_SENSITIVITY_0: f32 = 0.2;
 const ONSET_RISE_AT_SENSITIVITY_1: f32 = 0.02;
-/// Mirrors `alpha2_model::MAX_DATA_VALUES`.
-const MAX_DATA_VALUES: usize = 4_000_000;
-/// Mirrors `alpha2_model::MAX_DATA_INTERVALS`.
-const MAX_DATA_INTERVALS: usize = 200_000;
 const ENVELOPE_CHANNELS: usize = 2;
 
-const PARAMS: [(&str, f64, f64, f64); 3] = [
-    ("min_bpm", 60.0, 30.0, 300.0),
-    ("max_bpm", 200.0, 30.0, 300.0),
-    ("sensitivity", 0.5, 0.0, 1.0),
+const PARAMS: [NumberParam; 3] = [
+    NumberParam {
+        key: "min_bpm",
+        default: 60.0,
+        min: 30.0,
+        max: 300.0,
+    },
+    NumberParam {
+        key: "max_bpm",
+        default: 200.0,
+        min: 30.0,
+        max: 300.0,
+    },
+    NumberParam {
+        key: "sensitivity",
+        default: 0.5,
+        min: 0.0,
+        max: 1.0,
+    },
 ];
 
 fn params(context: &Context) -> Result<[f64; 3], Error> {
-    if let Some(key) = context
-        .params
-        .keys()
-        .find(|key| PARAMS.iter().all(|(name, ..)| name != key))
-    {
-        return Err(Error(format!(
-            "params.{key} is not a param of alpha2.beats"
-        )));
-    }
-    let mut values = [0.0; 3];
-    for (value, (key, default, min, max)) in values.iter_mut().zip(PARAMS) {
-        *value = match context.params.get(key) {
-            None => default,
-            Some(given) => given
-                .as_f64()
-                .filter(|number| (min..=max).contains(number))
-                .ok_or_else(|| {
-                    Error(format!("params.{key} must be a number from {min} to {max}"))
-                })?,
-        };
-    }
+    let values = context.number_params("alpha2.beats", &PARAMS)?;
     if values[0] >= values[1] {
         return Err(Error(format!(
             "params.min_bpm ({}) must be below params.max_bpm ({})",
@@ -321,11 +314,11 @@ mod tests {
     fn the_descriptor_declares_the_defaults_and_bounds_the_plugin_uses() {
         let descriptor: serde_json::Value =
             serde_json::from_str(<Beats as Extractor>::DESCRIPTOR).expect("descriptor");
-        for (name, default, min, max) in PARAMS {
-            let schema = &descriptor["params_schema"]["properties"][name];
-            assert_eq!(schema["default"].as_f64(), Some(default), "{name}");
-            assert_eq!(schema["minimum"].as_f64(), Some(min), "{name}");
-            assert_eq!(schema["maximum"].as_f64(), Some(max), "{name}");
+        for param in PARAMS {
+            let schema = &descriptor["params_schema"]["properties"][param.key];
+            assert_eq!(schema["default"].as_f64(), Some(param.default), "{param:?}");
+            assert_eq!(schema["minimum"].as_f64(), Some(param.min), "{param:?}");
+            assert_eq!(schema["maximum"].as_f64(), Some(param.max), "{param:?}");
         }
         let input = &descriptor["input"];
         assert_eq!(input["sample_rate"].as_u64(), Some(u64::from(RATE)));

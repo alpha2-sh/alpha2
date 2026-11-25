@@ -17,7 +17,10 @@ mod image;
 
 use std::collections::BTreeSet;
 
-use alpha2_plugin_sdk::{Context, Direction, Emitter, Error, Extractor, Frame, Host, VideoFormat};
+use alpha2_plugin_sdk::{
+    Context, Direction, Emitter, Error, Extractor, Frame, Host, MAX_DATA_COORDINATE,
+    MAX_DATA_ROTATION_DEGREES, MAX_DATA_SCALE, NumberParam, VideoFormat,
+};
 
 use appearance::Template;
 use corners::Area;
@@ -33,8 +36,12 @@ const REGION_FIELDS: [(&str, f64, f64); 4] = [
     ("width", MIN_BOX, 1.0),
     ("height", MIN_BOX, 1.0),
 ];
-/// `confidence` with its default and the inclusive bounds `descriptor.json` declares.
-const CONFIDENCE: (&str, f64, f64, f64) = ("confidence", 0.5, 0.0, 1.0);
+const CONFIDENCE: NumberParam = NumberParam {
+    key: "confidence",
+    default: 0.5,
+    min: 0.0,
+    max: 1.0,
+};
 const EDGE_ROUNDING: f64 = 1e-9;
 
 const MAX_FEATURES: usize = 64;
@@ -46,10 +53,6 @@ const MAX_SCALE_CHANGE_PER_FRAME: f64 = 2.0;
 const SEARCH_RADIUS_BOXES: f64 = 1.0;
 const SEARCH_GROWTH_BOXES_PER_LOST_FRAME: f64 = 0.5;
 const SEARCH_MAX_BOXES: f64 = 4.0;
-
-const MAX_DATA_COORDINATE: f32 = 16.0;
-const MAX_DATA_ROTATION_DEGREES: f32 = 36_000.0;
-const MAX_DATA_SCALE: f32 = 1_000.0;
 
 #[derive(Clone, Copy, Debug)]
 struct Region {
@@ -103,16 +106,12 @@ fn params(context: &Context) -> Result<(Region, f64), Error> {
     if let Some(key) = context
         .params
         .keys()
-        .find(|key| *key != "region" && *key != CONFIDENCE.0)
+        .find(|key| *key != "region" && *key != CONFIDENCE.key)
     {
         return Err(Error(format!("params.{key} is not a param of {ID}")));
     }
     let region = region(context.params.get("region"))?;
-    let (key, default, min, max) = CONFIDENCE;
-    let confidence = match context.params.get(key) {
-        None => default,
-        given => bounded(given, key, min, max)?,
-    };
+    let confidence = CONFIDENCE.value(context.params.get(CONFIDENCE.key))?;
     Ok((region, confidence))
 }
 
@@ -448,10 +447,10 @@ mod tests {
         let descriptor: serde_json::Value =
             serde_json::from_str(<Track as Extractor>::DESCRIPTOR).expect("descriptor");
         let properties = &descriptor["params_schema"]["properties"];
-        let (name, default, min, max) = CONFIDENCE;
-        assert_eq!(properties[name]["default"].as_f64(), Some(default));
-        assert_eq!(properties[name]["minimum"].as_f64(), Some(min));
-        assert_eq!(properties[name]["maximum"].as_f64(), Some(max));
+        let confidence = &properties[CONFIDENCE.key];
+        assert_eq!(confidence["default"].as_f64(), Some(CONFIDENCE.default));
+        assert_eq!(confidence["minimum"].as_f64(), Some(CONFIDENCE.min));
+        assert_eq!(confidence["maximum"].as_f64(), Some(CONFIDENCE.max));
         let region = &properties["region"];
         assert_eq!(region["x-alpha2-display"], "box");
         assert_eq!(
