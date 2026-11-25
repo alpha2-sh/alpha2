@@ -614,7 +614,8 @@ pub fn over_budget_warning(stats: &alpha2_render::GpuSubmissionStats) -> Option<
     (stats.over_budget > 0).then(|| {
         format!(
             "alpha2-host warning: {} GPU submissions were predicted over the {:.1} ms submission \
-             budget, the longest at {:.1} ms; a pass could not be cut finer",
+             budget, the longest at {:.1} ms; a pass could not be cut finer or a frame needed more \
+             submissions than one frame may take",
             stats.over_budget,
             stats.budget_ms.unwrap_or_default(),
             stats.max_predicted_ms.unwrap_or_default()
