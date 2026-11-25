@@ -27,7 +27,9 @@ use sha2::{Digest, Sha256};
 
 /// The flags every wasm artifact is built with.
 const WASM_RUSTFLAGS: &str =
-    "-Ctarget-feature=-relaxed-simd --cfg getrandom_backend=\"unsupported\"";
+    "-Ctarget-feature=+simd128,-relaxed-simd --cfg getrandom_backend=\"unsupported\"";
+
+const NATIVE_BUILD_ENV: [(&str, &str); 2] = [("GGML_NATIVE", "OFF"), ("GGML_CCACHE", "OFF")];
 
 const USAGE: &str =
     "usage: alpha2-plugin-pack <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
@@ -156,6 +158,8 @@ fn build(manifest: &Path, target: &str, wasm: bool) -> Result<(), String> {
             "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS",
             WASM_RUSTFLAGS,
         );
+    } else {
+        command.envs(NATIVE_BUILD_ENV);
     }
     run(&mut command).map(drop)
 }
