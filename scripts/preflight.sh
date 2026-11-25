@@ -79,7 +79,8 @@ check_plugins_clippy() {
 check_plugins_clippy_wasm() {
   cargo clippy --manifest-path plugins/Cargo.toml --locked --target wasm32-unknown-unknown \
     -p alpha2-plugin-sdk -p alpha2-plugin-fixture-digest -p alpha2-plugin-fixture-scripted \
-    -p alpha2-plugin-fixture-supplied \
+    -p alpha2-plugin-fixture-supplied -p alpha2-plugin-beats -p alpha2-plugin-scenes \
+    -p alpha2-plugin-track \
     -- -D warnings
 }
 check_wasm_clippy() {
