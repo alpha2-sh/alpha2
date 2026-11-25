@@ -1061,7 +1061,6 @@ impl Renderer {
             storage.code_scale(planes.format),
             self.presentation_filter_samples(),
         );
-        // An opaque format reads no alpha; any plane fills the slot.
         let textures = [
             (0, planes.y),
             (1, planes.chroma),

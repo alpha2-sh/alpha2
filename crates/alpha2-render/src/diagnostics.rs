@@ -134,7 +134,8 @@ pub struct GpuSubmissionStats {
     pub max_per_frame: u32,
     /// Longest predicted GPU time of one submission, in milliseconds, among planned frames.
     pub max_predicted_ms: Option<f64>,
-    /// Submissions predicted over the submission budget: a pass the planner could not cut finer.
+    /// Submissions predicted over the submission budget: passes that could not be cut finer, and
+    /// frames spread past the per-frame submission cap.
     pub over_budget: u64,
     /// The submission budget the frames were planned under, in milliseconds.
     pub budget_ms: Option<f64>,

@@ -205,8 +205,6 @@ impl Renderer {
             Some(id),
         );
         if placement.pilot.is_some() || placement.pieces.count() > 1 {
-            // Pieces read only the pass's sources, never its target, so pixels match an undivided
-            // pass.
             encoder.encode_pieces(
                 placement,
                 crate::composite::PixelRect::whole(size),

@@ -535,7 +535,6 @@ impl Renderer {
         blend_space: crate::BlendSpace,
     ) -> Result<PreparedVector, RenderError> {
         let linear = self.vector_linear(blend_space);
-        // Pages no taller than wide, nor than the device's largest texture.
         let page_rows = (self.limits.max_texture_dimension_2d.min(ATLAS_WIDTH) / 16).max(1);
         #[cfg(test)]
         let page_rows = match self
@@ -893,7 +892,6 @@ fn lay_out_tiles(
         let y = coverage.origin.1 + i32::try_from(index / tiles_x).unwrap_or(0);
         let (page, slot) = match tile {
             TileState::Empty => continue,
-            // Full tiles read no atlas, so any page's binding works.
             TileState::Full => (ranges.last().map_or(0, |(page, _)| *page), FULL_SLOT),
             TileState::Partial(partial) => atlas.push(&coverage.partial[*partial as usize]),
         };

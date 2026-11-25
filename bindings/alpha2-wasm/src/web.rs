@@ -49,7 +49,7 @@ pub(crate) fn invalid_state(message: impl std::fmt::Display) -> JsValue {
 
 /// The binding's own step failed, not the caller's input.
 pub(crate) fn internal_error(message: impl std::fmt::Display) -> JsValue {
-    coded_error(Code::INTERNAL, message)
+    coded_error(Code::ALPHA2_ERROR, message)
 }
 
 /// `RESOURCE_LIMIT` for an upload of `source_id` that would push the export frame's pinned

@@ -587,7 +587,10 @@ export interface GpuSubmissions {
   readonly maxPerFrame: number;
   /** Longest predicted GPU time of one submission; `null` when no frame needed splitting. */
   readonly maxPredictedMs: number | null;
-  /** Submissions predicted over the submission budget: passes that could not be cut finer. */
+  /**
+   * Submissions predicted over the submission budget: passes that could not be cut finer, and
+   * frames spread past the per-frame submission cap.
+   */
   readonly overBudget: number;
 }
 

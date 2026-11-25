@@ -1668,7 +1668,7 @@ impl WebCpuRenderer {
         self.texts = TextTextures::new();
     }
 
-    /// Sets the export profile's texture budget and filter and motion blur sample controls.
+    /// Sets the export profile's texture budget and filter sample budget.
     fn use_export_quality(renderer: &CpuRenderer) {
         let quality = QualityProfile::export();
         renderer.set_texture_budget_bytes(quality.texture_budget_bytes);

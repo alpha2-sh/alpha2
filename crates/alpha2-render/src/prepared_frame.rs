@@ -19,7 +19,6 @@ pub(crate) enum PreparedNode {
     Effect(Option<Shared<RegisteredEffect>>),
     Composite(PreparedComposite),
     Vector {
-        uniform_slices: usize,
         scene: Option<Result<Box<crate::vector::PreparedVector>, crate::RenderError>>,
     },
 }
@@ -65,7 +64,7 @@ impl PreparedFrame {
         node: RenderNodeId,
     ) -> Option<&Result<Box<crate::vector::PreparedVector>, crate::RenderError>> {
         match self.node(node) {
-            PreparedNode::Vector { scene, .. } => scene.as_ref(),
+            PreparedNode::Vector { scene } => scene.as_ref(),
             _ => None,
         }
     }
@@ -78,12 +77,8 @@ impl PreparedFrame {
     ) {
         let blend_space = graph.blend_space.unwrap_or(renderer.blend_space);
         for node in drawn {
-            if let (
-                RenderNode::Vector { scene },
-                PreparedNode::Vector {
-                    scene: prepared, ..
-                },
-            ) = (&graph.nodes[node.index], &mut self.nodes[node.index])
+            if let (RenderNode::Vector { scene }, PreparedNode::Vector { scene: prepared }) =
+                (&graph.nodes[node.index], &mut self.nodes[node.index])
             {
                 *prepared = Some(
                     renderer
@@ -112,7 +107,6 @@ impl PreparedFrame {
         let cursor = order
             .iter()
             .fold(cursor, |cursor, node| match self.node(*node) {
-                PreparedNode::Nothing => cursor,
                 PreparedNode::Effect(registered) => effect_uniform_end(
                     cursor,
                     registered
@@ -121,19 +115,12 @@ impl PreparedFrame {
                     alignment,
                 ),
                 PreparedNode::Composite(composite) => {
-                    (0..composite.batches.len()).fold(cursor, |cursor, _| {
-                        aligned_uniform_end(
-                            cursor,
-                            float_uniform_bytes(BATCH_UNIFORM_FLOATS),
-                            alignment,
-                        )
-                    })
+                    composite_uniform_end(cursor, composite, alignment)
                 }
-                PreparedNode::Vector { uniform_slices, .. } => {
-                    (0..*uniform_slices).fold(cursor, |cursor, _| {
-                        aligned_uniform_end(cursor, crate::vector::VECTOR_UNIFORM_BYTES, alignment)
-                    })
-                }
+                PreparedNode::Vector {
+                    scene: Some(Ok(scene)),
+                } => aligned_uniform_end(cursor, scene.uniform_bytes(alignment), alignment),
+                PreparedNode::Nothing | PreparedNode::Vector { .. } => cursor,
             });
         match pack {
             FramePack::Nothing => cursor,
@@ -172,7 +159,11 @@ pub(crate) enum FramePack {
 }
 
 pub(crate) fn composite_uniform_capacity(composite: &PreparedComposite, alignment: u64) -> u64 {
-    (0..composite.batches.len()).fold(0, |cursor, _| {
+    composite_uniform_end(0, composite, alignment)
+}
+
+fn composite_uniform_end(cursor: u64, composite: &PreparedComposite, alignment: u64) -> u64 {
+    (0..composite.batches.len()).fold(cursor, |cursor, _| {
         aligned_uniform_end(cursor, float_uniform_bytes(BATCH_UNIFORM_FLOATS), alignment)
     })
 }
@@ -212,15 +203,7 @@ impl Renderer {
                         graph.size,
                     ),
                 ),
-                RenderNode::Vector { scene } => PreparedNode::Vector {
-                    uniform_slices: scene
-                        .ops
-                        .iter()
-                        .filter(|op| !matches!(op, alpha2_geometry::VectorOp::PushLayer { .. }))
-                        .count()
-                        + 1,
-                    scene: None,
-                },
+                RenderNode::Vector { .. } => PreparedNode::Vector { scene: None },
             };
         }
         PreparedFrame { nodes }

@@ -221,6 +221,7 @@ export function decideRetry(
       );
     if (
       failure.code === "OUT_OF_MEMORY" &&
+      failure.resource === "gpu" &&
       last.renderer === "gpu" &&
       options.cpuRenderer === true
     )
