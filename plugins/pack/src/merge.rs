@@ -52,6 +52,9 @@ impl Pack {
     }
 
     fn check(&self, entry: &Value) -> Result<Option<Vec<u8>>, String> {
+        if entry.get("supplied").is_some() {
+            return Ok(None);
+        }
         let url = entry["url"]
             .as_str()
             .ok_or_else(|| format!("{}: an entry has no url", self.dir.display()))?;
@@ -255,7 +258,7 @@ mod tests {
             "abi": "alpha2-plugin/1",
             "kind": "extractor",
             "artifacts": module.into_iter().chain([native]).collect::<Vec<_>>(),
-            "resources": [resource],
+            "resources": [resource, { "name": "weights", "supplied": { "shape": "file" } }],
             "about": { "name": "Test" },
         });
         let text = manifest_text(manifest, DESCRIPTOR).expect("manifest");
