@@ -154,10 +154,6 @@ impl Renderer {
             return Err(GraphError::SourceOutput);
         }
         let mut prepared = self.prepare_frame(graph, &plan.order);
-        let uniforms = self.uniform_buffers.acquire(
-            self.gpu.device(),
-            prepared.uniform_capacity(sources, &plan.order, pack, self.uniform_alignment()),
-        );
         let blend_space = graph.blend_space.unwrap_or(self.blend_space).shader_value();
         let cached = self.cached_results(graph, &plan.order, plan.output, blend_space);
         let pixels = u64::from(graph.size.width) * u64::from(graph.size.height);
@@ -167,6 +163,10 @@ impl Renderer {
                 .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
         };
         prepared.prepare_vectors(self, graph, drawn());
+        let uniforms = self.uniform_buffers.acquire(
+            self.gpu.device(),
+            prepared.uniform_capacity(sources, &plan.order, pack, self.uniform_alignment()),
+        );
         let mut conversions = crate::FrameCost::default();
         for work in sources {
             conversions.add_cost(work.work());
@@ -560,7 +560,6 @@ fn planned_passes<'a>(
         PreparedNode::Composite(composite) => Some((composite.work(), Some(composite.pass))),
         PreparedNode::Vector {
             scene: Some(Ok(scene)),
-            ..
         } => Some((scene.work(), Some(PassKind::Vector.key(frame_pixels)))),
         _ => None,
     }));
@@ -577,7 +576,6 @@ fn node_work(node: &RenderNode<'_>, prepared: &PreparedNode, pixels: u64) -> cra
             _,
             PreparedNode::Vector {
                 scene: Some(Ok(scene)),
-                ..
             },
         ) => scene.work(),
         _ => crate::FrameCost::default(),
@@ -622,7 +620,6 @@ impl Renderer {
                     PreparedNode::Composite(composite) if composite.batches.len() > 1 => frame,
                     PreparedNode::Vector {
                         scene: Some(Ok(scene)),
-                        ..
                     } => scene.texture_bytes(graph.size, texel_bytes),
                     _ => 0,
                 };
