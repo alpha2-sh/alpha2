@@ -29,7 +29,6 @@ use image::{Plane, Pyramid};
 
 const ID: &str = "alpha2.track";
 const MIN_BOX: f64 = 0.04;
-/// `region`'s fields with the inclusive bounds `descriptor.json` declares.
 const REGION_FIELDS: [(&str, f64, f64); 4] = [
     ("x", 0.0, 1.0),
     ("y", 0.0, 1.0),

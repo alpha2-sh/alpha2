@@ -20,9 +20,7 @@ use serde_json::{Value, json};
 
 const RATE: i64 = 16_000;
 const BLOCK: usize = 16_000;
-/// Silences put before, between and after the phrases, in milliseconds.
-const GAPS: [i64; 7] = [500, 300, 450, 600, 900, 1500, 700];
-/// What the reader says in each phrase of the fixture.
+const GAPS_MS: [i64; 7] = [500, 300, 450, 600, 900, 1500, 700];
 const SPOKEN: [&str; 6] = [
     "so too it is better to recapture an army",
     "and hence to fight and conquer in all your battles",
@@ -45,7 +43,6 @@ fn model() -> Option<PathBuf> {
     model_from("ALPHA2_TEST_WHISPER_MODEL")
 }
 
-/// The fixture's phrases with the silences between, and where each phrase lies in seconds.
 fn fixture() -> (Vec<f32>, Vec<(f64, f64)>) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../silence/tests/fixtures");
     let wav = std::fs::read(dir.join("speech.wav")).expect("speech.wav");
@@ -61,7 +58,7 @@ fn fixture() -> (Vec<f32>, Vec<(f64, f64)>) {
     let phrases = meta["phrases"].as_array().expect("phrases");
     let mut samples = Vec::new();
     let mut spans = Vec::new();
-    for (index, gap) in GAPS.iter().enumerate() {
+    for (index, gap) in GAPS_MS.iter().enumerate() {
         samples.resize(samples.len() + (gap * RATE / 1000) as usize, 0.0);
         if let Some(phrase) = phrases.get(index) {
             let from = phrase["start"].as_u64().expect("start") as usize;
@@ -74,16 +71,14 @@ fn fixture() -> (Vec<f32>, Vec<(f64, f64)>) {
     (samples, spans)
 }
 
-/// `copies` of the fixture, each followed by `pause` seconds of silence, and the seconds a copy
-/// with its pause lasts.
-fn repeated(copies: usize, pause: usize) -> (Vec<f32>, f64) {
+fn repeated(copies: usize, pause_seconds: usize) -> (Vec<f32>, f64) {
     let (one, _) = fixture();
     let mut samples = Vec::new();
     for _ in 0..copies {
         samples.extend_from_slice(&one);
-        samples.resize(samples.len() + pause * RATE as usize, 0.0);
+        samples.resize(samples.len() + pause_seconds * RATE as usize, 0.0);
     }
-    let period = seconds(one.len() + pause * RATE as usize);
+    let period = seconds(one.len() + pause_seconds * RATE as usize);
     (samples, period)
 }
 
@@ -98,7 +93,6 @@ fn normalized(text: &str) -> String {
         .collect()
 }
 
-/// The fraction of `spoken`'s words that `heard` has right: one less the word error rate.
 fn accuracy(heard: &[&str], spoken: &[&str]) -> f64 {
     let heard: Vec<String> = heard.iter().map(|word| normalized(word)).collect();
     let spoken: Vec<String> = spoken.iter().map(|word| normalized(word)).collect();
@@ -151,7 +145,6 @@ fn context(end: i64, params: &Value, model: Option<&Path>, passes: &Value) -> St
     .to_string()
 }
 
-/// Why `begin` fails with `model` in the slot (an empty slot for `None`) and `params`.
 fn refusal(model: Option<&Path>, params: &Value) -> String {
     let mut plugin = instance(model.unwrap_or(Path::new("/nonexistent")));
     let passes = json!([{ "start": 0, "direction": "forward" }]);
@@ -162,7 +155,6 @@ fn refusal(model: Option<&Path>, params: &Value) -> String {
     plugin.take().failure.expect("a reason")
 }
 
-/// A word as emitted, its times in seconds.
 #[derive(Clone, Debug, PartialEq)]
 struct Heard {
     start: f64,
@@ -183,7 +175,6 @@ impl Run {
     }
 }
 
-/// A pass: its direction and the indices of the `BLOCK`-frame blocks it delivers, in order.
 type Pass = (u32, Vec<usize>);
 
 fn forward(samples: &[f32]) -> Vec<Pass> {
@@ -387,8 +378,6 @@ fn a_multilingual_model_detects_english_and_keeps_it() {
     }
 }
 
-/// A whisper.cpp ggml file of tiny's shape with one 2 x 2 `f16` tensor, `x`, of which
-/// `tensor_bytes` of 8 are written.
 fn ggml(vocabulary: i32, audio_context: i32, tensor_bytes: usize) -> Vec<u8> {
     let mut bytes = 0x6767_6d6c_u32.to_le_bytes().to_vec();
     let mut push = |values: &[i32]| {
