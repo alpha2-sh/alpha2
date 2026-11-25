@@ -84,7 +84,7 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "GPU_INIT_FAILED": _UNKNOWN,
     "ENCODE_ERROR": _UNKNOWN,
     "ENCODER_BUSY": ("RESOURCE_BUSY", "gpu"),
-    # A caught panic of the host.
+    # A defect in the host or the engine: a caught panic or an internal error.
     "INTERNAL": ("DEFECT", "unknown"),
     "ALPHA2_ERROR": _UNKNOWN,
     "HOST_NOT_FOUND": _PERMANENT,

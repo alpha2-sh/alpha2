@@ -351,7 +351,7 @@ const CODE_CLASSES: Readonly<Record<ClassifiedCode, FailureClass>> =
     GPU_INIT_FAILED: unknown,
     ENCODE_ERROR: unknown,
     ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },
-    // A caught panic of the host.
+    // A defect in the host or the engine: a caught panic or an internal error.
     INTERNAL: defect,
     ALPHA2_ERROR: unknown,
     // `@alpha2-sh/node` setup errors that a retry does not fix.
