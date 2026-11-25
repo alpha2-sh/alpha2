@@ -44,6 +44,10 @@ All notable changes to this project are documented in this file.
   `restorePlugin` in `alpha2/plugins` hand a loaded plugin to a worker without fetching or
   compiling it again.
 
+- `bindableProperties(project, owner)` in `alpha2/project` lists the properties of a clip, track,
+  transition, composition node or the master bus that data can be bound to, in the path syntax of
+  `dataReferences` and `bake`, with the data kinds each reads.
+
 ### Changed
 
 - **Breaking:** `runExtractor` takes no `plugin`: a plugin's extractor records `made_by.plugin`

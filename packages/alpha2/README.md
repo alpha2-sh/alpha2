@@ -142,7 +142,7 @@ const { project, assets, loudness, warnings } = compileCompose(compose, spec, { 
 | Import | What it has |
 | --- | --- |
 | `alpha2/wasm` | The engine: `init`, `WebEffectRegistry` (rendering, export, audio mixing), and the engine's functions for rate control, captions, loudness and waveforms. |
-| `alpha2/project` | The project document's types and limits, tick conversions, `validateProject`. |
+| `alpha2/project` | The project document's types and limits, tick conversions, `validateProject`; `dataReferences` (where a project reads data) and `bindableProperties` (where it could, with the data kinds each place reads). |
 | `alpha2/builder` | `ProjectBuilder`: documents from seconds, with generated ids. |
 | `alpha2/edit` | Editing operations on a project: split, trim, ripple, roll, slip, slide, retime, insert, overwrite, append, move. |
 | `alpha2/apply-edit` | `applyEdit`: the engine's edit operations that apply data to a project (`remove_ranges`, `split_at`, `bake`), the same canonical result on every surface. |
