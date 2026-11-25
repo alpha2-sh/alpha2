@@ -23,6 +23,8 @@ mod silence_tests;
 mod tests;
 #[cfg(test)]
 mod track_tests;
+#[cfg(test)]
+mod transcribe_tests;
 mod wasm;
 pub mod wire;
 pub mod worker;

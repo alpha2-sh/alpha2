@@ -238,6 +238,10 @@ mod tests {
         let mut module = entry(dir, "plugin.wasm", wasm);
         module["target"] = json!(WASM_TARGET);
         module["type"] = json!("wasm");
+        native_pack(dir, target, version, Some(module))
+    }
+
+    fn native_pack(dir: &Path, target: &str, version: &str, module: Option<Value>) -> PathBuf {
         let mut native = entry(dir, &format!("{target}/plugin.so"), target.as_bytes());
         native["target"] = json!(target);
         native["type"] = json!("cdylib");
@@ -250,7 +254,7 @@ mod tests {
             "version": version,
             "abi": "alpha2-plugin/1",
             "kind": "extractor",
-            "artifacts": [module, native],
+            "artifacts": module.into_iter().chain([native]).collect::<Vec<_>>(),
             "resources": [resource],
             "about": { "name": "Test" },
         });
@@ -314,6 +318,41 @@ mod tests {
             b"model licence"
         );
         assert_eq!(read(&out.join(NOTICES)).expect("notices"), b"notices");
+    }
+
+    #[test]
+    fn packs_without_a_wasm_artifact_merge_into_one_without_it() {
+        let scratch = Scratch::new("native-only");
+        let inputs = vec![
+            native_pack(
+                &scratch.0.join("lin"),
+                "x86_64-unknown-linux-gnu",
+                "1.0.0",
+                None,
+            ),
+            native_pack(
+                &scratch.0.join("mac"),
+                "aarch64-apple-darwin",
+                "1.0.0",
+                None,
+            ),
+        ];
+        let out = scratch.0.join("out");
+        merge(&inputs, &out).expect("merge");
+        let merged = Pack::read(&out).expect("the merged pack checks");
+        let targets: Vec<&str> = merged
+            .entries("artifacts")
+            .map(|artifact| artifact["target"].as_str().expect("target"))
+            .collect();
+        assert_eq!(
+            targets,
+            ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+        );
+        assert!(!out.join("plugin.wasm").exists());
+        assert_eq!(
+            read(&out.join("aarch64-apple-darwin/plugin.so")).expect("native"),
+            b"aarch64-apple-darwin"
+        );
     }
 
     #[test]
