@@ -21,10 +21,11 @@ impl Plane {
         self.data[y * self.width + x]
     }
 
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        clippy::cast_precision_loss
+        clippy::cast_precision_loss,
+        reason = "coordinates are clamped inside a frame far smaller than 2^24 pixels"
     )]
     pub fn sample(&self, x: f32, y: f32) -> f32 {
         let x = x.clamp(0.0, (self.width - 1) as f32);
@@ -42,7 +43,10 @@ impl Plane {
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a frame is far smaller than 2^24 pixels"
+        )]
         let (right, bottom) = ((self.width - 1) as f32, (self.height - 1) as f32);
         (0.0..=right).contains(&x) && (0.0..=bottom).contains(&y)
     }
@@ -121,7 +125,7 @@ impl Pyramid {
 }
 
 pub fn scale_of(level: usize) -> f32 {
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(clippy::cast_precision_loss, reason = "a power of two is exact")]
     let pixels = (1_u32 << level) as f32;
     pixels
 }

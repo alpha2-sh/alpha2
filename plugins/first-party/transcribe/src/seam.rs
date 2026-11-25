@@ -24,13 +24,7 @@ fn key(text: &str) -> String {
         .collect()
 }
 
-/// Where to join `earlier`, the words of a window not yet joined, and `later`, those of the next
-/// window, which overlap on `overlap` (samples): the words of `earlier` before the returned first
-/// index are kept, and those of `later` from the second.
-///
-/// The join is a word both windows heard, at about the same time and away from the edges each
-/// window cuts, the one nearest the middle of the overlap. Without one, each window keeps the
-/// words whose middles lie on its side of the middle.
+/// How many words of `earlier` to keep, and the index in `later` of the first word to keep.
 #[must_use]
 pub fn join(earlier: &[Word], later: &[Word], overlap: (i64, i64)) -> (usize, usize) {
     let (from, to) = overlap;

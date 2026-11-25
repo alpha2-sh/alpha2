@@ -117,8 +117,6 @@ fn linked<'a>(metadata: &'a Value, root: &str) -> Result<Vec<&'a Value>, String>
     Ok(packages)
 }
 
-/// The licence and notice files in `directory` and the directories directly below it, by their
-/// paths below `directory`.
 fn licence_files_below(directory: &Path) -> Vec<(String, PathBuf)> {
     let mut found: Vec<(String, PathBuf)> = licence_files(directory)
         .into_iter()

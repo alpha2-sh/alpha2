@@ -1,7 +1,7 @@
 [package]
 name = "alpha2-plugin-scenes"
 description = "Cuts between shots and stretches of black in a video, as an alpha2 plugin."
-version = "1.0.0"
+version = "1.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
