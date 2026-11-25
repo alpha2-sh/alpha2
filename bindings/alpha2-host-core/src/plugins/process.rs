@@ -259,6 +259,7 @@ pub(super) struct ProcessTransport {
     /// Why the worker can take no further request.
     broken: Option<PluginError>,
     pub(super) frames: Frames,
+    placed: Option<usize>,
     pub(super) make_region: fn(usize) -> std::io::Result<alpha2_os::SharedRegion>,
 }
 
@@ -339,6 +340,7 @@ impl ProcessTransport {
                 FramePath::Shared => Frames::Unmade,
                 FramePath::Pipe => Frames::Pipe,
             },
+            placed: None,
             make_region: alpha2_os::SharedRegion::create,
         };
         if let Err(error) = started {
@@ -740,16 +742,20 @@ impl Transport for ProcessTransport {
             height.to_le_bytes(),
             format.to_le_bytes(),
         );
-        let shared = match self.region_for(data.len()) {
-            Ok(Some(region)) => {
-                region.as_mut_slice()[..data.len()].copy_from_slice(data);
-                true
-            }
-            Ok(None) => false,
-            Err(error) => return Err(error.into_call_error()),
+        let placed = self.placed.take().filter(|_| data.is_empty());
+        let shared = match placed {
+            Some(len) => Some(len),
+            None => match self.region_for(data.len()) {
+                Ok(Some(region)) => {
+                    region.as_mut_slice()[..data.len()].copy_from_slice(data);
+                    Some(data.len())
+                }
+                Ok(None) => None,
+                Err(error) => return Err(error.into_call_error()),
+            },
         };
-        if shared {
-            let length = u64::try_from(data.len()).unwrap_or(u64::MAX).to_le_bytes();
+        if let Some(len) = shared {
+            let length = u64::try_from(len).unwrap_or(u64::MAX).to_le_bytes();
             self.call(
                 host::VIDEO_SHARED,
                 &[
@@ -763,6 +769,18 @@ impl Transport for ProcessTransport {
             )
         } else {
             self.call(host::VIDEO, &[&time, &width, &height, &format, data])
+        }
+    }
+
+    fn frame_buffer(&mut self, len: usize) -> Option<&mut [u8]> {
+        self.placed = None;
+        if !matches!(self.region_for(len), Ok(Some(_))) {
+            return None;
+        }
+        self.placed = Some(len);
+        match &mut self.frames {
+            Frames::Shared(region) => region.as_mut_slice().get_mut(..len),
+            Frames::Unmade | Frames::Pipe => None,
         }
     }
 

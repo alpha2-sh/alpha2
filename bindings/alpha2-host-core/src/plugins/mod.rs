@@ -551,6 +551,9 @@ trait Transport {
     fn begin(&mut self, context: &[u8]) -> Call;
     fn pass(&mut self, pass: u32, direction: u32) -> Call;
     fn video(&mut self, time: i64, width: u32, height: u32, format: u32, data: &[u8]) -> Call;
+    fn frame_buffer(&mut self, _len: usize) -> Option<&mut [u8]> {
+        None
+    }
     fn audio(&mut self, block: &AudioInput) -> Call;
     fn end(&mut self) -> Call;
     /// The supplied files the plugin read so far, sorted by name.
@@ -984,6 +987,10 @@ impl Extractor for PluginExtractor {
             &frame.bytes,
         )?;
         self.deliver(records, out)
+    }
+
+    fn frame_buffer(&mut self, len: usize) -> Option<&mut [u8]> {
+        self.transport.frame_buffer(len)
     }
 
     fn audio(&mut self, block: &AudioInput, out: &mut Emitter) -> Result<(), ExtractorError> {

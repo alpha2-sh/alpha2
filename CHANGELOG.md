@@ -7,14 +7,24 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - **Breaking:** a native plugin in a worker process gets its video frames through memory its host
-  shares with that worker alone, read-only there, instead of through the worker's pipe: a 1080p
-  RGBA frame no longer goes through the kernel twice. Where the memory cannot be made or mapped,
-  the run goes on through the pipe and the host writes one diagnostic. A plugin that writes into
-  its input frame, which the ABI never allowed, now fails its run with `PLUGIN_TRAPPED`. On Linux
-  and macOS the worker's standard input and output are one Unix socket. In Rust,
-  `WorkerCommand` gains `frames` (`FramePath::Shared`, or `FramePath::Pipe` to compare), and
-  `alpha2-os` gains `SharedRegion`, `MappedRegion`, `write_with_descriptor` and
+  shares with that worker alone, read-only there, instead of through the worker's pipe; the host
+  presents each delivered frame straight into that memory, so a 1080p RGBA frame is neither
+  copied nor sent through the kernel on its way to the plugin. Where the memory cannot be made
+  or mapped, the run goes on through the pipe and the host writes one diagnostic. A plugin that
+  writes into its input frame, which the ABI never allowed, now fails its run with
+  `PLUGIN_TRAPPED`. On Linux and macOS the worker's standard input and output are one Unix
+  socket. In Rust, `WorkerCommand` gains `frames` (`FramePath::Shared`, or `FramePath::Pipe` to
+  compare), and `alpha2-os` gains `SharedRegion`, `MappedRegion`, `write_with_descriptor` and
   `DescriptorReader`.
+
+### Added
+
+- `alpha2_engine::extract`: an extractor may offer memory for the next frame
+  (`Extractor::frame_buffer`, `None` by default), which a supplier fills through
+  `Supplier::frame_into` and `FramePlace` (by default it supplies as `frame` does) and the session
+  through `ExtractSession::supply_placed_video` and `supply_video_into`; `supply_frame` answers a
+  frame need that way, as `drive` does, and `present_for_extraction_into` presents a decoded
+  frame into such memory.
 
 ## [0.7.0] - 2026-11-24
 

@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use alpha2_engine::extract::{
     AudioChannels, Direction, DriveError, ExtractRequest, ExtractSession, Extractor, FrameFrom,
-    Need, RequestError, SuppliedAudio, SuppliedFrame, Supplier, mono_downmix,
+    FramePlace, Need, RequestError, SuppliedAudio, SuppliedFrame, Supplier, mono_downmix,
 };
-pub use alpha2_engine::extract::{displayed_size, present_for_extraction};
+pub use alpha2_engine::extract::{
+    displayed_size, present_for_extraction, present_for_extraction_into,
+};
 use alpha2_media::{
     AudioBlock, CancelToken, DecodeError, DecodeEvent, DecodeRequest, DecodeRequestKind,
     DecodedVideoFrame, Decoder, SourceId,
@@ -364,24 +366,15 @@ impl<'a, V: Decoder, A: Decoder> ReaderSupplier<'a, V, A> {
 
 impl<V: Decoder, A: Decoder> Supplier for ReaderSupplier<'_, V, A> {
     fn frame(&mut self, need: &Need) -> Result<Option<SuppliedFrame>, String> {
-        let Need::SourceFrame {
-            from,
-            direction,
-            size,
-            ..
-        } = need
-        else {
-            return Err("timeline frames come from the host's renderer".to_owned());
-        };
-        let reader = self
-            .video
-            .as_mut()
-            .ok_or_else(|| "no video reader".to_owned())?;
-        reader
-            .frame(*from, *direction)
-            .map_err(|error| error.to_string())?
-            .map(|frame| present_for_extraction(self.renderer, frame, *size))
-            .transpose()
+        self.source_frame(need, None)
+    }
+
+    fn frame_into(
+        &mut self,
+        need: &Need,
+        place: &mut FramePlace<'_>,
+    ) -> Result<Option<SuppliedFrame>, String> {
+        self.source_frame(need, Some(place))
     }
 
     fn audio(&mut self, need: &Need) -> Result<SuppliedAudio, String> {
@@ -401,6 +394,36 @@ impl<V: Decoder, A: Decoder> Supplier for ReaderSupplier<'_, V, A> {
         reader
             .block(*start_sample, *frames, *channels)
             .map_err(|error| error.to_string())
+    }
+}
+
+impl<V: Decoder, A: Decoder> ReaderSupplier<'_, V, A> {
+    fn source_frame(
+        &mut self,
+        need: &Need,
+        place: Option<&mut FramePlace<'_>>,
+    ) -> Result<Option<SuppliedFrame>, String> {
+        let Need::SourceFrame {
+            from,
+            direction,
+            size,
+            ..
+        } = need
+        else {
+            return Err("timeline frames come from the host's renderer".to_owned());
+        };
+        let reader = self
+            .video
+            .as_mut()
+            .ok_or_else(|| "no video reader".to_owned())?;
+        reader
+            .frame(*from, *direction)
+            .map_err(|error| error.to_string())?
+            .map(|frame| match place {
+                Some(place) => present_for_extraction_into(self.renderer, frame, *size, place),
+                None => present_for_extraction(self.renderer, frame, *size),
+            })
+            .transpose()
     }
 }
 

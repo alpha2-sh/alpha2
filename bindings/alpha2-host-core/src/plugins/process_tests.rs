@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::io::{BufReader, Write};
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use alpha2_engine::extract::DriveError;
@@ -213,14 +212,21 @@ fn supplied_files_read_in_a_worker_reach_the_data_and_its_failures_keep_their_de
 }
 
 /// A fetcher whose native copy is not the checked file.
-struct Tampered(PathBuf);
+#[cfg(not(target_os = "macos"))]
+struct Tampered(std::path::PathBuf);
 
+#[cfg(not(target_os = "macos"))]
 impl Fetch for Tampered {
     fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError> {
         Local.fetch(url, sha256, bytes)
     }
 
-    fn prepare_native(&mut self, _: &Path, bytes: &[u8], _: &str) -> Result<PathBuf, PluginError> {
+    fn prepare_native(
+        &mut self,
+        _: &std::path::Path,
+        bytes: &[u8],
+        _: &str,
+    ) -> Result<std::path::PathBuf, PluginError> {
         let mut changed = bytes.to_vec();
         changed.push(0);
         std::fs::write(&self.0, changed).expect("copy");
@@ -643,7 +649,12 @@ fn record_runs_cut_a_batch_at_record_boundaries_within_a_frame() {
 
 const TIMED_FRAMES: u32 = 100;
 
-fn ms_per_frame(plugin: usize, policy: &Policy, size: (u32, u32), format: VideoFormat) -> f64 {
+fn ms_per_frame(
+    plugin: usize,
+    policy: &Policy,
+    (size, format): ((u32, u32), VideoFormat),
+    place: bool,
+) -> f64 {
     let mut plugin = loaded(&manifest(plugin, false, true), &json!({}), policy).expect("loads");
     let (width, height) = size;
     let name = match format {
@@ -666,21 +677,37 @@ fn ms_per_frame(plugin: usize, policy: &Policy, size: (u32, u32), format: VideoF
         VideoFormat::Luma8 => 1,
     };
     let length = usize::try_from(width * height * bytes_per_pixel).expect("length");
+    let source = (0..length)
+        .map(|at| u8::try_from(at % 251).unwrap_or(0))
+        .collect::<Vec<_>>();
     let mut frame = VideoInput {
         time: MediaTime(0),
         width,
         height,
         format,
-        bytes: (0..length)
-            .map(|at| u8::try_from(at % 251).unwrap_or(0))
-            .collect(),
+        bytes: source.clone(),
+    };
+    let mut placed = VideoInput {
+        bytes: Vec::new(),
+        ..frame.clone()
     };
     let mut out = Emitter::default();
-    plugin.video(&frame, &mut out).expect("first frame");
+    let mut deliver = |plugin: &mut PluginExtractor, index: u32| {
+        let time = MediaTime(i64::from(index) * 4000);
+        if place && let Some(buffer) = plugin.frame_buffer(length) {
+            buffer.copy_from_slice(&source);
+            placed.time = time;
+            plugin.video(&placed, &mut out).expect("frame");
+        } else {
+            frame.bytes.copy_from_slice(&source);
+            frame.time = time;
+            plugin.video(&frame, &mut out).expect("frame");
+        }
+    };
+    deliver(&mut plugin, 0);
     let started = Instant::now();
     for index in 1..=TIMED_FRAMES {
-        frame.time = MediaTime(i64::from(index) * 4000);
-        plugin.video(&frame, &mut out).expect("frame");
+        deliver(&mut plugin, index);
     }
     started.elapsed().as_secs_f64() * 1000.0 / f64::from(TIMED_FRAMES)
 }
@@ -697,20 +724,24 @@ fn isolated_through(frames: FramePath) -> Policy {
 #[test]
 #[ignore = "a measurement, run in release with --nocapture"]
 fn time_video_frames_in_process_and_through_a_worker() {
-    for (size, format) in [
+    for frames in [
         ((1920, 1080), VideoFormat::Rgba8),
         ((960, 540), VideoFormat::Luma8),
     ] {
-        let here = ms_per_frame(0, &native_allowed(), size, format);
-        for frames in [FramePath::Shared, FramePath::Pipe] {
-            let there = ms_per_frame(0, &isolated_through(frames), size, format);
-            let idle = ms_per_frame(1, &isolated_through(frames), size, format);
+        let here = ms_per_frame(0, &native_allowed(), frames, false);
+        for (path, place, name) in [
+            (FramePath::Shared, true, "shared, in place"),
+            (FramePath::Shared, false, "shared, copied"),
+            (FramePath::Pipe, false, "pipe"),
+        ] {
+            let there = ms_per_frame(0, &isolated_through(path), frames, place);
+            let idle = ms_per_frame(1, &isolated_through(path), frames, place);
             println!(
-                "{}x{} {format:?} {frames:?}: digest in process {here:.3} ms/frame, digest in a \
-                 worker {there:.3}, scripted in a worker {idle:.3}; worker cost {:.1} % of in \
-                 process",
-                size.0,
-                size.1,
+                "{}x{} {:?} {name}: digest in process {here:.3} ms/frame, digest in a worker \
+                 {there:.3}, scripted in a worker {idle:.3}; worker cost {:.1} % of in process",
+                frames.0.0,
+                frames.0.1,
+                frames.1,
                 (there - here) / here * 100.0
             );
         }
@@ -764,7 +795,10 @@ fn digest_worker(frames: FramePath) -> process::ProcessTransport {
 
 const SIZES: [(u32, u32); 4] = [(64, 32), (64, 32), (128, 64), (64, 32)];
 
-fn digests(worker: &mut process::ProcessTransport) -> Vec<Vec<alpha2_plugin_abi::records::Record>> {
+fn digests(
+    worker: &mut process::ProcessTransport,
+    place: bool,
+) -> Vec<Vec<alpha2_plugin_abi::records::Record>> {
     SIZES
         .iter()
         .zip(0_u8..)
@@ -773,8 +807,15 @@ fn digests(worker: &mut process::ProcessTransport) -> Vec<Vec<alpha2_plugin_abi:
                 .map(|at| u8::try_from(at % 251).expect("byte") ^ index)
                 .collect::<Vec<_>>();
             let time = i64::from(index) * 4000;
+            let data: &[u8] = match worker.frame_buffer(pixels.len()).filter(|_| place) {
+                Some(buffer) => {
+                    buffer.copy_from_slice(&pixels);
+                    &[]
+                }
+                None => &pixels,
+            };
             worker
-                .video(time, width, height, video_format::RGBA8, &pixels)
+                .video(time, width, height, video_format::RGBA8, data)
                 .expect("frame")
         })
         .collect()
@@ -783,9 +824,11 @@ fn digests(worker: &mut process::ProcessTransport) -> Vec<Vec<alpha2_plugin_abi:
 #[test]
 fn frames_through_shared_memory_give_the_data_the_pipe_gives_and_a_larger_frame_replaces_it() {
     let mut shared = digest_worker(FramePath::Shared);
+    let mut placed = digest_worker(FramePath::Shared);
     let mut piped = digest_worker(FramePath::Pipe);
-    let through_memory = digests(&mut shared);
-    assert_eq!(through_memory, digests(&mut piped));
+    let through_memory = digests(&mut shared, false);
+    assert_eq!(through_memory, digests(&mut piped, true));
+    assert_eq!(through_memory, digests(&mut placed, true));
     assert_eq!(through_memory.len(), SIZES.len());
     assert_ne!(through_memory[0], through_memory[1]);
     assert!(
@@ -815,7 +858,7 @@ fn memory_that_cannot_be_made_or_mapped_keeps_the_run_on_the_pipe_with_one_diagn
         let mut unmade = digest_worker(FramePath::Shared);
         unmade.make_region = |_| Err(std::io::Error::other("refused for the test"));
         let mut piped = digest_worker(FramePath::Pipe);
-        assert_eq!(digests(&mut unmade), digests(&mut piped));
+        assert_eq!(digests(&mut unmade, true), digests(&mut piped, false));
         assert!(matches!(unmade.frames, process::Frames::Pipe));
 
         let params = json!({});
