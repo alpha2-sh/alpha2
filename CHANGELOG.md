@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- iOS: hardware-decoded frames stay on the GPU. The renderer samples `VideoToolbox` pixel buffers
+  as Metal textures, as Android imports decoder buffers, in exports, stills and the `Player`; the
+  export report's `surfaceFrames` counts them. A pixel buffer the GPU refuses is copied through
+  memory instead, once reported as a diagnostic and counted as `surfaceFallbacks`.
+- iOS: an export renders each frame straight into the H.264 or HEVC encoder's pixel buffer
+  instead of reading it back; the report's `framesRenderedInPlace` counts them.
+  `VideoFrameMode.cpu` turns both off.
+
+### Changed
+
+- **Breaking:** `alpha2-native-gpu`'s Metal import takes a raw `CVPixelBufferRef`
+  (`SharedMetalContext::import_pixel_buffer`, `pixel_buffer_planes`, `MetalImportError`) under a
+  new FFmpeg-free `iosurface-import` feature for every Apple target; `import_surface` and
+  `encoder_planes` remain as the `hwdevice` adapters on macOS.
+- **Breaking:** `alpha2_host_core::export::export_video` takes the renderer together with
+  optional `EncoderTargets`; `VideoEncodeBackend` and `VideoSink` gain `lender`, which lends
+  encoder input buffers (`LentBuffer`, `PoolLender`, `SinkLender`).
+
+### Fixed
+
+- macOS: the Metal interop helpers drain an autorelease pool, so the Objective-C objects they
+  autoreleased no longer leak on the host's long-lived worker threads.
+
 ## [0.7.0] - 2026-11-24
 
 ### Changed
