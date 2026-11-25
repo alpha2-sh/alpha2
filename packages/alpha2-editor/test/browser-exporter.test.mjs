@@ -80,6 +80,7 @@ function scripted({
   readback = (index) => step(index),
   onWrite = () => {},
   holdWrites = false,
+  diagnostics,
 } = {}) {
   const log = {
     order: [],
@@ -105,6 +106,9 @@ function scripted({
       log.released += 1;
       return 1_000;
     },
+    ...(diagnostics
+      ? { diagnostics: () => JSON.stringify(diagnostics()) }
+      : {}),
   };
   const renderFrame = () => {
     if (next >= frames) return { kind: "complete" };
@@ -521,6 +525,37 @@ test(
     } finally {
       encodes = null;
     }
+  },
+);
+
+test(
+  "the renderer's pool and bind group counters are reported as the export's deltas",
+  { skip },
+  async () => {
+    const samples = [
+      {
+        uniformBuffers: { created: 2, reused: 5, highWaterBytes: 256 },
+        bindGroups: { created: 4, reused: 10, kept: 4 },
+      },
+      {
+        uniformBuffers: { created: 3, reused: 9, highWaterBytes: 512 },
+        bindGroups: { created: 6, reused: 40, kept: 5 },
+      },
+    ];
+    let taken = 0;
+    const { run } = scripted({
+      frames: 2,
+      diagnostics: () => samples[Math.min(taken++, 1)],
+    });
+    const { result } = await quiet(() => run());
+    const { performance } = result;
+    assert.equal(performance.uniformBuffersCreated, 1);
+    assert.equal(performance.uniformBuffersReused, 4);
+    assert.equal(performance.uniformBufferHighWaterBytes, 512);
+    assert.equal(performance.bindGroupsCreated, 2);
+    assert.equal(performance.bindGroupsReused, 30);
+    assert.ok(!("bindGroupsKept" in performance));
+    assert.ok(!("bindGroupHighWaterBytes" in performance));
   },
 );
 

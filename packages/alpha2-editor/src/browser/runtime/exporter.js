@@ -809,6 +809,7 @@ function finishBrowserExportMetrics(metrics, encodeLatency, before, after) {
     before,
     after,
   );
+  appendPoolMetrics(result, "bindGroups", "bindGroups", null, before, after);
   result.sourceUploads = Math.max(
     0,
     (after.sourceFrames?.uploads ?? 0) - (before.sourceFrames?.uploads ?? 0),
@@ -837,8 +838,9 @@ function appendPoolMetrics(
       after[input][key] - (before[input]?.[key] ?? 0),
     );
   }
-  result[`${highWaterPrefix}HighWaterBytes`] =
-    after[input]?.highWaterBytes ?? 0;
+  if (highWaterPrefix !== null)
+    result[`${highWaterPrefix}HighWaterBytes`] =
+      after[input]?.highWaterBytes ?? 0;
 }
 
 function rendererDiagnostics(engine) {
