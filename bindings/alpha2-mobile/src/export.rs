@@ -463,6 +463,7 @@ fn attempt(
     let decode_diagnostics = layer_diagnostics(sources.dropped_layers());
     drop(sources);
     let surface_frames = drawing.gpu_frames().map_or(0, GpuFrames::imported);
+    let surface_fallbacks = drawing.gpu_frames().map_or(0, GpuFrames::fallbacks);
     sink.finish().map_err(encode)?;
     partial.finish(&job.cancel).map_err(encode)?;
     let report = json!({
@@ -477,6 +478,7 @@ fn attempt(
         "renderer": drawing.name(),
         "gpuUnavailable": drawing.gpu_unavailable(),
         "surfaceFrames": surface_frames,
+        "surfaceFallbacks": surface_fallbacks,
         "decodeDiagnostics": decode_diagnostics,
         "frames": frames,
         "width": size.width,
