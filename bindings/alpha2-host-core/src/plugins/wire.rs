@@ -344,7 +344,7 @@ fn json<T: for<'de> Deserialize<'de>>(payload: &[u8], what: &str) -> Result<T, W
     serde_json::from_slice(payload).map_err(|_| malformed(what))
 }
 
-fn sha256_hex(text: &str) -> bool {
+fn is_sha256_hex(text: &str) -> bool {
     text.len() == 64
         && text
             .bytes()
@@ -365,7 +365,7 @@ pub fn parse_child(frame: Frame) -> Result<ChildMessage, WireError> {
         }
         child::RESOURCE_READ => {
             let file: SuppliedFile = json(&payload, "resource_read")?;
-            if !sha256_hex(&file.sha256) || file.name.is_empty() {
+            if !is_sha256_hex(&file.sha256) || file.name.is_empty() {
                 return Err(malformed("resource_read"));
             }
             ChildMessage::ResourceRead(file)
