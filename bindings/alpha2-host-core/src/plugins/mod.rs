@@ -21,6 +21,8 @@ mod scenes_tests;
 mod silence_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod track_tests;
 mod wasm;
 pub mod wire;
 pub mod worker;

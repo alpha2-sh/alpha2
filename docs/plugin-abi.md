@@ -68,7 +68,7 @@ A plugin of kind `extractor` provides one extractor: the host runs the extractio
 | `default` | a value the schema takes | The form's first value. It must be the value the plugin uses when the param is left out. |
 | `x-alpha2-unit` | string: `ms`, `s`, `%`, `dB`, `px`, ... | The unit shown beside the value. |
 | `x-alpha2-step` | number | One step of a scrub or an arrow key, in the param's own unit. |
-| `x-alpha2-display` | `percent`, `seconds` or `db` | How the value is shown: `percent` shows 0 to 1 as 0 % to 100 %, `seconds` shows a duration in seconds, converted from `x-alpha2-unit` `ms`, or from ticks when the field has no unit, `db` shows a linear amplitude in decibels. |
+| `x-alpha2-display` | `percent`, `seconds`, `db`, `box` or `point` | How the value is shown or picked: `percent` shows 0 to 1 as 0 % to 100 %, `seconds` shows a duration in seconds, converted from `x-alpha2-unit` `ms`, or from ticks when the field has no unit, `db` shows a linear amplitude in decibels. On an object param, `box` picks its number fields `x`, `y`, `width` and `height` as a rectangle drawn on the input's picture, and `point` its `x` and `y` as a point on it, each a fraction of the picture's width or height from its top left corner; the param's `description` says which frame. |
 | `x-alpha2-order` | number | The field's place in the form, lowest first; fields without it follow in the order of `properties`. |
 | `x-alpha2-group` | string | The title of the group the field is shown in. |
 | `x-alpha2-advanced` | boolean | The field is shown under a folded "advanced" heading. |

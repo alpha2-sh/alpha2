@@ -80,6 +80,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "alpha2-plugin-track"
+version = "1.0.0"
+dependencies = [
+ "alpha2-plugin-abi",
+ "alpha2-plugin-sdk",
+ "libm",
+ "serde_json",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
