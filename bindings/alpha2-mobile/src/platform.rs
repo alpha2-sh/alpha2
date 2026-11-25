@@ -88,7 +88,7 @@ pub(crate) fn current() -> Arc<dyn Platform> {
                 "macos"
             },
             media: crate::export::MediaBackends {
-                video_decoders: Arc::new(alpha2_apple_media::AppleVideo),
+                video_decoders: Arc::new(alpha2_apple_media::AppleVideo::default()),
                 audio_decoders: Arc::new(alpha2_host_core::audio_stream::WithPcm(
                     alpha2_apple_media::AppleAudio,
                 )),

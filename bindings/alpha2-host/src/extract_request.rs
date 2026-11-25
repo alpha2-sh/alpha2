@@ -8,8 +8,8 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use alpha2_engine::extract::{
-    AudioInput, Delivery, Direction, Emit, ExtractRequest, ExtractSession, Need, PassProgress,
-    SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
+    AudioInput, Delivery, Direction, Emit, ExtractRequest, ExtractSession, FramePlace, Need,
+    PassProgress, SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
 };
 use alpha2_host_core::host_frames::Attachment;
 use alpha2_media::CancelToken;
@@ -376,7 +376,12 @@ struct TimelineFrames<'a> {
 }
 
 impl TimelineFrames<'_> {
-    fn frame(&mut self, time: MediaTime, size: u32) -> Result<SuppliedFrame, String> {
+    fn frame(
+        &mut self,
+        time: MediaTime,
+        size: u32,
+        place: Option<&mut FramePlace<'_>>,
+    ) -> Result<SuppliedFrame, String> {
         let (width, height) = alpha2_engine::extract::delivered_size(self.canvas, size);
         let project = crate::host::still_project(
             &self.project,
@@ -401,7 +406,23 @@ impl TimelineFrames<'_> {
             .ok_or_else(|| "a still drew nothing".to_owned())?;
         let decoder = png::Decoder::new(std::io::Cursor::new(png.bytes));
         let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
-        let mut rgba = vec![0; reader.output_buffer_size().ok_or("an oversized still")?];
+        let len = reader.output_buffer_size().ok_or("an oversized still")?;
+        let packed = u64::from(width) * u64::from(height) * 4;
+        let fits = reader.output_color_type() == (png::ColorType::Rgba, png::BitDepth::Eight)
+            && (reader.info().width, reader.info().height) == (width, height)
+            && u64::try_from(len).ok() == Some(packed);
+        if let Some(buffer) = place.filter(|_| fits).and_then(|place| place.buffer(len)) {
+            reader
+                .next_frame(buffer)
+                .map_err(|error| error.to_string())?;
+            return Ok(SuppliedFrame {
+                pts: time,
+                width,
+                height,
+                rgba: Vec::new(),
+            });
+        }
+        let mut rgba = vec![0; len];
         let info = reader
             .next_frame(&mut rgba)
             .map_err(|error| error.to_string())?;
@@ -422,9 +443,25 @@ impl Supplier for HostSupplier<'_> {
                 .timeline
                 .as_mut()
                 .ok_or_else(|| "no timeline renderer".to_owned())?
-                .frame(*time, *size)
+                .frame(*time, *size, None)
                 .map(Some),
             _ => self.reader.frame(need),
+        }
+    }
+
+    fn frame_into(
+        &mut self,
+        need: &Need,
+        place: &mut FramePlace<'_>,
+    ) -> Result<Option<SuppliedFrame>, String> {
+        match need {
+            Need::TimelineFrame { time, size, .. } => self
+                .timeline
+                .as_mut()
+                .ok_or_else(|| "no timeline renderer".to_owned())?
+                .frame(*time, *size, Some(place))
+                .map(Some),
+            _ => self.reader.frame_into(need, place),
         }
     }
 
@@ -700,7 +737,7 @@ fn run_plugin(
     request_id: &str,
     cancel: &CancelToken,
 ) -> Result<Vec<alpha2_model::DataSet>, HostError> {
-    use alpha2_engine::extract::{Emitter, ExtractorError, PassInfo};
+    use alpha2_engine::extract::{DriveError, Emitter, ExtractorError, PassInfo};
     let call = || {
         if unbounded {
             crate::heartbeat::request_step(crate::heartbeat::RequestSide::Plugin, "plugin call");
@@ -739,10 +776,12 @@ fn run_plugin(
             Step::Need(need) => match &need {
                 Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
                     extract_media_step();
-                    match supplier.frame(&need).map_err(HostError::classify)? {
-                        Some(frame) => session.supply_video(frame).map_err(internal)?,
-                        None => session.supply_end().map_err(internal)?,
-                    }
+                    alpha2_engine::extract::supply_frame(&mut session, &need, extractor, supplier)
+                        .map_err(|error| match error {
+                            DriveError::Supplier(error) => HostError::classify(error),
+                            DriveError::Session(error) => internal(error),
+                            other => HostError::new("INTERNAL", other.to_string()),
+                        })?;
                 }
                 Need::SourceAudio { .. } | Need::TimelineAudio { .. } => {
                     extract_media_step();

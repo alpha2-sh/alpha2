@@ -6,16 +6,23 @@ import {
   sequenceEnd,
 } from "../core/document.js";
 import type { EditorSnapshot } from "../core/session.js";
-import { ExportFailureError, type ExportFailure } from "alpha2/export-failure";
+import {
+  ExportFailureError,
+  failureClassOfHttpStatus,
+  type ExportFailure,
+  type ExportPhase,
+} from "alpha2/export-failure";
 import { ExportJob, requireExportFrameRate } from "../browser/jobs.js";
 import type { BrowserExportOptions } from "../browser/types.js";
 import type { ExportAttempt, ExportProgress } from "../ports/index.js";
 
 /**
- * A file uploaded for a native export, usually from the browser bridge's `nativeAssets`. The host
- * reads media only from these uploads, never from a path the document names.
+ * A file a native export reads, usually from the browser bridge's `nativeAssets`: its bytes,
+ * uploaded to the service (`blob`), or a `path` on the service's machine, sent in the render
+ * request's `paths` (`{ [kind]: { [id]: path } }`) and never uploaded. The host reads media only
+ * from these, never from a path the document names.
  */
-export interface NativeAsset {
+export type NativeAsset = {
   /** The source, resource or font id the file belongs to (for `frames`, the upload's own id). */
   readonly id: string;
   /**
@@ -24,12 +31,14 @@ export interface NativeAsset {
    */
   readonly kind:
     "assets" | "effect-assets" | "caption-fonts" | "proxies" | "frames";
-  readonly blob: Blob;
   /** The original file name, sent to the host percent-encoded. */
   readonly name: string;
   readonly madeFrom?: MediaFingerprint;
   readonly locator?: string;
-}
+} & (
+  | { readonly blob: Blob; readonly path?: undefined }
+  | { readonly path: string; readonly blob?: undefined }
+);
 /**
  * Export settings for a native job: the browser export's options plus the MPEG-4 Part 2 codec the
  * host can encode. An absent `container`, `videoCodec` or `audioCodec` takes the host's default, as
@@ -135,6 +144,53 @@ function nativeFailure(state: NativeJobState, jobId: string): Error {
   };
   return new ExportFailureError({ ...failure, message, jobId });
 }
+async function serviceFailure(
+  response: Response,
+  context: {
+    readonly jobId: string;
+    readonly attemptId: string;
+    readonly stage: string;
+  },
+): Promise<ExportFailureError> {
+  const text = await response.text().catch(() => "");
+  let detail: { error?: unknown; limitBytes?: unknown } = {};
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === "object" && parsed !== null) detail = parsed;
+  } catch {
+    // A body that is not JSON is the message itself.
+  }
+  const { code, resource } = failureClassOfHttpStatus(response.status);
+  const retryAfterMs = Number(response.headers.get("retry-after")) * 1000;
+  return new ExportFailureError({
+    code,
+    message: `Native host: ${typeof detail.error === "string" ? detail.error : text || response.status}`,
+    origin: "browser",
+    operation: "export",
+    backend: "native",
+    phase: "prepare",
+    stage: context.stage,
+    resource,
+    jobId: context.jobId,
+    attemptId: context.attemptId,
+    ...(code === "RESOURCE_BUSY" && retryAfterMs > 0 ? { retryAfterMs } : {}),
+    diagnostics: {
+      status: response.status,
+      ...(typeof detail.limitBytes === "number"
+        ? { limitBytes: detail.limitBytes }
+        : {}),
+    },
+  });
+}
+function pathsOf(
+  assets: readonly NativeAsset[],
+): Record<string, Record<string, string>> {
+  const paths: Record<string, Record<string, string>> = {};
+  for (const asset of assets)
+    if (asset.path !== undefined)
+      (paths[asset.kind] ??= {})[asset.id] = asset.path;
+  return paths;
+}
 /** Consecutive failed status requests before an attempt gives up on the job. */
 const STATUS_ATTEMPTS = 5;
 /** Status retry delay, doubled each time (0.25 s to 2 s). */
@@ -224,11 +280,42 @@ export function createNativeClient(options: NativeClientOptions) {
         uploaded = null;
         posted = false;
       };
-      const allocate = async () => {
+      const lostJob = (attempt: ExportAttempt, phase: ExportPhase) => {
+        lost();
+        return new ExportFailureError({
+          code: "HOST_EXITED",
+          message:
+            "The native export service lost this job; it may have restarted",
+          origin: "browser",
+          operation: "export",
+          backend: "native",
+          phase,
+          resource: "unknown",
+          jobId: id,
+          attemptId: attempt.id,
+        });
+      };
+      const jobRequest = async (
+        suffix: string,
+        init: RequestInit,
+        attempt: ExportAttempt,
+        stage: string,
+      ) => {
+        const response = await request(`${base}${path}${suffix}`, init);
+        if (response.ok) return response;
+        if (response.status === 404 && allocated)
+          throw lostJob(attempt, "prepare");
+        throw await serviceFailure(response, {
+          jobId: id,
+          attemptId: attempt.id,
+          stage,
+        });
+      };
+      const allocate = async (attempt: ExportAttempt) => {
         // Allocate without the cancellation signal so a cancelled allocation is still acknowledged
         // before DELETE and cannot leave an orphan job.
         try {
-          await checked(path, { method: "PUT" });
+          await jobRequest("", { method: "PUT" }, attempt, "allocate");
         } catch (error) {
           // The allocation's response was lost. The id is unique to this job, so a job there is it.
           const existing = await request(`${base}${path}`).catch(() => null);
@@ -236,8 +323,12 @@ export function createNativeClient(options: NativeClientOptions) {
         }
         allocated = true;
       };
-      const upload = async (doc: EditorDocument, signal: AbortSignal) => {
-        if (!allocated) await allocate();
+      const upload = async (
+        doc: EditorDocument,
+        signal: AbortSignal,
+        attempt: ExportAttempt,
+      ) => {
+        if (!allocated) await allocate(attempt);
         captured ??=
           typeof capturedAssets === "function"
             ? await capturedAssets(doc, signal)
@@ -245,9 +336,9 @@ export function createNativeClient(options: NativeClientOptions) {
         signal.throwIfAborted();
         for (const asset of captured) {
           const key = `${asset.kind}/${asset.id}`;
-          if (acknowledged.has(key)) continue;
-          await checked(
-            `${path}/${asset.kind}/${encodeURIComponent(asset.id)}`,
+          if (asset.blob === undefined || acknowledged.has(key)) continue;
+          await jobRequest(
+            `/${asset.kind}/${encodeURIComponent(asset.id)}`,
             {
               method: "PUT",
               body: asset.blob,
@@ -256,6 +347,8 @@ export function createNativeClient(options: NativeClientOptions) {
                 "x-alpha2-filename": encodeURIComponent(asset.name),
               },
             },
+            attempt,
+            "upload",
           );
           acknowledged.add(key);
         }
@@ -284,21 +377,7 @@ export function createNativeClient(options: NativeClientOptions) {
           let failure: unknown;
           try {
             const response = await request(`${base}${path}`, { signal });
-            if (response.status === 404) {
-              lost();
-              throw new ExportFailureError({
-                code: "HOST_EXITED",
-                message:
-                  "The native export service lost this job; it may have restarted",
-                origin: "browser",
-                operation: "export",
-                backend: "native",
-                phase: "render",
-                resource: "unknown",
-                jobId: id,
-                attemptId: attempt.id,
-              });
-            }
+            if (response.status === 404) throw lostJob(attempt, "render");
             if (response.ok) return (await response.json()) as NativeJobState;
             failure = Error(`Native host: ${await response.text()}`);
           } catch (error) {
@@ -316,7 +395,7 @@ export function createNativeClient(options: NativeClientOptions) {
         progress: (value: ExportProgress) => void,
         attempt: ExportAttempt,
       ) => {
-        uploaded ??= await upload(doc, signal);
+        uploaded ??= await upload(doc, signal, attempt);
         const { assets: captured, frames } = uploaded;
         const compiled = compileEditorDocument(doc);
         const diagnostics = compiled.diagnostics;
@@ -334,53 +413,61 @@ export function createNativeClient(options: NativeClientOptions) {
           : false;
         if (!running) {
           posted = true;
-          await checked(path, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              project,
-              ...capturedSettings,
-              startTicks: doc.metadata.exportRange?.start ?? 0,
-              endTicks: doc.metadata.exportRange?.end ?? sequenceEnd(project),
-              fonts: captured
-                .filter((a) => a.kind === "caption-fonts")
-                .map((a) => a.id),
-              frames: Object.fromEntries(
-                project.sources.flatMap((source) =>
-                  source.provider?.format === "image_sequence"
-                    ? [
-                        [
-                          source.id,
-                          source.provider.frames.map((locator) =>
-                            locator === null
-                              ? null
-                              : (frames.get(locator) ?? null),
-                          ),
-                        ],
-                      ]
-                    : [],
+          await jobRequest(
+            "",
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                project,
+                ...capturedSettings,
+                startTicks: doc.metadata.exportRange?.start ?? 0,
+                endTicks: doc.metadata.exportRange?.end ?? sequenceEnd(project),
+                fonts: captured
+                  .filter((a) => a.kind === "caption-fonts")
+                  .map((a) => a.id),
+                ...(captured.some((a) => a.path !== undefined)
+                  ? { paths: pathsOf(captured) }
+                  : {}),
+                frames: Object.fromEntries(
+                  project.sources.flatMap((source) =>
+                    source.provider?.format === "image_sequence"
+                      ? [
+                          [
+                            source.id,
+                            source.provider.frames.map((locator) =>
+                              locator === null
+                                ? null
+                                : (frames.get(locator) ?? null),
+                            ),
+                          ],
+                        ]
+                      : [],
+                  ),
                 ),
-              ),
-              proxies: Object.fromEntries(
-                captured
-                  .filter((a) => a.kind === "proxies")
-                  .map((a) => [a.id, { madeFrom: a.madeFrom }]),
-              ),
-              media: capturedSettings.media ?? "original",
-              // Retries keep less in flight; the host scales its own budgets.
-              ...(attempt.profile.memoryScale < 1 || capturedSettings.memory
-                ? {
-                    memory: {
-                      ...capturedSettings.memory,
-                      ...(attempt.profile.memoryScale < 1
-                        ? { scale: attempt.profile.memoryScale }
-                        : {}),
-                    },
-                  }
-                : {}),
-              attempt: attempt.id,
-            }),
-          });
+                proxies: Object.fromEntries(
+                  captured
+                    .filter((a) => a.kind === "proxies")
+                    .map((a) => [a.id, { madeFrom: a.madeFrom }]),
+                ),
+                media: capturedSettings.media ?? "original",
+                // Retries keep less in flight; the host scales its own budgets.
+                ...(attempt.profile.memoryScale < 1 || capturedSettings.memory
+                  ? {
+                      memory: {
+                        ...capturedSettings.memory,
+                        ...(attempt.profile.memoryScale < 1
+                          ? { scale: attempt.profile.memoryScale }
+                          : {}),
+                      },
+                    }
+                  : {}),
+                attempt: attempt.id,
+              }),
+            },
+            attempt,
+            "submit",
+          );
         }
         let published: NativeArtifactDescriptor | undefined;
         for (;;) {

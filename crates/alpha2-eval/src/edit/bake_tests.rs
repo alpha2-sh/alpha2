@@ -138,3 +138,65 @@ fn baking_a_parameter_of_a_host_effect_is_refused() {
         Err(EditError::UnboundedParameter(_))
     ));
 }
+
+fn source_linear() -> Project {
+    let mut document = corpus();
+    let second = 30 * FRAME;
+    document["data"].as_array_mut().expect("data").push(json!({
+        "id": "fade", "anchor": { "type": "source", "source_id": "v" }, "kind": "scalars",
+        "interpolation": "linear", "channels": ["x"],
+        "times": [0, second, 2 * second, 3 * second], "values": [0.0, 0.2, 0.6, 1.0] }));
+    for track in document["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+    {
+        let clips = track.get_mut("clips").and_then(Value::as_array_mut);
+        for clip in clips.into_iter().flatten() {
+            if clip["source_id"] == "v" {
+                let id = clip["id"].clone();
+                clip["visual"]["opacity"] = json!({ "mode": "data", "data": "fade", "channel": "x", "via": { "clip": id } });
+            }
+        }
+    }
+    load(&document)
+}
+
+#[test]
+fn baking_linear_source_data_keeps_moving_until_the_clip_ends() {
+    let project = source_linear();
+    let clips = ["fwd", "fast", "slow", "rev", "rep", "pp", "frz", "ta"];
+    let targets = clips
+        .iter()
+        .map(|clip| json!({ "clip": clip, "property": "visual.opacity" }))
+        .collect::<Vec<_>>();
+    let (edited, _) = apply(&project, &bake_request(&json!(targets))).expect("bake");
+    let opacities = |project: &Project, tick: i64| {
+        let index = ActiveIndex::build(project).expect("index");
+        let frame = evaluate(project, &index, MediaTime(tick)).expect("frame");
+        clips.map(|id| {
+            frame
+                .visual
+                .iter()
+                .find(|clip| clip.clip_id.as_str() == id)
+                .map(|clip| clip.visual.expect("visual").opacity)
+        })
+    };
+    let last = project
+        .timeline
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .map(|clip| clip.timeline_range.end().ticks())
+        .max()
+        .expect("clips");
+    for tick in (0..last).step_by(97).chain([last - 1]) {
+        let (live, baked) = (opacities(&project, tick), opacities(&edited, tick));
+        for ((id, live), baked) in clips.iter().zip(live).zip(baked) {
+            assert!(
+                live.zip(baked)
+                    .is_none_or(|(live, baked)| (live - baked).abs() < 1e-5),
+                "{id} at {tick}: live {live:?}, baked {baked:?}"
+            );
+        }
+    }
+}

@@ -122,21 +122,27 @@ mod wire;
 pub use descriptor::{
     AudioChannels, AudioFormat, BLOCK_FRAMES_RANGE, DEFAULT_BLOCK_FRAMES, DEFAULT_MAX_SIZE,
     Descriptor, Direction, ExtractRequest, InputFrom, InputSpec, MAX_EXTRACTOR_OUTPUTS,
-    MAX_EXTRACTOR_PASSES, OutputSpec, Pass, RequestInput, Suggest, VideoFormat,
+    MAX_EXTRACTOR_PASSES, MAX_OUTPUT_DESCRIPTION_CHARS, MAX_OUTPUT_LABEL_CHARS, OutputSpec, Pass,
+    RequestInput, Suggest, VideoFormat,
 };
-pub use drive::{DriveError, Emitter, Extractor, ExtractorError, PassInfo, Supplier, drive};
+pub use drive::{
+    DriveError, Emitter, Extractor, ExtractorError, FramePlace, PassInfo, Supplier, drive,
+    supply_frame,
+};
 #[cfg(feature = "schema")]
 pub use manifest::plugin_manifest_json_schema;
 pub use manifest::{
-    ArtifactKind, MAX_MANIFEST_BYTES, MAX_PLUGIN_ARTIFACT_BYTES, MAX_PLUGIN_ARTIFACTS,
-    MAX_PLUGIN_RESOURCE_BYTES, MAX_PLUGIN_RESOURCES, MAX_PLUGIN_RESOURCES_TOTAL_BYTES,
-    MAX_PLUGIN_SLOTS, MAX_SLOT_ACCEPT, MAX_SLOT_ACCEPT_BYTES, MAX_SLOT_NAME_BYTES, ManifestError,
-    PLUGIN_MANIFEST_SCHEMA_ID, PinnedResource, PluginArtifact, PluginKind, PluginManifest,
-    PluginResource, Reference, ResourceSource, SlotShape, SuppliedSlot, WASM_TARGET, is_slot_name,
-    reference,
+    ArtifactKind, MAX_ABOUT_AUTHOR_CHARS, MAX_ABOUT_HOMEPAGE_CHARS, MAX_ABOUT_LICENSE_CHARS,
+    MAX_ABOUT_NAME_CHARS, MAX_ABOUT_SUMMARY_CHARS, MAX_MANIFEST_BYTES, MAX_PLUGIN_ARTIFACT_BYTES,
+    MAX_PLUGIN_ARTIFACTS, MAX_PLUGIN_RESOURCE_BYTES, MAX_PLUGIN_RESOURCES,
+    MAX_PLUGIN_RESOURCES_TOTAL_BYTES, MAX_PLUGIN_SLOTS, MAX_SLOT_ACCEPT, MAX_SLOT_ACCEPT_BYTES,
+    MAX_SLOT_NAME_BYTES, ManifestError, PLUGIN_MANIFEST_SCHEMA_ID, PinnedResource, PluginAbout,
+    PluginArtifact, PluginKind, PluginManifest, PluginResource, Reference, ResourceSource,
+    SlotShape, SuppliedSlot, WASM_TARGET, is_slot_name, reference,
 };
 pub use pixels::{
     delivered_size, displayed_size, luma8_from_rgba8, mono_downmix, present_for_extraction,
+    present_for_extraction_into,
 };
 pub use session::{
     AudioInput, Delivery, Emit, ExtractSession, FrameFrom, Need, PassProgress, RequestError,

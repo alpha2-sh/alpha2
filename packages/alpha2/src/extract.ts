@@ -3,8 +3,6 @@
 
 import {
   ALL_FORMATS,
-  BlobSource,
-  BufferSource,
   EncodedPacketSink,
   Input,
   type VideoSample,
@@ -40,6 +38,7 @@ import {
   decodeRefusalMessage,
 } from "./hdr-frames.js";
 import { microsecondsToTicks, readVideoOrientation } from "./media.js";
+import { mediaSource } from "./media-source.js";
 import {
   type AudioResamplerBinding,
   MediabunnyAudioDecoder,
@@ -119,12 +118,6 @@ export interface RunExtractorRequest {
   ) => Promise<TimelineFrame> | TimelineFrame;
   /** The original source's fingerprint, recorded as `made_from` on source-anchored data. */
   readonly madeFrom?: unknown;
-  /** The plugin `extractor` came from (`loadPlugin`), recorded as `made_by.plugin`. */
-  readonly plugin?: {
-    readonly version: string;
-    readonly artifactSha256: string;
-    readonly manifestSha256: string;
-  };
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: ExtractProgress) => void;
 }
@@ -163,10 +156,7 @@ class SourceFrames {
     resource: MediabunnyInput,
     id: string,
   ): Promise<SourceFrames> {
-    const source =
-      resource instanceof Blob
-        ? new BlobSource(resource)
-        : new BufferSource(resource);
+    const source = mediaSource(resource);
     const input = new Input({ source, formats: ALL_FORMATS });
     const track = await input.getPrimaryVideoTrack();
     if (track === null) {
@@ -514,20 +504,13 @@ export async function runExtractor(
           : JSON.stringify(request.madeFrom),
       ),
     ) as DataSet[];
-    const plugin = request.plugin;
+    const plugin = extractor.madeByPlugin?.();
     const recorded =
       plugin === undefined
         ? dataSets
         : dataSets.map((set) => ({
             ...set,
-            made_by: {
-              ...set.made_by,
-              plugin: {
-                version: plugin.version,
-                artifact_sha256: plugin.artifactSha256,
-                manifest_sha256: plugin.manifestSha256,
-              },
-            },
+            made_by: { ...set.made_by, plugin },
           }));
     return {
       dataSets: recorded as DataSet[],

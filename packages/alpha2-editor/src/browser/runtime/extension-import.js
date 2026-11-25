@@ -8,6 +8,7 @@ import {
   MAX_SVG_DOCUMENT_BYTES,
 } from "alpha2/project";
 import { EditorError } from "../../core/document.js";
+import { blobOf } from "./range-file.js";
 
 const TICKS_PER_SECOND = 120_000;
 
@@ -586,7 +587,7 @@ export async function stageSequence(
 
 /** A PNG frame's thumbnail, {@link THUMBNAIL_WIDTH} pixels wide. */
 async function pngThumbnail(file, size) {
-  const bitmap = await createImageBitmap(file);
+  const bitmap = await createImageBitmap(await blobOf(file));
   const canvas = new OffscreenCanvas(
     THUMBNAIL_WIDTH,
     Math.max(1, Math.round((THUMBNAIL_WIDTH * size.height) / size.width)),

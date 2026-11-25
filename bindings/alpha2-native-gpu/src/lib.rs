@@ -86,9 +86,12 @@ mod import;
 mod lifetime;
 #[cfg(feature = "hwdevice")]
 mod memory_budget;
-#[cfg(all(target_os = "macos", feature = "hwdevice"))]
+#[cfg(all(target_vendor = "apple", feature = "iosurface-import"))]
 mod metal;
-#[cfg(feature = "hwdevice")]
+#[cfg(any(
+    feature = "hwdevice",
+    all(target_vendor = "apple", feature = "iosurface-import")
+))]
 mod status;
 mod surface_budget;
 mod sync;
@@ -111,12 +114,13 @@ pub use import::{ImportedPlaneDescriptor, NativePlaneLayout};
 pub use lifetime::{NativeSurfaceLease, SurfaceIdentity};
 #[cfg(feature = "hwdevice")]
 pub use memory_budget::adapter_memory_budget;
-#[cfg(all(target_os = "macos", feature = "hwdevice"))]
+#[cfg(all(target_vendor = "apple", feature = "iosurface-import"))]
 pub use metal::{
-    ImportedMetalFrame, MetalEncoderPlanes, MetalImportLease, SharedMetalContext, SharedMetalError,
-    VideoToolboxCodec, gpu_wait_timeout as metal_wait_timeout, videotoolbox_hardware_decodes,
-    videotoolbox_surface_id,
+    ImportedMetalFrame, MetalEncoderPlanes, MetalImportError, MetalImportLease, SharedMetalContext,
+    SharedMetalError, gpu_wait_timeout as metal_wait_timeout, pixel_buffer_surface_id,
 };
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
+pub use metal::{VideoToolboxCodec, videotoolbox_hardware_decodes, videotoolbox_surface_id};
 pub use surface_budget::{SurfaceBudget, SurfaceBudgetError, SurfaceReservation, SurfaceUsage};
 pub use sync::{ExternalSyncPoint, NativeImageState};
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
@@ -136,7 +140,7 @@ pub fn set_gpu_wait_timeout(timeout: std::time::Duration) {
     vulkan::set_wait_timeout(timeout);
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     d3d12::set_wait_timeout(timeout);
-    #[cfg(all(target_os = "macos", feature = "hwdevice"))]
+    #[cfg(all(target_vendor = "apple", feature = "iosurface-import"))]
     metal::set_wait_timeout(timeout);
     #[cfg(all(target_os = "android", feature = "ahb-import"))]
     android::set_wait_timeout(timeout);

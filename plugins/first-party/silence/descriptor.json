@@ -12,12 +12,38 @@
   "params_schema": {
     "type": "object",
     "properties": {
-      "threshold": { "type": "number", "minimum": 0.05, "maximum": 0.95 },
-      "min_silence_ms": { "type": "number", "minimum": 0, "maximum": 60000 }
+      "threshold": {
+        "type": "number",
+        "minimum": 0.05,
+        "maximum": 0.95,
+        "title": "Speech threshold",
+        "description": "How sure the model must be that there is speech.",
+        "default": 0.5,
+        "x-alpha2-display": "percent",
+        "x-alpha2-step": 0.05,
+        "x-alpha2-order": 1
+      },
+      "min_silence_ms": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 60000,
+        "title": "Shortest silence",
+        "description": "Pauses shorter than this are not reported.",
+        "default": 200,
+        "x-alpha2-unit": "ms",
+        "x-alpha2-step": 50,
+        "x-alpha2-order": 2
+      }
     },
     "additionalProperties": false
   },
   "outputs": [
-    { "name": "silence", "kind": "intervals", "suggest": "remove_ranges" }
+    {
+      "name": "silence",
+      "kind": "intervals",
+      "suggest": "remove_ranges",
+      "label": "Silences",
+      "description": "Stretches without speech, each scored by how sure the model is that nobody speaks."
+    }
   ]
 }

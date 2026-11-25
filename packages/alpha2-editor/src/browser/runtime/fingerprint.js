@@ -6,7 +6,8 @@ import {
   sampleAspectForStream,
 } from "alpha2/hdr-frames";
 import { TICKS_PER_SECOND, validFrameRate } from "alpha2/project";
-import { ALL_FORMATS, BlobSource, EncodedPacketSink, Input } from "mediabunny";
+import { ALL_FORMATS, EncodedPacketSink, Input } from "mediabunny";
+import { mediaSource } from "./range-file.js";
 
 /**
  * The fingerprint of `file` as media of `kind`. `size` is an image's decoded size; video and audio
@@ -40,7 +41,7 @@ export async function fingerprintFile(file, kind, options = {}) {
 /** What the demuxer sees: primary stream shapes, duration and declared color. */
 export async function probeEvidence(file) {
   const input = new Input({
-    source: new BlobSource(file),
+    source: mediaSource(file),
     formats: ALL_FORMATS,
   });
   try {

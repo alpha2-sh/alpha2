@@ -313,7 +313,7 @@ fn export_from(
     export_video(
         &snapshot,
         &mut exporter,
-        ExportRenderer::Cpu(&renderer),
+        (ExportRenderer::Cpu(&renderer), None),
         &mut TextTextures::new(),
         &mut sources,
         &mut sink,
@@ -402,7 +402,7 @@ fn a_cancelled_export_stops() {
     let result = export_video(
         &snapshot,
         &mut exporter,
-        ExportRenderer::Cpu(&renderer),
+        (ExportRenderer::Cpu(&renderer), None),
         &mut TextTextures::new(),
         &mut sources,
         &mut Collect::default(),
@@ -439,7 +439,7 @@ fn the_frame_hook_runs_before_every_turn_and_its_failure_stops_the_export() {
         let result = export_video(
             &snapshot,
             &mut exporter,
-            ExportRenderer::Cpu(&renderer),
+            (ExportRenderer::Cpu(&renderer), None),
             &mut TextTextures::new(),
             &mut sources,
             &mut sink,
@@ -491,7 +491,7 @@ fn export_surfaces(import: Option<Arc<dyn SurfaceImport>>) -> Result<(), ExportE
     export_video(
         &snapshot,
         &mut exporter,
-        ExportRenderer::Cpu(&renderer),
+        (ExportRenderer::Cpu(&renderer), None),
         &mut TextTextures::new(),
         &mut sources,
         &mut Collect::default(),
@@ -838,7 +838,7 @@ fn export_counted_with(
     export_video(
         snapshot,
         &mut exporter,
-        ExportRenderer::Cpu(&renderer),
+        (ExportRenderer::Cpu(&renderer), None),
         &mut TextTextures::new(),
         &mut sources,
         &mut sink,
@@ -1057,7 +1057,7 @@ fn a_track_that_declares_alpha_is_reported_as_dropped_once_per_source() {
     export_video(
         &snapshot,
         &mut exporter,
-        ExportRenderer::Cpu(&CpuRenderer::new(2)),
+        (ExportRenderer::Cpu(&CpuRenderer::new(2)), None),
         &mut TextTextures::new(),
         &mut sources,
         &mut Collect::default(),
@@ -1084,4 +1084,356 @@ fn an_opaque_track_drops_nothing() {
     )
     .expect("stream");
     assert_eq!(stream.dropped_layer(), None);
+}
+
+struct LendingSink {
+    frames: Collect,
+    next: usize,
+    lends: usize,
+    returned: Arc<std::sync::atomic::AtomicUsize>,
+    luma: Arc<std::sync::Mutex<Option<u8>>>,
+}
+
+struct Token {
+    returned: Arc<std::sync::atomic::AtomicUsize>,
+    submitted: bool,
+}
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        if !self.submitted {
+            self.returned
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+impl VideoSink for LendingSink {
+    fn write_video(
+        &mut self,
+        index: u64,
+        time: MediaTime,
+        layout: PixelLayout,
+        planes: &[PlaneBuffer],
+    ) -> Result<(), EncodeError> {
+        self.frames.write_video(index, time, layout, planes)
+    }
+
+    fn lender(&mut self) -> Option<&mut dyn SinkLender> {
+        Some(self)
+    }
+}
+
+impl SinkLender for LendingSink {
+    fn lend(&mut self) -> Result<LentBuffer, EncodeError> {
+        self.next += 1;
+        self.lends += 1;
+        let token = Token {
+            returned: Arc::clone(&self.returned),
+            submitted: false,
+        };
+        Ok(LentBuffer::new(
+            std::ptr::without_provenance_mut(self.next),
+            0,
+            2,
+            Box::new(token),
+        ))
+    }
+
+    fn write_lent(
+        &mut self,
+        index: u64,
+        _time: MediaTime,
+        buffer: LentBuffer,
+    ) -> Result<(), EncodeError> {
+        let mut token = buffer
+            .into_owner()
+            .downcast::<Token>()
+            .map_err(|_| EncodeError::Adapter("not lent here".into()))?;
+        token.submitted = true;
+        let luma = self
+            .luma
+            .lock()
+            .expect("luma")
+            .take()
+            .expect("a finished render");
+        self.frames.0.push((index, luma));
+        Ok(())
+    }
+}
+
+struct Targets {
+    gpu: alpha2_gpu::GpuContext,
+    planes: HashMap<usize, (wgpu::Texture, wgpu::Texture)>,
+    calls: usize,
+    refuse_at: Option<usize>,
+    finished: usize,
+    luma: Arc<std::sync::Mutex<Option<u8>>>,
+}
+
+impl EncoderTargets for Targets {
+    fn planes(&mut self, buffer: &LentBuffer, size: RenderSize) -> Result<LentPlanes, String> {
+        self.calls += 1;
+        if self.refuse_at == Some(self.calls - 1) {
+            return Err("refused".into());
+        }
+        let device = self.gpu.device();
+        let texture = |format, width, height| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("lent plane"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        let (luma, chroma) = self
+            .planes
+            .entry(buffer.surface().addr())
+            .or_insert_with(|| {
+                (
+                    texture(wgpu::TextureFormat::R8Unorm, size.width, size.height),
+                    texture(
+                        wgpu::TextureFormat::Rg8Unorm,
+                        size.width / 2,
+                        size.height / 2,
+                    ),
+                )
+            });
+        Ok(LentPlanes {
+            luma: luma.create_view(&wgpu::TextureViewDescriptor::default()),
+            chroma: chroma.create_view(&wgpu::TextureViewDescriptor::default()),
+        })
+    }
+
+    fn finished(&mut self, buffer: &LentBuffer) -> Result<(), String> {
+        self.finished += 1;
+        let (luma, _) = &self.planes[&buffer.surface().addr()];
+        let row = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let read = self.gpu.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lent luma"),
+            size: u64::from(row * SIZE),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .gpu
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            luma.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &read,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: None,
+                },
+            },
+            luma.size(),
+        );
+        let submitted = self.gpu.submit([encoder.finish()]);
+        self.gpu
+            .map_async(&read.slice(..), wgpu::MapMode::Read, |result| {
+                result.expect("map");
+            });
+        self.gpu
+            .device()
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submitted),
+                timeout: Some(std::time::Duration::from_secs(10)),
+            })
+            .map_err(|error| error.to_string())?;
+        let mapped = read.slice(..).get_mapped_range().expect("mapped");
+        let middle = mapped[(SIZE / 2 * row + SIZE / 2) as usize];
+        *self.luma.lock().expect("luma") = Some(middle);
+        Ok(())
+    }
+}
+
+fn gpu_renderer() -> Option<(alpha2_gpu::GpuContext, Renderer)> {
+    let gpu = alpha2_test_support::available!(
+        alpha2_test_support::Capability::GpuRenderer,
+        pollster::block_on(alpha2_gpu::GpuContext::request_product())
+            .map_err(|error| format!("no GPU device: {error}"))
+    )?;
+    let mut renderer = Renderer::new(gpu.clone());
+    renderer.register_builtins().expect("built-in effects");
+    Some((gpu, renderer))
+}
+
+struct Lending {
+    frames: Vec<(u64, u8)>,
+    result: Result<(), ExportError>,
+    lends: usize,
+    returned: usize,
+    calls: usize,
+    finished: usize,
+}
+
+struct MissingOnce<'a> {
+    sources: &'a mut dyn SourceFrames,
+    missing: Option<u64>,
+}
+
+impl SourceFrames for MissingOnce<'_> {
+    fn frame(
+        &mut self,
+        need: &FrameNeed,
+        index: u64,
+        cancel: &CancelToken,
+    ) -> Result<Option<SourceFrame>, String> {
+        if self.missing == Some(index) {
+            self.missing = None;
+            return Ok(None);
+        }
+        self.sources.frame(need, index, cancel)
+    }
+
+    fn release_finished(&mut self, time: MediaTime) {
+        self.sources.release_finished(time);
+    }
+}
+
+fn export_lending(
+    (gpu, renderer): &(alpha2_gpu::GpuContext, Renderer),
+    frames: i64,
+    lend: bool,
+    refuse_at: Option<usize>,
+    missing_once: Option<u64>,
+    before_frame: &mut dyn FnMut(usize) -> bool,
+) -> Lending {
+    let snapshot = project(0, frames);
+    let mut exporter = Exporter::for_project(
+        &snapshot,
+        QualityProfile::export(),
+        alpha2_media::VideoCodec::H264,
+    )
+    .expect("exporter");
+    let mut sources = StreamSources::new(|_: &SourceId| {
+        VideoStream::open(
+            reader(),
+            0,
+            Arc::new(Sessions(false)),
+            StreamOptions::default(),
+        )
+        .map(|stream| SourceStream::Video(Box::new(stream)))
+        .map_err(|error| error.to_string())
+    });
+    let mut missing = MissingOnce {
+        sources: &mut sources,
+        missing: missing_once,
+    };
+    let luma = Arc::new(std::sync::Mutex::new(None));
+    let mut sink = LendingSink {
+        frames: Collect::default(),
+        next: 0,
+        lends: 0,
+        returned: Arc::default(),
+        luma: Arc::clone(&luma),
+    };
+    let mut targets = Targets {
+        gpu: gpu.clone(),
+        planes: HashMap::new(),
+        calls: 0,
+        refuse_at,
+        finished: 0,
+        luma,
+    };
+    let cancel = CancelToken::default();
+    let mut turn = 0;
+    let result = export_video(
+        &snapshot,
+        &mut exporter,
+        (
+            ExportRenderer::Gpu(renderer),
+            lend.then_some(&mut targets as &mut dyn EncoderTargets),
+        ),
+        &mut TextTextures::new(),
+        &mut missing,
+        &mut sink,
+        (&FrameBudget::new(1 << 30), &cancel),
+        &mut |_| {
+            turn += 1;
+            if before_frame(turn) {
+                cancel.cancel();
+            }
+            Ok(())
+        },
+        &mut |_, _| {},
+    );
+    Lending {
+        frames: sink.frames.0,
+        result,
+        lends: sink.lends,
+        returned: sink.returned.load(std::sync::atomic::Ordering::SeqCst),
+        calls: targets.calls,
+        finished: targets.finished,
+    }
+}
+
+#[test]
+fn frames_drawn_into_lent_buffers_match_the_readback_path() {
+    let Some(gpu) = gpu_renderer() else {
+        return;
+    };
+    let read = export_lending(&gpu, 8, false, None, None, &mut |_| false);
+    let lent = export_lending(&gpu, 8, true, None, None, &mut |_| false);
+    read.result.expect("readback export");
+    lent.result.expect("lending export");
+    assert_eq!(read.frames.len(), 8);
+    assert_eq!(read.lends, 0);
+    assert_eq!((lent.lends, lent.finished, lent.returned), (8, 8, 0));
+    for ((index, expected), (lent_index, seen)) in read.frames.iter().zip(&lent.frames) {
+        assert_eq!(index, lent_index);
+        assert!(
+            expected.abs_diff(*seen) <= 1,
+            "frame {index}: {expected} read back, {seen} lent"
+        );
+    }
+}
+
+#[test]
+fn a_refused_buffer_turns_lending_off_and_its_frame_is_read_back() {
+    let Some(gpu) = gpu_renderer() else {
+        return;
+    };
+    let read = export_lending(&gpu, 8, false, None, None, &mut |_| false);
+    let lent = export_lending(&gpu, 8, true, Some(2), None, &mut |_| false);
+    lent.result.expect("export");
+    assert_eq!(
+        (lent.lends, lent.calls, lent.finished, lent.returned),
+        (3, 3, 2, 1)
+    );
+    assert_eq!(lent.frames.len(), 8);
+    for ((index, expected), (lent_index, seen)) in read.frames.iter().zip(&lent.frames) {
+        assert_eq!(index, lent_index);
+        assert!(expected.abs_diff(*seen) <= 1, "frame {index}");
+    }
+}
+
+#[test]
+fn a_waiting_turn_keeps_its_buffer_and_a_cancel_gives_it_back() {
+    let Some(gpu) = gpu_renderer() else {
+        return;
+    };
+    let waited = export_lending(&gpu, 6, true, None, Some(3), &mut |_| false);
+    waited.result.expect("export");
+    assert_eq!(waited.frames.len(), 6);
+    assert_eq!((waited.lends, waited.returned, waited.finished), (6, 0, 6));
+    assert_eq!(waited.calls, 7, "the waiting turn and its retry both drew");
+    let cancelled = export_lending(&gpu, 6, true, None, Some(3), &mut |turn| turn == 5);
+    assert!(
+        matches!(cancelled.result, Err(ExportError::Cancelled)),
+        "{:?}",
+        cancelled.result
+    );
+    assert_eq!((cancelled.lends, cancelled.returned), (4, 1));
 }

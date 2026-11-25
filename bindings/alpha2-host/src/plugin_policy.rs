@@ -169,6 +169,24 @@ fn refused(message: impl Into<String>) -> PluginError {
 }
 
 impl PluginPolicy {
+    /// What `capabilities` reports of the policy: `mode`, whether a request may fill a resource
+    /// slot (`slots`) and where native artifacts run (`isolation`).
+    #[must_use]
+    pub fn capabilities_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "mode": match self.mode {
+                PluginMode::Off => "off",
+                PluginMode::Wasm => "wasm",
+                PluginMode::Native => "native",
+            },
+            "slots": self.mode != PluginMode::Off && self.resource_root != ResourceRoot::None,
+            "isolation": match self.isolation {
+                PluginIsolation::Process => "process",
+                PluginIsolation::InProcess => "in-process",
+            },
+        })
+    }
+
     /// A host started without plugin flags.
     pub const DEFAULT: Self = Self {
         mode: PluginMode::Wasm,
@@ -249,7 +267,7 @@ impl PluginPolicy {
     /// # Errors
     /// `PLUGIN_LOAD_FAILED` when this host cannot name its own program.
     pub fn isolation(&self) -> Result<alpha2_host_core::plugins::Isolation, PluginError> {
-        use alpha2_host_core::plugins::{Isolation, WorkerCommand};
+        use alpha2_host_core::plugins::{FramePath, Isolation, WorkerCommand};
         Ok(match self.isolation {
             PluginIsolation::InProcess => Isolation::InProcess,
             PluginIsolation::Process => Isolation::Child(WorkerCommand {
@@ -263,6 +281,7 @@ impl PluginPolicy {
                 })?,
                 args: worker_arguments(),
                 envs: worker_environment(),
+                frames: FramePath::Shared,
             }),
         })
     }

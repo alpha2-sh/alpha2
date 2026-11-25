@@ -87,6 +87,30 @@ All notable changes to this project are documented in this file.
 - **Breaking:** `Nv12PlaneTargets` takes default views of the NV12 plane textures instead of the
   textures, and `HardwareEncodeInput::planes` returns the views it keeps with its plane textures,
   so packing or repacking a frame into an encoder's planes creates no texture view.
+- **Breaking:** `runExtractor` takes no `plugin`: a plugin's extractor records `made_by.plugin`
+  itself (`Extractor.madeByPlugin`), with the slot files that run read.
+- **Breaking:** the browser's `loadPlugin` checks the whole manifest as the native loaders do
+  (unknown fields, URLs, limits, the descriptor's rules) before it fetches a file, and refuses a
+  file as soon as more bytes arrive than the manifest pins. `LoadedPlugin.descriptor` is the
+  descriptor as the engine reads it, with `max_size`, `block_frames` and `params_schema` filled
+  in.
+- **Breaking:** `alpha2-native-gpu`'s Metal import takes a raw `CVPixelBufferRef`
+  (`SharedMetalContext::import_pixel_buffer`, `pixel_buffer_planes`, `MetalImportError`) under a
+  new FFmpeg-free `iosurface-import` feature for every Apple target; `import_surface` and
+  `encoder_planes` remain as the `hwdevice` adapters on macOS.
+- **Breaking:** `alpha2_host_core::export::export_video` takes the renderer together with
+  optional `EncoderTargets`; `VideoEncodeBackend` and `VideoSink` gain `lender`, which lends
+  encoder input buffers (`LentBuffer`, `PoolLender`, `SinkLender`).
+- **Breaking:** a native plugin in a worker process gets its video frames through memory its host
+  shares with that worker alone, read-only there, instead of through the worker's pipe; the host
+  presents each delivered frame straight into that memory, so a 1080p RGBA frame is neither
+  copied nor sent through the kernel on its way to the plugin. Where the memory cannot be made
+  or mapped, the run goes on through the pipe and the host writes one diagnostic. A plugin that
+  writes into its input frame, which the ABI never allowed, now fails its run with
+  `PLUGIN_TRAPPED`. On Linux and macOS the worker's standard input and output are one Unix
+  socket. In Rust, `WorkerCommand` gains `frames` (`FramePath::Shared`, or `FramePath::Pipe` to
+  compare), and `alpha2-os` gains `SharedRegion`, `MappedRegion`, `write_with_descriptor` and
+  `DescriptorReader`.
 - A GPU frame writes its uniforms (each source's conversion, the graph's passes and the YUV or
   NV12 pack) into one buffer with one queue write, where each conversion and the pack had a buffer
   and a write of their own.
@@ -106,6 +130,13 @@ All notable changes to this project are documented in this file.
   The WGSL the runtime effect wrapper generates declares `source_sampler` there and renumbers group
   0: parameters at 2, the runtime block at 3, resources from 4, named inputs from 20. Effect bodies
   name these, not numbers, and are unaffected.
+- iOS: hardware-decoded frames stay on the GPU. The renderer samples `VideoToolbox` pixel buffers
+  as Metal textures, as Android imports decoder buffers, in exports, stills and the `Player`; the
+  export report's `surfaceFrames` counts them. A pixel buffer the GPU refuses is copied through
+  memory instead, once reported as a diagnostic and counted as `surfaceFallbacks`.
+- iOS: an export renders each frame straight into the H.264 or HEVC encoder's pixel buffer
+  instead of reading it back; the report's `framesRenderedInPlace` counts them.
+  `VideoFrameMode.cpu` turns both off.
 
 ### Added
 
@@ -121,6 +152,47 @@ All notable changes to this project are documented in this file.
   program run native plugins in a worker process of its own.
 - The Node and Python clients' `plugins` option gains `isolation` and `resourceRoot`
   (`resource_root`), and their errors gain `details`.
+- A plugin manifest may carry `about` (`name`, `summary`, `author`, `homepage`, `license`) and an
+  output `label` and `description`, plain text for interfaces that the engine ignores; Rust reads
+  them as `PluginManifest::about` and `OutputSpec::label` / `description`, the mobile `Plugin` as
+  `aboutJson()`. A loader before this release refuses a manifest that has them. `pack` writes a
+  plugin crate's `about.json` as the manifest's `about`.
+- `docs/plugin-abi.md` lists the interface annotations a `params_schema` may carry (`title`,
+  `description`, `default`, `x-alpha2-unit`, `x-alpha2-step`, `x-alpha2-display`,
+  `x-alpha2-order`, `x-alpha2-group`, `x-alpha2-advanced`), which every params check ignores.
+- `alpha2.silence` 1.1.0 carries its `about`, an output label and annotated params. Its outputs
+  are unchanged (`descriptor.version` 1).
+- `alpha2/plugins` exports `parsePluginManifest`, which checks a manifest by the engine loaders'
+  rules without fetching anything, the `PluginManifest` types and the manifest limits
+  (`MAX_MANIFEST_BYTES`, `MAX_PLUGIN_*`, `MAX_ABOUT_*`); `LoadedPlugin` gains `about`, and
+  `loadPlugin` takes `onProgress`, called as each pinned file arrives.
+- `bridge.extract` takes a plugin the app loaded with `loadPlugin`, which many runs share, or a
+  `fetch` beside the manifest; its `onProgress` reports the plugin's files (`phase: "load"`).
+- `bridge.extractCapabilities()` says what `bridge.extract` runs (the inputs of each media, the
+  artifacts, whether it fills resource slots), and `pluginProblem(manifest, capabilities)` in
+  `alpha2/plugins` says why a plugin would not run there. A host's `capabilities` result reports
+  its plugin policy as `plugins` (`mode`, `slots`, `isolation`), typed in `@alpha2-sh/node`.
+- `bridge.extract` reads the timeline: it draws the frames an extractor asks for on a CPU renderer
+  of its own at export quality, the bytes every surface reads timeline frames as. Timeline audio
+  is not supplied (`INVALID_INPUT`), as on the native hosts.
+- The browser fills a plugin's resource slots: `loadPlugin(manifest, sha256, { supplied })` takes a
+  `File` for a `file` slot and a directory handle or a directory picker's files for a `directory`
+  slot, checked with the native loaders' limits and reasons, and the run records the files it
+  read in `made_by.plugin.supplied`. `bridge.extract` passes `plugin.supplied` on.
+- `bridge.extract` runs a plugin in a worker when `runtimeAssets.extractWorkerFactory` makes one
+  running the new `@alpha2-sh/editor/extract-worker` entry, so a long extraction no longer holds
+  the page's thread; a cancel terminates the worker at once. `transferablePlugin` and
+  `restorePlugin` in `alpha2/plugins` hand a loaded plugin to a worker without fetching or
+  compiling it again.
+- `bindableProperties(project, owner)` in `alpha2/project` lists the properties of a clip, track,
+  transition, composition node or the master bus that data can be bound to, in the path syntax of
+  `dataReferences` and `bake`, with the data kinds each reads.
+- `alpha2_engine::extract`: an extractor may offer memory for the next frame
+  (`Extractor::frame_buffer`, `None` by default), which a supplier fills through
+  `Supplier::frame_into` and `FramePlace` (by default it supplies as `frame` does) and the session
+  through `ExtractSession::supply_placed_video` and `supply_video_into`; `supply_frame` answers a
+  frame need that way, as `drive` does, and `present_for_extraction_into` presents a decoded
+  frame into such memory.
 
 ### Removed
 
@@ -207,6 +279,31 @@ All notable changes to this project are documented in this file.
 - The CPU renderer's frame buffer pool follows the same rule: per buffer length it keeps as many
   buffers as the last frames took at once, so a 7680x4320 export no longer frees and allocates a
   frame buffer every frame.
+- The Python client's params check words an `enum` or `const` refusal as `schemaProblem` does.
+- macOS: the Metal interop helpers drain an autorelease pool, so the Objective-C objects they
+  autoreleased no longer leak on the host's long-lived worker threads.
+- The browser bridge imports, relinks and reads image sequence frames from media references,
+  `{ url, name, path? }` whose URL answers `Range` requests, in place of a `File`: every reader of
+  the media (probing, hashing, preview and its workers, proxies, extraction, browser export) reads
+  it by range. `alpha2/mediabunny` inputs and `alpha2/media` container readers take a
+  `RangeReader` (`size`, `read(start, end)`), and `sha256Blob` anything with `stream()`.
+- A native export reads a referenced file by its `path` instead of uploading it: `nativeAssets`
+  gives `{ path }` for it, and the native client sends such assets in the render request's
+  `paths` (`{ [kind]: { [id]: path } }`) without an upload. `NativeAsset` has either `blob` or
+  `path`.
+- `bridge.putProviderSource` takes `then`: commands, or a function of the new source's ID and
+  opened size returning them, committed in the same undo step as the source, such as the clip that
+  places it.
+- `failureClassOfHttpStatus` in `alpha2/export-failure` classifies an export service's HTTP error
+  status: 413 `RESOURCE_LIMIT`, 429 and 503 `RESOURCE_BUSY`, 507 `STORAGE_QUOTA_EXCEEDED`.
+- The native client treats a 404 to an asset upload or a render request as a job the service lost,
+  so the next attempt allocates and uploads it again instead of failing three times, and no longer
+  retries an upload or a project the service refuses as too large (413): the export fails at once
+  with `RESOURCE_LIMIT` and the service's `limitBytes` in `diagnostics`. Its job failures are
+  `ExportFailureError`s with the service's message.
+- `bake` of a linear source-anchored data set read through a clip no longer stops the motion at
+  the clip's last sample: the baked keys follow the live value toward the next sample up to the
+  clip's end, at loop pass boundaries, and over the frames a reversed pass holds.
 
 ## [0.6.1] - 2026-11-18
 

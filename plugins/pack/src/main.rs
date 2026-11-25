@@ -8,8 +8,9 @@
 //!
 //! The plugin crate has `descriptor.json` at its root; files under `resources/` are copied, and
 //! `resources.json` lists entries written to the manifest as they are: resources hosted elsewhere
-//! (`name`, `url`, `sha256`, `bytes`) and slots the caller fills (`name`, `supplied`). Native
-//! targets default to the host's. Nothing is uploaded.
+//! (`name`, `url`, `sha256`, `bytes`) and slots the caller fills (`name`, `supplied`);
+//! `about.json`, when present, is written as the manifest's `about`. Native targets default to the
+//! host's. Nothing is uploaded.
 
 mod check;
 mod notices;
@@ -239,6 +240,15 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
     });
     if !resources.is_empty() {
         manifest["resources"] = json!(resources);
+    }
+    let about = options.plugin.join("about.json");
+    if about.is_file() {
+        let about: Value = serde_json::from_slice(&read(&about)?)
+            .map_err(|error| format!("about.json: {error}"))?;
+        if !about.is_object() {
+            return Err("about.json is not an object".to_owned());
+        }
+        manifest["about"] = about;
     }
     let path = options.out.join("manifest.json");
     let text = manifest_text(manifest, &descriptor_text)?;

@@ -48,6 +48,8 @@ mod zero_copy;
 #[cfg(target_os = "android")]
 pub mod android;
 
+#[cfg(all(test, target_vendor = "apple"))]
+mod apple_frames_tests;
 #[cfg(all(test, any(target_os = "android", target_os = "ios")))]
 mod device_tests;
 

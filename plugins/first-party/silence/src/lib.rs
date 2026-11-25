@@ -269,3 +269,20 @@ impl Silence {
 }
 
 alpha2_plugin_sdk::export_extractor!(Silence);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_descriptor_declares_the_defaults_and_bounds_the_plugin_uses() {
+        let descriptor: serde_json::Value =
+            serde_json::from_str(<Silence as Extractor>::DESCRIPTOR).expect("descriptor");
+        for (name, default, min, max) in PARAMS {
+            let schema = &descriptor["params_schema"]["properties"][name];
+            assert_eq!(schema["default"].as_f64(), Some(default), "{name}");
+            assert_eq!(schema["minimum"].as_f64(), Some(min), "{name}");
+            assert_eq!(schema["maximum"].as_f64(), Some(max), "{name}");
+        }
+    }
+}

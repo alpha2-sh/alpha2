@@ -2874,5 +2874,1264 @@
         ]
       }
     }
+  },
+  {
+    "name": "about-and-output-labels",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges",
+            "label": "Silences",
+            "description": "Stretches without speech, each with a score."
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)"
+      }
+    }
+  },
+  {
+    "name": "about-name-only",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence"
+      }
+    }
+  },
+  {
+    "name": "annotated-params-schema",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object",
+          "title": "Silence",
+          "additionalProperties": false,
+          "properties": {
+            "threshold": {
+              "type": "number",
+              "minimum": 0.05,
+              "maximum": 0.95,
+              "title": "Speech threshold",
+              "description": "How sure the model must be that there is speech.",
+              "default": 0.5,
+              "x-alpha2-display": "percent",
+              "x-alpha2-step": 0.05,
+              "x-alpha2-order": 1,
+              "x-alpha2-group": "Detection",
+              "x-alpha2-advanced": false
+            },
+            "min_silence_ms": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 60000,
+              "title": "Shortest silence",
+              "default": 200,
+              "x-alpha2-unit": "ms",
+              "x-alpha2-step": 50,
+              "x-alpha2-order": 2,
+              "x-alpha2-advanced": true
+            }
+          }
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "about-unknown-field",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)",
+        "icon": "x.png"
+      }
+    }
+  },
+  {
+    "name": "about-without-name",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "summary": "No name."
+      }
+    }
+  },
+  {
+    "name": "about-empty-name",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)"
+      }
+    }
+  },
+  {
+    "name": "about-name-too-long",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)"
+      }
+    }
+  },
+  {
+    "name": "about-summary-too-long",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)"
+      }
+    }
+  },
+  {
+    "name": "about-name-with-control-character",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence\u0007",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)"
+      }
+    }
+  },
+  {
+    "name": "about-summary-with-newline",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "One.\nTwo.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)"
+      }
+    }
+  },
+  {
+    "name": "about-homepage-not-https",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "http://example.com/silence",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)"
+      }
+    }
+  },
+  {
+    "name": "about-homepage-with-space",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/a b",
+        "license": "MIT OR (Apache-2.0 WITH LLVM-exception)"
+      }
+    }
+  },
+  {
+    "name": "about-license-not-an-expression",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT AND"
+      }
+    }
+  },
+  {
+    "name": "about-license-unbalanced",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "(MIT OR Apache-2.0"
+      }
+    }
+  },
+  {
+    "name": "about-license-lowercase-operator",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "about": {
+        "name": "Silence",
+        "summary": "Finds the pauses in speech.",
+        "author": "Example Inc.",
+        "homepage": "https://example.com/silence",
+        "license": "MIT or Apache-2.0"
+      }
+    }
+  },
+  {
+    "name": "output-label-empty",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges",
+            "label": ""
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "output-label-too-long",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges",
+            "label": "lllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "output-description-with-control-character",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges",
+            "description": "a\u0000b"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "output-unknown-field",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges",
+            "icon": "x"
+          }
+        ]
+      }
+    }
   }
 ]

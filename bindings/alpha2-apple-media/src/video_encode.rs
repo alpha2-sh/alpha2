@@ -1,4 +1,4 @@
-//! Video encoding through `VideoToolbox`: H.264 and HEVC from the CPU planes the export renders.
+//! Video encoding through `VideoToolbox`: H.264 and HEVC from rendered planes or lent pool buffers.
 //!
 //! The encoder is chosen by ID from `VTCopyVideoEncoderList`, hardware encoders before software
 //! ones, so a software encoder is never used while a hardware one opens. Frames are never
@@ -15,11 +15,13 @@
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
-use std::sync::{Condvar, Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use alpha2_host_core::encode::{
-    EncodePoll, EncodedPacket, VideoEncodeBackend, VideoEncodeConfig, VideoEncoders,
+    EncodePoll, EncodedPacket, Lend, LentBuffer, PoolLender, VideoEncodeBackend, VideoEncodeConfig,
+    VideoEncoders,
 };
 use alpha2_host_core::export::PlaneBuffer;
 use alpha2_host_core::rate_control::{AppliedRateControl, videotoolbox_quality};
@@ -46,7 +48,8 @@ use objc2_core_video::{
     kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, kCVImageBufferTransferFunction_sRGB,
     kCVImageBufferYCbCrMatrix_ITU_R_601_4, kCVImageBufferYCbCrMatrix_ITU_R_709_2,
     kCVImageBufferYCbCrMatrix_ITU_R_2020, kCVPixelBufferHeightKey,
-    kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
+    kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey,
+    kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
 };
 use objc2_video_toolbox::{
     VTCompressionSession, VTCopyVideoEncoderList, VTEncodeInfoFlags, VTSessionSetProperty,
@@ -455,6 +458,25 @@ fn configure(
     VideoToolboxEncoder::rate_control(config, &set)
 }
 
+fn lends(input: Input, config: &VideoEncodeConfig) -> bool {
+    input == Input::Planar8 && config.color.range != ColorRange::Full
+}
+
+struct Lent {
+    buffer: Option<CFRetained<CVPixelBuffer>>,
+    count: Arc<AtomicU64>,
+}
+
+// SAFETY: pixel buffers may be used from any thread; the lent buffer is only handed back to the
+// encoder that lent it.
+unsafe impl Send for Lent {}
+
+impl Drop for Lent {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// A session of encoder `id` for `config` whose output callback writes to `shared`, with its
 /// pool and the rate control it runs.
 fn create(
@@ -475,18 +497,28 @@ fn create(
     // SAFETY: a framework constant.
     let specification = dictionary(&[(unsafe { kVTVideoEncoderSpecification_EncoderID }, &id)]);
     let empty = CFDictionary::<CFString, CFType>::empty();
+    let (format, width, height) = (
+        sys::int(i64::from(pixel_format)),
+        sys::int(i64::from(config.width)),
+        sys::int(i64::from(config.height)),
+    );
     // SAFETY: framework constants.
-    let attributes = unsafe {
-        dictionary(&[
-            (
-                kCVPixelBufferPixelFormatTypeKey,
-                &sys::int(i64::from(pixel_format)),
-            ),
-            (kCVPixelBufferWidthKey, &sys::int(i64::from(config.width))),
-            (kCVPixelBufferHeightKey, &sys::int(i64::from(config.height))),
+    let mut attributes: Vec<(&CFString, &CFType)> = unsafe {
+        vec![
+            (kCVPixelBufferPixelFormatTypeKey, &format),
+            (kCVPixelBufferWidthKey, &width),
+            (kCVPixelBufferHeightKey, &height),
             (kCVPixelBufferIOSurfacePropertiesKey, &empty),
-        ])
+        ]
     };
+    if lends(input, config) {
+        // SAFETY: a framework constant.
+        attributes.push((
+            unsafe { kCVPixelBufferMetalCompatibilityKey },
+            sys::boolean(true),
+        ));
+    }
+    let attributes = dictionary(&attributes);
     let mut session: *mut VTCompressionSession = ptr::null_mut();
     // SAFETY: the dictionaries hold the documented value types, `session` is a valid out pointer,
     // and the refcon outlives the session, which the encoder drops before its callback state.
@@ -539,6 +571,8 @@ pub struct VideoToolboxEncoder {
     applied: AppliedRateControl,
     /// Frames submitted and not finished, oldest first.
     kept: VecDeque<Kept>,
+    lent: Arc<AtomicU64>,
+    generation: u64,
     /// Frames finished and let go from `kept`.
     released: u64,
     /// Sessions replaced since a frame last finished.
@@ -550,6 +584,10 @@ pub struct VideoToolboxEncoder {
     /// replacing session then publishes another configuration record.
     #[cfg(test)]
     lose_at: Option<(u64, bool)>,
+    #[cfg(test)]
+    lose_after_lend: Option<u64>,
+    #[cfg(test)]
+    lends: u64,
 }
 
 impl std::fmt::Debug for VideoToolboxEncoder {
@@ -695,12 +733,18 @@ impl VideoToolboxEncoder {
             input,
             applied,
             kept: VecDeque::new(),
+            lent: Arc::default(),
+            generation: 0,
             released: 0,
             replacements: 0,
             key_next: false,
             ended: false,
             #[cfg(test)]
             lose_at: None,
+            #[cfg(test)]
+            lose_after_lend: None,
+            #[cfg(test)]
+            lends: 0,
         })
     }
 
@@ -773,16 +817,20 @@ impl VideoToolboxEncoder {
         Ok(unsafe { CFRetained::from_raw(buffer) })
     }
 
-    /// Copies `planes` into a pool buffer as the session's pixel format.
-    fn fill(&mut self, planes: &[PlaneBuffer]) -> Result<CFRetained<CVPixelBuffer>, EncodeError> {
-        let buffer = match self.pool_buffer() {
+    fn take_pool_buffer(&mut self) -> Result<CFRetained<CVPixelBuffer>, EncodeError> {
+        match self.pool_buffer() {
             Err(sys::INVALID_SESSION) => {
                 self.replace()?;
                 self.pool_buffer()
             }
             buffer => buffer,
         }
-        .map_err(|status| self.failed(&format!("no pool buffer ({status})")))?;
+        .map_err(|status| self.failed(&format!("no pool buffer ({status})")))
+    }
+
+    /// Copies `planes` into a pool buffer as the session's pixel format.
+    fn fill(&mut self, planes: &[PlaneBuffer]) -> Result<CFRetained<CVPixelBuffer>, EncodeError> {
+        let buffer = self.take_pool_buffer()?;
         let expected = if self.input == Input::P010 { 2 } else { 3 };
         if planes.len() != expected {
             return Err(self.failed(&format!("{} planes, not {expected}", planes.len())));
@@ -861,10 +909,10 @@ impl VideoToolboxEncoder {
         Ok(())
     }
 
-    /// Frames submitted whose callback has not finished them.
+    /// Frames submitted whose callback has not finished them, and buffers lent.
     pub(crate) fn in_flight(&mut self) -> u64 {
         self.release();
-        self.kept.len() as u64
+        self.kept.len() as u64 + self.lent.load(Ordering::Acquire)
     }
 
     /// Lets go of the kept frames the encoder finished.
@@ -922,6 +970,7 @@ impl VideoToolboxEncoder {
             // Dropping the lost session returns once its last callback has.
             drop(std::mem::replace(&mut self.session, session));
             self.pool = pool;
+            self.generation += 1;
             self.release();
             {
                 let mut outputs = self.outputs();
@@ -1016,40 +1065,7 @@ impl VideoEncodeBackend for VideoToolboxEncoder {
             return Ok(Submit::Busy);
         }
         let buffer = self.fill(planes)?;
-        let keyframe = keyframe || std::mem::take(&mut self.key_next);
-        let frame = Kept {
-            pts,
-            buffer,
-            keyframe,
-        };
-        #[cfg(test)]
-        let lose = {
-            let index = self.released + self.kept.len() as u64;
-            self.lose_at.take_if(|(at, _)| *at == index)
-        };
-        #[cfg(not(test))]
-        let lose: Option<(u64, bool)> = None;
-        let status = if let Some((_, other_record)) = lose {
-            // As the system does: frames in flight are lost with the session.
-            let mut outputs = self.outputs();
-            outputs.lost = true;
-            if other_record && let Some(record) = outputs.codec_private.as_mut() {
-                *record = [&record[..], &[0]].concat().into();
-            }
-            sys::INVALID_SESSION
-        } else {
-            self.encode(&frame, keyframe)
-        };
-        match status {
-            0 => self.kept.push_back(frame),
-            sys::INVALID_SESSION => {
-                self.kept.push_back(frame);
-                self.replace()?;
-            }
-            status => {
-                return Err(self.failed(&format!("a frame was refused ({})", sys::status(status))));
-            }
-        }
+        self.encode_buffer(pts, buffer, keyframe)?;
         Ok(Submit::Accepted)
     }
 
@@ -1089,6 +1105,111 @@ impl VideoEncodeBackend for VideoToolboxEncoder {
     fn applied_rate_control(&self) -> AppliedRateControl {
         self.applied
     }
+
+    fn lender(&mut self) -> Option<&mut dyn PoolLender> {
+        if lends(self.input, &self.config) {
+            Some(self)
+        } else {
+            None
+        }
+    }
+}
+
+impl PoolLender for VideoToolboxEncoder {
+    fn lend(&mut self) -> Result<Lend, EncodeError> {
+        self.recover()?;
+        self.take_error()?;
+        if self.in_flight() >= MAX_IN_FLIGHT {
+            return Ok(Lend::Busy);
+        }
+        let buffer = self.take_pool_buffer()?;
+        self.lent.fetch_add(1, Ordering::AcqRel);
+        let surface = CFRetained::as_ptr(&buffer).as_ptr().cast();
+        let lent = Lent {
+            buffer: Some(buffer),
+            count: Arc::clone(&self.lent),
+        };
+        #[cfg(test)]
+        {
+            if self.lose_after_lend == Some(self.lends) {
+                self.outputs().lost = true;
+            }
+            self.lends += 1;
+        }
+        Ok(Lend::Buffer(LentBuffer::new(
+            surface,
+            self.generation,
+            usize::try_from(MAX_IN_FLIGHT).unwrap_or(usize::MAX),
+            Box::new(lent),
+        )))
+    }
+
+    fn encode_lent(
+        &mut self,
+        pts: i64,
+        buffer: LentBuffer,
+        keyframe: bool,
+    ) -> Result<(), EncodeError> {
+        let mut lent = buffer
+            .into_owner()
+            .downcast::<Lent>()
+            .ok()
+            .filter(|lent| Arc::ptr_eq(&lent.count, &self.lent))
+            .ok_or_else(|| self.failed("a buffer this encoder did not lend came back"))?;
+        let buffer = lent
+            .buffer
+            .take()
+            .ok_or_else(|| self.failed("a lent buffer came back empty"))?;
+        drop(lent);
+        self.recover()?;
+        self.take_error()?;
+        self.encode_buffer(pts, buffer, keyframe)
+    }
+}
+
+impl VideoToolboxEncoder {
+    fn encode_buffer(
+        &mut self,
+        pts: i64,
+        buffer: CFRetained<CVPixelBuffer>,
+        keyframe: bool,
+    ) -> Result<(), EncodeError> {
+        let keyframe = keyframe || std::mem::take(&mut self.key_next);
+        let frame = Kept {
+            pts,
+            buffer,
+            keyframe,
+        };
+        #[cfg(test)]
+        let lose = {
+            let index = self.released + self.kept.len() as u64;
+            self.lose_at.take_if(|(at, _)| *at == index)
+        };
+        #[cfg(not(test))]
+        let lose: Option<(u64, bool)> = None;
+        let status = if let Some((_, other_record)) = lose {
+            // As the system does: frames in flight are lost with the session.
+            let mut outputs = self.outputs();
+            outputs.lost = true;
+            if other_record && let Some(record) = outputs.codec_private.as_mut() {
+                *record = [&record[..], &[0]].concat().into();
+            }
+            sys::INVALID_SESSION
+        } else {
+            self.encode(&frame, keyframe)
+        };
+        match status {
+            0 => self.kept.push_back(frame),
+            sys::INVALID_SESSION => {
+                self.kept.push_back(frame);
+                self.replace()?;
+            }
+            status => {
+                return Err(self.failed(&format!("a frame was refused ({})", sys::status(status))));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1102,6 +1223,10 @@ impl VideoToolboxEncoder {
     /// Where each replacing session started, which outlives the encoder.
     pub(crate) fn resumed(&self) -> std::sync::Arc<Mutex<Vec<Option<i64>>>> {
         std::sync::Arc::clone(&self.shared.resumed)
+    }
+
+    pub(crate) fn lose_session_after_lend(&mut self, index: u64) {
+        self.lose_after_lend = Some(index);
     }
 
     /// The count of output callbacks that ran, which outlives the encoder.

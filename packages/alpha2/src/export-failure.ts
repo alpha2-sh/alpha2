@@ -399,6 +399,27 @@ export function failureClassOfCode(code: unknown): FailureClass {
   );
 }
 
+const HTTP_STATUS_CLASSES: Readonly<Record<number, FailureClass>> =
+  Object.freeze({
+    413: { code: "RESOURCE_LIMIT", resource: "unknown" },
+    429: { code: "RESOURCE_BUSY", resource: "unknown" },
+    503: { code: "RESOURCE_BUSY", resource: "unknown" },
+    507: { code: "STORAGE_QUOTA_EXCEEDED", resource: "unknown" },
+  });
+
+/**
+ * Failure class of an export service's HTTP error status: `413` (a body past the service's limit)
+ * is `RESOURCE_LIMIT`, `429` and `503` are `RESOURCE_BUSY`, `507` is `STORAGE_QUOTA_EXCEEDED`, and
+ * any other status is `UNKNOWN`.
+ */
+export function failureClassOfHttpStatus(status: number): FailureClass {
+  return (
+    (Object.hasOwn(HTTP_STATUS_CLASSES, status)
+      ? HTTP_STATUS_CLASSES[status]
+      : undefined) ?? unknown
+  );
+}
+
 /** Context for {@link failureForCode}. */
 export interface CodeFailureContext {
   readonly message: string;

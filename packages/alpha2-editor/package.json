@@ -19,7 +19,8 @@
   "sideEffects": [
     "./dist/browser/worker-entry.js",
     "./dist/browser/hash-worker-entry.js",
-    "./dist/browser/extensions-worker-entry.js"
+    "./dist/browser/extensions-worker-entry.js",
+    "./dist/browser/extract-worker-entry.js"
   ],
   "files": [
     "dist",
@@ -46,6 +47,10 @@
     "./extensions-worker": {
       "types": "./dist/browser/extensions-worker-entry.d.ts",
       "import": "./dist/browser/extensions-worker-entry.js"
+    },
+    "./extract-worker": {
+      "types": "./dist/browser/extract-worker-entry.d.ts",
+      "import": "./dist/browser/extract-worker-entry.js"
     },
     "./react": {
       "types": "./dist/react/index.d.ts",

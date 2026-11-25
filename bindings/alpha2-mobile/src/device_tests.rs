@@ -279,7 +279,7 @@ fn rendered_frames(project: &str, assets: &[(&str, &str)], wanted: &[u64]) -> Ve
     alpha2_host_core::export::export_video(
         &snapshot,
         &mut exporter,
-        ExportRenderer::Cpu(&renderer),
+        (ExportRenderer::Cpu(&renderer), None),
         &mut TextTextures::new(),
         &mut sources,
         &mut sink,
@@ -2091,7 +2091,7 @@ mod gpu_frames {
         export_video(
             &snapshot,
             &mut exporter,
-            ExportRenderer::Gpu(renderer),
+            (ExportRenderer::Gpu(renderer), None),
             &mut TextTextures::new(),
             &mut sources,
             &mut sink,

@@ -10,7 +10,7 @@ use super::{CANCELLED, PLUGIN_CODES, PluginError};
 /// What the worker writes before its first frame.
 pub const MAGIC: [u8; 8] = *b"A2PLUGW\n";
 /// The version of this wire, which a host and its worker must share.
-pub const WIRE_VERSION: u32 = 1;
+pub const WIRE_VERSION: u32 = 2;
 /// The most bytes a host reads looking for [`MAGIC`]: text a test harness or a loader printed
 /// before the worker ran.
 pub const MAX_PREAMBLE_BYTES: usize = 4096;
@@ -44,6 +44,13 @@ pub mod host {
     pub const END: u8 = 7;
     /// Empty; the worker ends.
     pub const SHUTDOWN: u8 = 8;
+    /// `u64` length of a memory region the worker maps in place of the one it had; on Unix its
+    /// descriptor comes with the frame's first byte, on Windows the `u64` value of the handle
+    /// the host duplicated into the worker follows.
+    pub const REGION: u8 = 9;
+    /// `i64` time, `u32` width, height and format, then the `u64` offset and length of the
+    /// pixels in the region.
+    pub const VIDEO_SHARED: u8 = 10;
 }
 
 /// Tags of frames a worker writes.
@@ -68,6 +75,11 @@ pub mod child {
     pub const DESCRIBED: u8 = 0x48;
     /// `u32` sequence, `i32` status, then the `fail` text when the plugin gave one.
     pub const RETURNED: u8 = 0x49;
+    /// `u32` sequence: the worker mapped the region.
+    pub const REGION_MAPPED: u8 = 0x4A;
+    /// `u32` sequence, then JSON [`super::Failure`]: the worker cannot map the region and holds
+    /// none.
+    pub const REGION_FAILED: u8 = 0x4B;
 }
 
 /// The worker's first frame.
@@ -278,6 +290,18 @@ pub enum ChildMessage {
         /// Its bytes.
         descriptor: Vec<u8>,
     },
+    /// The worker mapped the region.
+    RegionMapped {
+        /// The request's sequence number.
+        sequence: u32,
+    },
+    /// The worker cannot map the region.
+    RegionFailed {
+        /// The request's sequence number.
+        sequence: u32,
+        /// Why.
+        failure: Failure,
+    },
     /// A call returned.
     Returned {
         /// The request's sequence number.
@@ -297,6 +321,8 @@ impl ChildMessage {
             Self::Loaded { sequence }
             | Self::LoadFailed { sequence, .. }
             | Self::Described { sequence, .. }
+            | Self::RegionMapped { sequence }
+            | Self::RegionFailed { sequence, .. }
             | Self::Returned { sequence, .. } => Some(*sequence),
             _ => None,
         }
@@ -362,6 +388,16 @@ pub fn parse_child(frame: Frame) -> Result<ChildMessage, WireError> {
             ChildMessage::Described {
                 sequence,
                 descriptor,
+            }
+        }
+        child::REGION_MAPPED if payload.len() == 4 => ChildMessage::RegionMapped {
+            sequence: split_u32(&payload, "region_mapped")?.0,
+        },
+        child::REGION_FAILED => {
+            let (sequence, failure) = split_u32(&payload, "region_failed")?;
+            ChildMessage::RegionFailed {
+                sequence,
+                failure: json(&failure, "region_failed")?,
             }
         }
         child::RETURNED => {

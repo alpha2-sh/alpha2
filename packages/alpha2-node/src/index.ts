@@ -1149,6 +1149,16 @@ export interface HostCapabilities {
     HostEncodeCapabilities
   >;
   readonly effectCatalog: BuiltinEffectCatalog;
+  /**
+   * What the host's plugin policy allows (the client's `plugins` option): which artifacts run
+   * (`--plugins`), whether a request may fill a resource slot (`--plugin-resource-root` other than
+   * `none`) and where a native artifact runs (`--plugin-isolation`).
+   */
+  readonly plugins: {
+    readonly mode: "off" | "wasm" | "native";
+    readonly slots: boolean;
+    readonly isolation: "process" | "in-process";
+  };
   readonly [diagnostic: string]: unknown;
 }
 

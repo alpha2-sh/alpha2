@@ -1711,6 +1711,7 @@ struct RequestWork {
 
 impl RequestWork {
     /// Runs on its own thread, holding the request's termination guard until it is answered.
+    #[expect(clippy::too_many_lines, reason = "one arm per kind of request")]
     fn run(self, out: &Responder, unusable: &Unusable) -> Result<(), HostError> {
         let Self {
             request_id,
@@ -1754,6 +1755,17 @@ impl RequestWork {
             Ok(crate::protocol::Request::Edit(request)) => {
                 crate::compose_request::answer_edit(&request)
             }
+            Ok(request @ crate::protocol::Request::Capabilities { .. }) => match host.as_mut() {
+                Some(host) => host
+                    .handle(request, &mut |progress| {
+                        out.send(&progress_event(&request_id, &progress))
+                    })
+                    .map(|mut result| {
+                        result["plugins"] = extract.plugins.capabilities_json();
+                        result
+                    }),
+                None => Err(missing()),
+            },
             Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
                 Some(host) => crate::extract_request::handle(host, *request, out, extract),
                 None => Err(missing()),

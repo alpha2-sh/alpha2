@@ -81,6 +81,11 @@ struct Video {
     blocks_once: Option<std::time::Duration>,
     /// Gives every queued frame until the next submit.
     settled: bool,
+    lends: bool,
+    lent: Arc<Mutex<usize>>,
+    busy_lends: Arc<Mutex<usize>>,
+    busy_before_lend: usize,
+    busy_left: usize,
 }
 
 impl VideoEncodeBackend for Video {
@@ -153,6 +158,54 @@ impl VideoEncodeBackend for Video {
 
     fn applied_rate_control(&self) -> AppliedRateControl {
         AppliedRateControl::Bitrate
+    }
+
+    fn lender(&mut self) -> Option<&mut dyn PoolLender> {
+        if self.lends { Some(self) } else { None }
+    }
+}
+
+struct Slot(Arc<Mutex<usize>>);
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        *self.0.lock().expect("slots") -= 1;
+    }
+}
+
+impl PoolLender for Video {
+    fn lend(&mut self) -> Result<Lend, EncodeError> {
+        let out = *self.lent.lock().expect("slots");
+        if self.busy_left > 0 || self.busy || self.queued.len() + out >= 2 {
+            self.busy_left = self.busy_left.saturating_sub(1);
+            *self.busy_lends.lock().expect("busy") += 1;
+            return Ok(Lend::Busy);
+        }
+        *self.lent.lock().expect("slots") += 1;
+        self.busy_left = self.busy_before_lend;
+        Ok(Lend::Buffer(LentBuffer::new(
+            std::ptr::null_mut(),
+            0,
+            2,
+            Box::new(Slot(Arc::clone(&self.lent))),
+        )))
+    }
+
+    fn encode_lent(
+        &mut self,
+        pts: i64,
+        buffer: LentBuffer,
+        keyframe: bool,
+    ) -> Result<(), EncodeError> {
+        let slot = buffer
+            .into_owner()
+            .downcast::<Slot>()
+            .map_err(|_| EncodeError::Adapter("not lent here".into()))?;
+        drop(slot);
+        self.submitted += 1;
+        self.settled = false;
+        self.queued.push_back((pts, keyframe));
+        Ok(())
     }
 }
 
@@ -758,4 +811,86 @@ fn a_failing_video_encoder_is_rejected_and_other_failures_are_not() {
         matches!(&result, Err(EncodeError::Adapter(message)) if message.contains("audio session")),
         "{result:?}"
     );
+}
+
+fn lend_every_third(count: u64, lending: bool) -> (Vec<Event>, usize) {
+    let log = Log::default();
+    let (lent, busy) = (Arc::new(Mutex::new(0)), Arc::new(Mutex::new(0)));
+    let video = Video {
+        lends: true,
+        lent: Arc::clone(&lent),
+        busy_lends: Arc::clone(&busy),
+        busy_before_lend: 2,
+        busy_left: 2,
+        ..Video::default()
+    };
+    let mut sink = sink_of(&log, video, None, CancelToken::default());
+    for index in 0..count {
+        if lending && index % 3 == 1 {
+            let buffer = sink.lend().expect("a lent buffer");
+            sink.write_lent(index, buffer).expect("a lent frame");
+        } else {
+            sink.write_frame(index, &planes()).expect("frame");
+        }
+    }
+    sink.finish().expect("finished");
+    assert_eq!(*lent.lock().expect("slots"), 0);
+    let busy = *busy.lock().expect("busy");
+    (log.events(), busy)
+}
+
+#[test]
+fn a_lent_frame_takes_the_pts_and_keyframe_a_written_one_does() {
+    let (written, _) = lend_every_third(12, false);
+    let (lent, busy) = lend_every_third(12, true);
+    assert_eq!(lent, written);
+    assert!(busy > 0, "no lend met a busy encoder");
+}
+
+#[test]
+fn a_lend_from_a_busy_encoder_that_never_frees_a_slot_fails_as_a_stall() {
+    let log = Log::default();
+    let video = Video {
+        lends: true,
+        busy: true,
+        ..Video::default()
+    };
+    let mut sink = sink_of(&log, video, None, CancelToken::default())
+        .with_stall_limit(std::time::Duration::from_millis(50));
+    let error = sink.lend().expect_err("stalled");
+    assert!(error.to_string().contains("accepted no frame"), "{error}");
+}
+
+#[test]
+fn a_lent_buffer_dropped_unsubmitted_gives_its_slot_back() {
+    let lent = Arc::new(Mutex::new(0));
+    let mut video = Video {
+        lends: true,
+        lent: Arc::clone(&lent),
+        ..Video::default()
+    };
+    let lender = video.lender().expect("lends");
+    let Lend::Buffer(first) = lender.lend().expect("lend") else {
+        panic!("busy");
+    };
+    let Lend::Buffer(_second) = lender.lend().expect("lend") else {
+        panic!("busy");
+    };
+    assert!(matches!(lender.lend().expect("lend"), Lend::Busy));
+    drop(first);
+    assert!(matches!(lender.lend().expect("lend"), Lend::Buffer(_)));
+}
+
+#[test]
+fn a_sink_lends_only_when_its_encoder_does() {
+    let log = Log::default();
+    let mut plain = sink(&log, false);
+    assert!(crate::export::VideoSink::lender(&mut plain).is_none());
+    assert!(plain.lend().is_err());
+    let video = Video {
+        lends: true,
+        ..Video::default()
+    };
+    let mut lending = sink_of(&log, video, None, CancelToken::default());
+    assert!(crate::export::VideoSink::lender(&mut lending).is_some());
 }

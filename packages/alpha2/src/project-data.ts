@@ -16,6 +16,8 @@ import {
   MAX_SUPPLIED_FILES,
   MAX_SUPPLIED_NAME_BYTES,
 } from "./generated/project-schema.js";
+import { BUILTIN_EFFECT_RULES } from "./generated/builtin-effects.js";
+import { PROJECT_SHAPE } from "./generated/project-shape.js";
 
 type Json = Record<string, unknown>;
 
@@ -966,4 +968,238 @@ function followProblem(
       problem: `follows clips in canvas space more than ${MAX_FOLLOW_DEPTH} deep`,
     };
   return undefined;
+}
+
+/** A property a data set can be bound to, by {@link bindableProperties}. */
+export interface BindableProperty {
+  /** The property path in the syntax of {@link DataReference.property}. */
+  readonly property: string;
+  /**
+   * The data kinds it reads: `points` and `scalars` for a binding (`{ mode: "data" }`, a point
+   * or two-component value following `points`, or one channel per component of `scalars`),
+   * `similarity` for `visual.correction`, `words` for a caption track's `captions`.
+   */
+  readonly accepts: readonly ("points" | "scalars" | "similarity" | "words")[];
+}
+
+const TWO: BindableProperty["accepts"] = ["points", "scalars"];
+const ONE: BindableProperty["accepts"] = ["scalars"];
+
+/** What a binding on a value of `slot` reads, as `Places::check` decides it; none for others. */
+function acceptsSlot(slot: Slot): BindableProperty["accepts"] | undefined {
+  if (
+    slot.kind === "point" ||
+    slot.kind === "vec2" ||
+    (slot.kind === "param" && (slot.type === "vec2" || slot.type === undefined))
+  )
+    return TWO;
+  if (
+    slot.kind === "scalar" ||
+    (slot.kind === "param" && slot.type === "float")
+  )
+    return ONE;
+  return undefined;
+}
+
+const SHAPE_DEFS = (PROJECT_SHAPE as { $defs: Record<string, Json> }).$defs;
+
+/** The animated fields of a mask shape of `type`, by the slot `maskBindings` gives each. */
+function maskShapeFields(type: unknown): [string, Slot][] {
+  const variants = (SHAPE_DEFS.ShapeGeometry?.oneOf ?? []) as Json[];
+  const variant = variants.find(
+    (candidate) =>
+      ((candidate.properties as Json | undefined)?.type as Json | undefined)
+        ?.const === type,
+  );
+  return Object.entries((variant?.properties ?? {}) as Record<string, Json>)
+    .filter(
+      ([, field]) =>
+        typeof field.$ref === "string" &&
+        field.$ref.startsWith("#/$defs/Animated"),
+    )
+    .map(([field]) => [
+      field,
+      slotOf(
+        field === "center" ? "point" : field === "size" ? "vec2" : "scalar",
+      ),
+    ]);
+}
+
+function effectParams(effect: unknown, prefix: string): BindableProperty[] {
+  if (!isRecord(effect)) return [];
+  const rules = BUILTIN_EFFECT_RULES[String(effect.id)];
+  const names =
+    rules === undefined
+      ? Object.keys(isRecord(effect.params) ? effect.params : {})
+      : Object.keys(rules.params);
+  return names.flatMap((name) => {
+    const accepts = acceptsSlot({
+      kind: "param",
+      type: rules?.params[name]?.type,
+    });
+    return accepts === undefined
+      ? []
+      : [{ property: `${prefix}${name}`, accepts }];
+  });
+}
+
+function maskProperties(masks: unknown): BindableProperty[] {
+  return (Array.isArray(masks) ? masks : []).flatMap((mask: unknown, index) => {
+    if (!isRecord(mask) || !isRecord(mask.shape)) return [];
+    const at = `masks[${index}]`;
+    return [
+      ...maskShapeFields(mask.shape.type).flatMap(([field, slot]) => {
+        const accepts = acceptsSlot(slot);
+        return accepts === undefined
+          ? []
+          : [{ property: `${at}.shape.${field}`, accepts }];
+      }),
+      { property: `${at}.feather`, accepts: ONE },
+    ];
+  });
+}
+
+const visualProperties = (prefix: string): BindableProperty[] => [
+  { property: `${prefix}.position`, accepts: TWO },
+  { property: `${prefix}.scale`, accepts: TWO },
+  { property: `${prefix}.rotation_degrees`, accepts: ONE },
+  { property: `${prefix}.opacity`, accepts: ONE },
+];
+
+const audioProperties: BindableProperty[] = [
+  { property: "audio.gain", accepts: ONE },
+  { property: "audio.pan", accepts: ONE },
+];
+
+/**
+ * The properties of `owner` in `project` a data set can be bound to, in the order
+ * {@link dataReferences} lists references: each with the kinds it reads, by the rules project
+ * validation applies to a binding there. Masks, merge layers and the parameters of a host effect
+ * are those `project` has; a built-in effect lists every parameter that reads data. Values drawn
+ * on a picture clock (generators, caption styles) and an owner `project` lacks give none.
+ */
+export function bindableProperties(
+  project: object,
+  owner: DataOwner,
+): BindableProperty[] {
+  const root = project as Json;
+  const timeline = isRecord(root.timeline) ? root.timeline : {};
+  const tracks = (Array.isArray(timeline.tracks) ? timeline.tracks : []).filter(
+    isRecord,
+  );
+  const sources = (Array.isArray(root.sources) ? root.sources : []).filter(
+    isRecord,
+  );
+  switch (owner.kind) {
+    case "clip": {
+      for (const track of tracks)
+        for (const clip of Array.isArray(track.clips) ? track.clips : []) {
+          if (!isRecord(clip) || clip.id !== owner.clip) continue;
+          if (track.kind !== "video") return [...audioProperties];
+          const source = sources.find((entry) => entry.id === clip.source_id);
+          const pictured = source?.kind === "video" || source?.kind === "image";
+          return [
+            ...visualProperties("visual"),
+            ...maskProperties(clip.masks),
+            ...audioProperties,
+            ...(pictured
+              ? [
+                  {
+                    property: "visual.correction",
+                    accepts: ["similarity"],
+                  } as const,
+                ]
+              : []),
+          ];
+        }
+      return [];
+    }
+    case "transition": {
+      const track = tracks.find((entry) => entry.id === owner.track);
+      const transition = (
+        Array.isArray(track?.transitions) ? track.transitions : []
+      ).find(
+        (entry: unknown) =>
+          isRecord(entry) &&
+          entry.from_clip === owner.from &&
+          entry.to_clip === owner.to,
+      ) as Json | undefined;
+      return effectParams(transition?.effect, "effect.params.");
+    }
+    case "track": {
+      const track = tracks.find((entry) => entry.id === owner.track);
+      if (track === undefined) return [];
+      return track.kind === "caption"
+        ? [{ property: "captions", accepts: ["words"] }]
+        : [...audioProperties];
+    }
+    case "master":
+      return [{ property: "audio.gain", accepts: ONE }];
+    case "source":
+      return [];
+    case "node": {
+      const compositions = (
+        Array.isArray(root.compositions) ? root.compositions : []
+      ).filter(isRecord);
+      const composition = compositions.find(
+        (entry) => entry.id === owner.composition,
+      );
+      const node = (
+        Array.isArray(composition?.nodes) ? composition.nodes : []
+      ).find((entry: unknown) => isRecord(entry) && entry.id === owner.node) as
+        Json | undefined;
+      const op = isRecord(node?.op) ? node.op : {};
+      switch (op.type) {
+        case "effect":
+          return effectParams(op.effect, "effect.params.");
+        case "transition":
+          return [
+            ...effectParams(op.effect, "effect.params."),
+            { property: "progress", accepts: ONE },
+          ];
+        case "transform":
+          return visualProperties("transform");
+        case "merge":
+          return (Array.isArray(op.layers) ? op.layers : []).map(
+            (_: unknown, index) => ({
+              property: `layers[${index}].opacity`,
+              accepts: ONE,
+            }),
+          );
+        case "shape_mask":
+          return maskProperties(op.masks);
+        case "group": {
+          const group = compositions.find(
+            (entry) => entry.id === op.composition,
+          );
+          return (Array.isArray(group?.controls) ? group.controls : []).flatMap(
+            (control: unknown) => {
+              if (!isRecord(control)) return [];
+              const target = (
+                Array.isArray(group?.nodes) ? group.nodes : []
+              ).find(
+                (entry: unknown) =>
+                  isRecord(entry) && entry.id === control.node,
+              ) as Json | undefined;
+              const targetOp = isRecord(target?.op) ? target.op : undefined;
+              const type =
+                (targetOp?.type === "effect" ||
+                  targetOp?.type === "transition") &&
+                isRecord(targetOp.effect)
+                  ? BUILTIN_EFFECT_RULES[String(targetOp.effect.id)]?.params[
+                      String(control.param)
+                    ]?.type
+                  : undefined;
+              const accepts = acceptsSlot({ kind: "param", type });
+              return accepts === undefined
+                ? []
+                : [{ property: `controls.${String(control.name)}`, accepts }];
+            },
+          );
+        }
+        default:
+          return [];
+      }
+    }
+  }
 }

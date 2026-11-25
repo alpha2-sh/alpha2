@@ -7,6 +7,7 @@ import {
   classifyBrowserFailure,
   ExportFailureError,
   failureClassOfCode,
+  failureClassOfHttpStatus,
   failureForCode,
   failureOf,
   withSecondaryFailure,
@@ -310,4 +311,28 @@ test("a cause two levels down is not read", () => {
     classifyBrowserFailure(outer, { phase: "decode" }).code,
     "UNKNOWN",
   );
+});
+
+test("an export service's refusal of a body past its limit is not retried, and a busy one waits", async () => {
+  const { isRetryableFailure } = await import("../dist/export-retry.js");
+  const failure = (status) => ({
+    ...failureClassOfHttpStatus(status),
+    message: String(status),
+    origin: "browser",
+    operation: "export",
+    backend: "native",
+    phase: "prepare",
+  });
+  assert.equal(failureClassOfHttpStatus(413).code, "RESOURCE_LIMIT");
+  assert.equal(isRetryableFailure(failure(413)), false);
+  assert.equal(failureClassOfHttpStatus(507).code, "STORAGE_QUOTA_EXCEEDED");
+  assert.equal(isRetryableFailure(failure(507)), false);
+  for (const status of [429, 503])
+    assert.equal(failureClassOfHttpStatus(status).code, "RESOURCE_BUSY");
+  for (const status of [400, 404, 409, 500, 502])
+    assert.equal(
+      failureClassOfHttpStatus(status).code,
+      "UNKNOWN",
+      String(status),
+    );
 });

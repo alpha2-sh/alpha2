@@ -14,8 +14,11 @@ import {
   editorAudioLaneFailure,
   editorConformStaleData,
   editorExportUndecodableAudio,
+  editorImportReference,
   editorImportUndecodable,
   pluginEditorExtract,
+  pluginEditorSupplied,
+  pluginEditorTimeline,
 } from "./editor.mjs";
 import {
   aacLayoutRefusal,
@@ -123,6 +126,7 @@ import {
   yuvAnamorphic,
 } from "./video.mjs";
 import { heavyEffectSplit, splitFrameRejectedSubmission } from "./watchdog.mjs";
+import { pluginSilenceLongTasks } from "./plugin-perf.mjs";
 
 // \`check\` (function source) can require that the result shows the simulated branch ran.
 const underSimulation = (names, body, check) =>
@@ -137,11 +141,14 @@ export const cases = {
   "plugin-digest": pluginDigest,
   "plugin-conformance": pluginConformance,
   "plugin-editor-extract": pluginEditorExtract,
+  "plugin-editor-timeline": pluginEditorTimeline,
+  "plugin-editor-supplied": pluginEditorSupplied,
   "editor-apply-edit": editorApplyEdit,
   "editor-conform-stale-data": editorConformStaleData,
   "editor-audio-lane-failure": editorAudioLaneFailure,
   "editor-export-undecodable-audio": editorExportUndecodableAudio,
   "editor-import-undecodable": editorImportUndecodable,
+  "editor-import-reference": editorImportReference,
   "webgpu-smoke": () => smoke(false),
   "webgl2-smoke": () => smoke(true),
   "webgl-context-loss": webglContextLoss,
@@ -290,6 +297,7 @@ export const caseLaunch = {
 // Need inputs the default run does not make.
 export const perfCases = {
   "export-perf": exportPerf,
+  "plugin-silence-long-tasks": pluginSilenceLongTasks,
 };
 
 export const videoImportCases = new Set([

@@ -20,12 +20,29 @@ A plugin of kind `extractor` provides one extractor: the host runs the extractio
     { "name": "vad.onnx", "url": "https://example.com/vad.onnx", "sha256": "...", "bytes": 1800000 },
     { "name": "model", "supplied": { "shape": "directory", "required": false, "accept": [".onnx"] } }
   ],
+  "about": {
+    "name": "Silence",
+    "summary": "Finds the pauses in speech.",
+    "author": "Example Inc.",
+    "homepage": "https://example.com/silence",
+    "license": "MIT"
+  },
   "descriptor": {
     "id": "com.example.silence",
     "version": 1,
     "input": { "media": "audio", "from": ["source"], "format": "f32", "sample_rate": 16000, "channels": "mono", "block_frames": 512 },
-    "params_schema": { "type": "object" },
-    "outputs": [{ "name": "silence", "kind": "intervals", "suggest": "remove_ranges" }]
+    "params_schema": {
+      "type": "object",
+      "properties": {
+        "threshold": {
+          "type": "number", "minimum": 0.05, "maximum": 0.95,
+          "title": "Speech threshold", "default": 0.5, "x-alpha2-display": "percent", "x-alpha2-step": 0.05
+        }
+      }
+    },
+    "outputs": [
+      { "name": "silence", "kind": "intervals", "suggest": "remove_ranges", "label": "Silences", "description": "Stretches without speech." }
+    ]
   }
 }
 ```
@@ -36,7 +53,27 @@ A plugin of kind `extractor` provides one extractor: the host runs the extractio
 - `artifacts` has one entry per build: `target` is `wasm32` for a wasm module (`type` `wasm`), or the Rust target triple of a native one (`type` `cdylib`, or `staticlib` for a library an app links at build time). A loader takes the native artifact for its own target when native code is allowed (for `alpha2-host`: the operator started it with `--plugins native` and the request sets `allow_native`), else the wasm artifact, else fails with `PLUGIN_NO_ARTIFACT`.
 - `url` is a path under the manifest's own directory (`/`-separated, never climbing above it with `..`) or an absolute `https:` URL; a manifest with any other `url` is refused with `PLUGIN_LOAD_FAILED`. Every artifact and resource is pinned by `sha256` (64 lowercase hexadecimal digits) and `bytes`; a mismatch refuses the load.
 - A resource is either pinned (`url`, `sha256`, `bytes`) or a slot (`supplied`) the caller fills at load time with a file or a directory it names, such as a model the user already has. A slot's `shape` is `file` or `directory`; `required` (default `true`) fails a load without it, and an optional slot left empty reads as an undeclared name, so a plugin can fall back to a pinned default; `max_bytes` is the largest single file the plugin takes from it (a `file` slot is checked at load, a file of a `directory` slot when it is first read); `accept` lists file name suffixes for pickers (`.onnx`, `.gguf`), for interfaces only. A slot name is 1 to 64 of `A-Z a-z 0-9 . _ -`, not starting with `.`. A manifest has at most 16 slots within its 64 resources; the 4 GiB total counts pinned resources only, and no pinned name lies under a directory slot's names (`<slot>/...`).
+- `about` is optional and for interfaces only; the engine ignores it. `name` (1 to 80 characters) is what an interface calls the plugin, `summary` (up to 400) says what it does, `author` (up to 80) who makes it, `homepage` is an `https:` URL of printable ASCII (up to 2048) and `license` an SPDX license expression (up to 256), such as `MIT OR Apache-2.0`. Characters are Unicode code points. The texts are plain: no loader interprets them, and one with a control character (Unicode `Cc`, line breaks included) is refused with `PLUGIN_LOAD_FAILED`; an interface still shows them as text, never as markup. The manifest's SHA-256 covers them, so an interface may show them as the plugin's own.
+- An output may carry a `label` (1 to 80 characters) and a `description` (up to 400), plain text under the same rule, for interfaces; like `suggest`, the engine ignores them. Since they are part of the descriptor, the artifact's `describe` returns them too.
 - `descriptor` is exactly what the artifact's `describe` returns; a loader refuses an artifact whose descriptor differs.
+
+## Interface annotations
+
+`params_schema` is a JSON Schema of the request's `params`. Besides its rules, it may carry these keywords on any property, for an interface that builds a form from it. They are annotations: the engine and every surface that checks params against the schema ignore them, as they ignore `suggest` and a slot's `accept`, so a schema with them and the same schema without them take and refuse the same params.
+
+| Keyword | Value | Meaning |
+| --- | --- | --- |
+| `title` | string | The field's label. |
+| `description` | string | The field's help text. |
+| `default` | a value the schema takes | The form's first value. It must be the value the plugin uses when the param is left out. |
+| `x-alpha2-unit` | string: `ms`, `s`, `%`, `dB`, `px`, ... | The unit shown beside the value. |
+| `x-alpha2-step` | number | One step of a scrub or an arrow key, in the param's own unit. |
+| `x-alpha2-display` | `percent`, `seconds` or `db` | How the value is shown: `percent` shows 0 to 1 as 0 % to 100 %, `seconds` shows a duration in seconds, converted from `x-alpha2-unit` `ms`, or from ticks when the field has no unit, `db` shows a linear amplitude in decibels. |
+| `x-alpha2-order` | number | The field's place in the form, lowest first; fields without it follow in the order of `properties`. |
+| `x-alpha2-group` | string | The title of the group the field is shown in. |
+| `x-alpha2-advanced` | boolean | The field is shown under a folded "advanced" heading. |
+
+An interface ignores a keyword it does not know, and so may an `x-alpha2-` keyword added later. Annotations change the manifest's bytes and its SHA-256, but not the descriptor's `version`, which versions the outputs.
 
 ## Trust
 
@@ -48,9 +85,13 @@ A native artifact runs with the full rights of the user and is refused unless na
 
 Files supplied for slots are trusted less than pinned ones: the loader records what a run read by name, SHA-256 and length in `made_by.plugin.supplied`, and the manifest's own SHA-256 in `made_by.plugin.manifest_sha256`, but it cannot tell which files a runtime opens by itself, and a file a native plugin opens by its path after it was hashed is read as it is then. `alpha2-host` takes supplied files only within `--plugin-resource-root`.
 
+## Browsers
+
+`loadPlugin` in `alpha2/plugins` runs the wasm artifact, never a native one. Its `supplied` option fills the slots: a `File` for a `file` slot; for a `directory` slot a `FileSystemDirectoryHandle`, or the `File`s a directory picker (`<input webkitdirectory>`) gives, named by their `webkitRelativePath` below the picked directory. The slots are checked as the native loaders check them, with the same `details.reason`, before an artifact is fetched; a browser has no links, so none is followed. In a worker, a file is read and hashed when the plugin first asks for it (`FileReaderSync`); on a page, where browsers read files only asynchronously, every file of the filled slots is read into memory as a run begins, and hashed when the plugin first asks for it. `made_by.plugin.supplied` records the files the run read, as on the hosts.
+
 ## Mobile apps
 
-The App Store and Google Play forbid downloading executable code, so an app bundles each plugin it runs: the manifest, the artifacts and the resources, at the same relative paths the manifest names (`pack` writes that layout). With the library's `plugins` feature, `Plugin.load(manifestPath, sha256, allowNative, supplied)` reads them from the bundle, checks every hash, and `Alpha2.extractPlugin(request, plugin)` runs the plugin like an extractor the app wrote, in the app's process. `supplied` fills the manifest's slots with paths inside the app's sandbox, such as a model the user picked (on iOS, start access to a security-scoped URL before the extraction and stop it after; on Android, copy a `content:` document into the app's storage first). A bundled manifest's `https:` URLs are refused with `PLUGIN_FETCH_FAILED`.
+The App Store and Google Play forbid downloading executable code, so an app bundles each plugin it runs: the manifest, the artifacts and the resources, at the same relative paths the manifest names (`pack` writes that layout). With the library's `plugins` feature, `Plugin.load(manifestPath, sha256, allowNative, supplied)` reads them from the bundle, checks every hash (`descriptorJson()` and `aboutJson()` give what an interface shows), and `Alpha2.extractPlugin(request, plugin)` runs the plugin like an extractor the app wrote, in the app's process. `supplied` fills the manifest's slots with paths inside the app's sandbox, such as a model the user picked (on iOS, start access to a security-scoped URL before the extraction and stop it after; on Android, copy a `content:` document into the app's storage first). A bundled manifest's `https:` URLs are refused with `PLUGIN_FETCH_FAILED`.
 
 - The wasm artifact runs everywhere, sandboxed: wasmtime compiles it on Android; on iOS, where apps may not generate code, it runs in wasmtime's interpreter.
 - An Android app may bundle the `.so` built for its ABI (`aarch64-linux-android`) and pass `allowNative`; it runs with the app's rights.
@@ -91,7 +132,7 @@ The context `begin` receives:
 }
 ```
 
-`video` (`size`, the delivered frame's longer side; `format`) is set for a video extractor, `audio` (`rate`, `channels` as `mono` or `source`, `block_frames`) for an audio one, and `frame_rate` (`num`, `den`) for timeline video. `params` is the request's. `supplied` lists the filled slots, sorted, with the files each offers and their sizes (`{}` when none is filled, and always in the browser, which fills no slot): a `file` slot is the resource named as the slot, a `directory` slot one resource per regular file under it, named `<slot>/<relative path>` with `/` separators, found through links (a Hugging Face snapshot links into `blobs/`) and skipping entries whose name starts with `.`. A plugin checks in `begin` that the files fit it (names, a model's inputs and outputs, a vocabulary) and fails with a message naming what does not match. The browser's `runExtractor` and the Node and Python clients check a request's `params` against the descriptor's `params_schema` before an extractor in the caller's own process runs, but no surface checks the params a plugin receives (in the browser, those given to `plugin.extractor(params)`), so a plugin must check what it reads.
+`video` (`size`, the delivered frame's longer side; `format`) is set for a video extractor, `audio` (`rate`, `channels` as `mono` or `source`, `block_frames`) for an audio one, and `frame_rate` (`num`, `den`) for timeline video. `params` is the request's. `supplied` lists the filled slots, sorted, with the files each offers and their sizes (`{}` when none is filled): a `file` slot is the resource named as the slot, a `directory` slot one resource per regular file under it, named `<slot>/<relative path>` with `/` separators, found through links (a Hugging Face snapshot links into `blobs/`) and skipping entries whose name starts with `.`. A plugin checks in `begin` that the files fit it (names, a model's inputs and outputs, a vocabulary) and fails with a message naming what does not match. The browser's `runExtractor` and the Node and Python clients check a request's `params` against the descriptor's `params_schema` before an extractor in the caller's own process runs, but no surface checks the params a plugin receives (in the browser, those given to `plugin.extractor(params)`), so a plugin must check what it reads.
 
 The host gives the plugin these functions:
 
@@ -112,7 +153,7 @@ Within a pass, a value is emitted no further along the pass than what the pass h
 A native artifact exports one symbol, `alpha2_plugin_v1`, a C function without arguments that returns a pointer to a static `Alpha2PluginV1` table (the header has the exact types). The table and the descriptor's bytes stay valid while the library is loaded. A loader loads it from its own copy of the checked bytes. In a worker process (above) the library lives for one run; in the loader's own process it is loaded once per process and never unloaded: `destroy` ends an instance, not the library, so a plugin keeps no per-run state in statics, and threads it starts may outlive the run. Both tables start with `abi` and `size`, the bytes of the table as the side that filled it knows it. A host refuses a plugin table that is shorter than its own or has a null entry with `PLUGIN_LOAD_FAILED`; every entry is required.
 
 - `create(host)` returns a new instance, or null. The host's `Alpha2HostV1` table stays valid until `destroy`, and every host function takes the table's `context` first. One run uses one instance; the host calls it from one thread at a time. A plugin calls the host functions only during a call the host made, on that call's thread.
-- Every other call takes the instance first. Pixels, samples, the context and the strings passed to the plugin are borrowed for the call. Records passed to `emit` are borrowed for that call alone.
+- Every other call takes the instance first. Pixels, samples, the context and the strings passed to the plugin are borrowed for the call and read-only: in a worker process a native plugin's video frames lie in memory the worker maps read-only, so a write into them fails the run with `PLUGIN_TRAPPED`. Records passed to `emit` are borrowed for that call alone.
 - `resource(context, name, name_len, &len)` returns the resource's bytes, or null for a name the manifest does not declare (and for an empty optional slot, or after a failed read). They stay valid until `destroy`.
 - `resource_path(context, name, name_len, &len)`, appended to `Alpha2HostV1` within `/1`, returns the absolute path (UTF-8) of a supplied file, a filled directory slot or a directory under one, valid until `destroy`, for runtimes that open or map a model themselves (onnxruntime, whisper.cpp, llama.cpp style loaders). The path is the canonical path of what the caller named for the slot, then the name below it as enumerated, with links below the slot not resolved, so a runtime finds the files beside its model (external tensor data, a split model, an encoder directory) by name; on Windows it has no `\\?\` prefix where a plain form exists. It is null for a pinned resource (reading it after the pin was checked would undo the pin), an empty optional slot, an undeclared name, or a path that is not UTF-8. A file is hashed the first time its path is handed out, and every file under a directory the first time the directory's is; a later change is not seen, and entries whose name starts with `.` are neither offered nor recorded, though a runtime given the directory can open them. Ask for every file a runtime opens, or for the directory that holds them, since only those are recorded. On Windows convert the path to UTF-16 for a C runtime whose narrow API reads the ANSI code page. Check `ALPHA2_HOST_HAS(host, resource_path)` before calling it: an older host's table is shorter, and the SDK's `Host::resource_path` is `None` there and in wasm.
 - A panic must not cross the boundary: catch it and return `2`. The SDK does.
@@ -171,8 +212,8 @@ A trap ends the run with `PLUGIN_TRAPPED`; running past the memory cap, the tabl
 
 ## Versions
 
-`alpha2-plugin/1` changes only by additions a `/1` plugin cannot notice. The native tables grow by fields appended at their end, and each side reads the other's `size` before it uses a field added after the first `/1`: a plugin refuses a host table shorter than the first `/1`'s (`ALPHA2_HOST_V1_BASE_SIZE`, `alpha2_plugin_abi::HOST_V1_BASE_BYTES`) and uses an appended entry only when `size` covers it. `resource_path` is the first such field. A wasm module has no such query: one built against a later `/1` imports the new host function and loads only on a host that has it; an older host refuses it with `PLUGIN_UNSUPPORTED_FEATURE`, naming the import. New record tags are emitted only by plugins that know them. A change an existing plugin would notice is `alpha2-plugin/2`, with its own manifest `abi`, wasm `alpha2_abi` value and native symbol. A loader refuses an ABI it does not implement with `PLUGIN_ABI_UNSUPPORTED`.
+`alpha2-plugin/1` changes only by additions a `/1` plugin cannot notice. The native tables grow by fields appended at their end, and each side reads the other's `size` before it uses a field added after the first `/1`: a plugin refuses a host table shorter than the first `/1`'s (`ALPHA2_HOST_V1_BASE_SIZE`, `alpha2_plugin_abi::HOST_V1_BASE_BYTES`) and uses an appended entry only when `size` covers it. `resource_path` is the first such field. A wasm module has no such query: one built against a later `/1` imports the new host function and loads only on a host that has it; an older host refuses it with `PLUGIN_UNSUPPORTED_FEATURE`, naming the import. New record tags are emitted only by plugins that know them. A field added to the manifest or the descriptor, such as `about` or an output's `label`, is an addition a `/1` plugin cannot notice, but a loader older than the field refuses a manifest that has it with `PLUGIN_LOAD_FAILED`, since manifests take no unknown field: a manifest uses a new field only once the loaders of the hosts it is meant for know it, and the field's first release is in the changelog. A change an existing plugin would notice is `alpha2-plugin/2`, with its own manifest `abi`, wasm `alpha2_abi` value and native symbol. A loader refuses an ABI it does not implement with `PLUGIN_ABI_UNSUPPORTED`.
 
 ## Errors
 
-The same codes are used on every surface: `PLUGIN_FETCH_FAILED`, `PLUGIN_HASH_MISMATCH`, `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (with the targets the manifest offers), `PLUGIN_NATIVE_REFUSED`, `PLUGIN_REFUSED` (the host's plugin policy), `PLUGIN_DESCRIPTOR_MISMATCH`, `PLUGIN_UNSUPPORTED_FEATURE`, `PLUGIN_LOAD_FAILED`, `PLUGIN_TRAPPED` (also a native worker that ended without its reply, with `details.exit` or `details.signal`, or broke the protocol, `details.wire`), `PLUGIN_LIMIT` (also a native call in a worker past its deadline) and `PLUGIN_RESOURCE_INVALID`, a file supplied for a slot that does not fit it, with `details` `{ "slot", "reason" }`: `missing`, `unknown_slot`, `shape`, `too_large`, `too_many_files` (more than 1,024 in a directory slot), `too_deep` (deeper than 8, or a directory that is its own ancestor), `name_too_long` (a resource name over 512 bytes), `not_utf8` or `unsupported` (a loader that fills no slots, such as the browser's). `PLUGIN_REFUSED` with `details.policy` `resource_root` is a supplied file the caller's policy does not allow. An emit the session refuses is `INVALID_EMIT`, and a call that returns `1` is `EXTRACTOR_FAILED` with the plugin's message, as for any extractor.
+The same codes are used on every surface: `PLUGIN_FETCH_FAILED`, `PLUGIN_HASH_MISMATCH`, `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (with the targets the manifest offers), `PLUGIN_NATIVE_REFUSED`, `PLUGIN_REFUSED` (the host's plugin policy), `PLUGIN_DESCRIPTOR_MISMATCH`, `PLUGIN_UNSUPPORTED_FEATURE`, `PLUGIN_LOAD_FAILED`, `PLUGIN_TRAPPED` (also a native worker that ended without its reply, with `details.exit` or `details.signal`, or broke the protocol, `details.wire`), `PLUGIN_LIMIT` (also a native call in a worker past its deadline) and `PLUGIN_RESOURCE_INVALID`, a file supplied for a slot that does not fit it, with `details` `{ "slot", "reason" }`: `missing`, `unknown_slot`, `shape`, `too_large`, `too_many_files` (more than 1,024 in a directory slot), `too_deep` (deeper than 8, or a directory that is its own ancestor), `name_too_long` (a resource name over 512 bytes) or `not_utf8`. `PLUGIN_REFUSED` with `details.policy` `resource_root` is a supplied file the caller's policy does not allow. An emit the session refuses is `INVALID_EMIT`, and a call that returns `1` is `EXTRACTOR_FAILED` with the plugin's message, as for any extractor.

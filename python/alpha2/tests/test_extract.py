@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from alpha2.extract import Emitter
+from alpha2.extract import Emitter, schema_problem
 
 
 class FloatLike:
@@ -57,3 +58,11 @@ def test_an_emit_the_wire_cannot_carry_raises_naming_it(emit: Any, message: str)
     with pytest.raises(ValueError, match=message):
         emit(out)
     assert out.emits == []
+
+
+def test_params_are_checked_alike_with_and_without_interface_annotations() -> None:
+    corpus_path = Path(__file__).parents[3] / "tests/cases/params-schema-corpus.json"
+    corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+    for case in corpus["cases"]:
+        for schema in (corpus["schema"], corpus["annotated"]):
+            assert schema_problem(schema, case["params"]) == case["problem"], case["name"]

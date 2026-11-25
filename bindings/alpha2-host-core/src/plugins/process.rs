@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
-use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -12,14 +12,23 @@ use alpha2_model::SuppliedFile;
 
 use super::wire::{self, ChildMessage, Load, WireError, host};
 use super::{
-    CANCELLED, Call, Collected, LogBudget, MAX_FAIL_BYTES, MAX_LOG_BYTES, OutputCap, PluginError,
-    Transport, WorkerCommand, bounded_text, codes,
+    CANCELLED, Call, Collected, FramePath, LogBudget, MAX_FAIL_BYTES, MAX_LOG_BYTES, OutputCap,
+    PluginError, Transport, WorkerCommand, bounded_text, codes,
 };
 
 /// How often the watcher looks at the cancel and the deadline.
 const WATCH_INTERVAL: Duration = Duration::from_millis(50);
 /// How long a worker may take to end after it was asked to, before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+#[cfg(unix)]
+type WorkerInput = std::os::unix::net::UnixStream;
+#[cfg(unix)]
+type WorkerOutput = std::os::unix::net::UnixStream;
+#[cfg(not(unix))]
+type WorkerInput = std::process::ChildStdin;
+#[cfg(not(unix))]
+type WorkerOutput = std::process::ChildStdout;
 
 /// Why the host killed a worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,11 +181,72 @@ fn wire_violation(what: &str) -> PluginError {
     .with_details(details)
 }
 
+#[cfg(unix)]
+type Channel = (WorkerInput, WorkerOutput);
+
+#[cfg(not(unix))]
+struct Channel;
+
+#[cfg(unix)]
+fn open_channel(spawn: &mut Command) -> std::io::Result<Channel> {
+    use std::os::fd::OwnedFd;
+    let (host, worker) = std::os::unix::net::UnixStream::pair()?;
+    spawn
+        .stdin(Stdio::from(OwnedFd::from(worker.try_clone()?)))
+        .stdout(Stdio::from(OwnedFd::from(worker)));
+    Ok((host.try_clone()?, host))
+}
+
+#[cfg(not(unix))]
+#[expect(clippy::unnecessary_wraps, reason = "the socket pair of Unix may fail")]
+fn open_channel(spawn: &mut Command) -> std::io::Result<Channel> {
+    spawn.stdin(Stdio::piped()).stdout(Stdio::piped());
+    Ok(Channel)
+}
+
+#[cfg(unix)]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the pipes of other platforms may be missing"
+)]
+const fn channel_ends(channel: Channel, _child: &mut Child) -> Option<(WorkerInput, WorkerOutput)> {
+    Some(channel)
+}
+
+#[cfg(not(unix))]
+fn channel_ends(_channel: Channel, child: &mut Child) -> Option<(WorkerInput, WorkerOutput)> {
+    Some((child.stdin.take()?, child.stdout.take()?))
+}
+
+#[derive(Debug)]
+pub(super) enum Frames {
+    Unmade,
+    Shared(alpha2_os::SharedRegion),
+    Pipe,
+}
+
+fn write_request(
+    input: &mut WorkerInput,
+    tag: u8,
+    parts: &[&[u8]],
+    region: Option<&alpha2_os::SharedRegion>,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(region) = region {
+        let mut frame = Vec::new();
+        wire::write_frame(&mut frame, tag, parts)?;
+        return alpha2_os::write_with_descriptor(input, &frame, region.descriptor());
+    }
+    #[cfg(not(unix))]
+    let _ = region;
+    wire::write_frame(input, tag, parts)
+}
+
 /// A native plugin in a worker process.
 pub(super) struct ProcessTransport {
     shared: Arc<Shared>,
-    input: Option<ChildStdin>,
-    output: BufReader<ChildStdout>,
+    input: Option<WorkerInput>,
+    output: BufReader<WorkerOutput>,
     sequence: u32,
     deadline: Duration,
     collected: Collected,
@@ -188,6 +258,9 @@ pub(super) struct ProcessTransport {
     read: BTreeMap<String, SuppliedFile>,
     /// Why the worker can take no further request.
     broken: Option<PluginError>,
+    pub(super) frames: Frames,
+    placed: Option<usize>,
+    pub(super) make_region: fn(usize) -> std::io::Result<alpha2_os::SharedRegion>,
 }
 
 impl ProcessTransport {
@@ -207,11 +280,13 @@ impl ProcessTransport {
         spawn
             .args(&command.args)
             .envs(command.envs.iter().map(|(key, value)| (key, value)))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         alpha2_os::own_process_tree(&mut spawn);
-        let mut child = spawn.spawn().map_err(|error| {
+        let channel = open_channel(&mut spawn)
+            .map_err(|error| failed(format!("the plugin worker's channel: {error}")))?;
+        let spawned = spawn.spawn();
+        drop(spawn);
+        let mut child = spawned.map_err(|error| {
             failed(format!(
                 "the plugin worker {} did not start: {error}",
                 command.program.display()
@@ -221,8 +296,8 @@ impl ProcessTransport {
         if let Some(job) = &job {
             let _ = job.assign(&child);
         }
-        let (Some(input), Some(output), Some(errors)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        let (Some((input, output)), Some(errors)) =
+            (channel_ends(channel, &mut child), child.stderr.take())
         else {
             let _ = alpha2_os::kill_process_tree(&mut child);
             return Err(failed("the plugin worker has no pipes".to_owned()));
@@ -261,6 +336,12 @@ impl ProcessTransport {
             readable: BTreeMap::new(),
             read: BTreeMap::new(),
             broken: None,
+            frames: match command.frames {
+                FramePath::Shared => Frames::Unmade,
+                FramePath::Pipe => Frames::Pipe,
+            },
+            placed: None,
+            make_region: alpha2_os::SharedRegion::create,
         };
         if let Err(error) = started {
             transport.shared.lock().kill(Killed::Wire);
@@ -400,6 +481,15 @@ impl ProcessTransport {
 
     /// Sends a request and reads the worker's frames until the reply that ends it.
     fn request(&mut self, tag: u8, parts: &[&[u8]]) -> Result<ChildMessage, PluginError> {
+        self.exchange(tag, parts, None)
+    }
+
+    fn exchange(
+        &mut self,
+        tag: u8,
+        parts: &[&[u8]],
+        region: Option<&alpha2_os::SharedRegion>,
+    ) -> Result<ChildMessage, PluginError> {
         if let Some(broken) = &self.broken {
             return Err(broken.clone());
         }
@@ -408,7 +498,7 @@ impl ProcessTransport {
         let mut latched: Option<PluginError> = None;
         self.arm();
         let written = match self.input.as_mut() {
-            Some(input) => wire::write_frame(input, tag, parts)
+            Some(input) => write_request(input, tag, parts, region)
                 .map_err(|error| WireError::Io(error.to_string())),
             None => Err(WireError::Closed { clean: true }),
         };
@@ -509,6 +599,65 @@ impl ProcessTransport {
         }
     }
 
+    fn region_for(
+        &mut self,
+        len: usize,
+    ) -> Result<Option<&mut alpha2_os::SharedRegion>, PluginError> {
+        let fits = matches!(&self.frames, Frames::Shared(region) if region.len() >= len);
+        if !fits && !matches!(self.frames, Frames::Pipe) {
+            self.frames = match self.map_region(len)? {
+                Ok(region) => Frames::Shared(region),
+                Err(why) => {
+                    alpha2_os::diagnostic!(
+                        "plugin: video frames go through the worker's pipe for the rest of the \
+                         run: {why}"
+                    );
+                    Frames::Pipe
+                }
+            };
+        }
+        Ok(match &mut self.frames {
+            Frames::Shared(region) => Some(region),
+            Frames::Unmade | Frames::Pipe => None,
+        })
+    }
+
+    fn map_region(
+        &mut self,
+        len: usize,
+    ) -> Result<Result<alpha2_os::SharedRegion, String>, PluginError> {
+        let region = match (self.make_region)(len) {
+            Ok(region) => region,
+            Err(error) => return Ok(Err(format!("the memory cannot be made: {error}"))),
+        };
+        let length = u64::try_from(region.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes();
+        #[cfg(windows)]
+        let handle = {
+            let shared = match self.shared.lock().child.as_ref() {
+                Some(child) => region.share_with(child),
+                None => Err(std::io::Error::other("the worker has ended")),
+            };
+            match shared {
+                Ok(handle) => handle.to_le_bytes(),
+                Err(error) => return Ok(Err(format!("the memory cannot be shared: {error}"))),
+            }
+        };
+        #[cfg(windows)]
+        let parts: [&[u8]; 2] = [&length, &handle];
+        #[cfg(not(windows))]
+        let parts: [&[u8]; 1] = [&length];
+        match self.exchange(host::REGION, &parts, Some(&region))? {
+            ChildMessage::RegionMapped { .. } => Ok(Ok(region)),
+            ChildMessage::RegionFailed { failure, .. } => Ok(Err(format!(
+                "the worker cannot map the memory: {}",
+                bounded_text(failure.message.as_bytes(), MAX_FAIL_BYTES)
+            ))),
+            _ => Err(self.violation("another reply to region")),
+        }
+    }
+
     /// Asks the worker to end and leaves it to a reaper thread, which kills it past a grace.
     fn finish(&mut self) {
         let Some(mut input) = self.input.take() else {
@@ -587,16 +736,52 @@ impl Transport for ProcessTransport {
     }
 
     fn video(&mut self, time: i64, width: u32, height: u32, format: u32, data: &[u8]) -> Call {
-        self.call(
-            host::VIDEO,
-            &[
-                &time.to_le_bytes(),
-                &width.to_le_bytes(),
-                &height.to_le_bytes(),
-                &format.to_le_bytes(),
-                data,
-            ],
-        )
+        let (time, width, height, format) = (
+            time.to_le_bytes(),
+            width.to_le_bytes(),
+            height.to_le_bytes(),
+            format.to_le_bytes(),
+        );
+        let placed = self.placed.take().filter(|_| data.is_empty());
+        let shared = match placed {
+            Some(len) => Some(len),
+            None => match self.region_for(data.len()) {
+                Ok(Some(region)) => {
+                    region.as_mut_slice()[..data.len()].copy_from_slice(data);
+                    Some(data.len())
+                }
+                Ok(None) => None,
+                Err(error) => return Err(error.into_call_error()),
+            },
+        };
+        if let Some(len) = shared {
+            let length = u64::try_from(len).unwrap_or(u64::MAX).to_le_bytes();
+            self.call(
+                host::VIDEO_SHARED,
+                &[
+                    &time,
+                    &width,
+                    &height,
+                    &format,
+                    &0_u64.to_le_bytes(),
+                    &length,
+                ],
+            )
+        } else {
+            self.call(host::VIDEO, &[&time, &width, &height, &format, data])
+        }
+    }
+
+    fn frame_buffer(&mut self, len: usize) -> Option<&mut [u8]> {
+        self.placed = None;
+        if !matches!(self.region_for(len), Ok(Some(_))) {
+            return None;
+        }
+        self.placed = Some(len);
+        match &mut self.frames {
+            Frames::Shared(region) => region.as_mut_slice().get_mut(..len),
+            Frames::Unmade | Frames::Pipe => None,
+        }
     }
 
     fn audio(&mut self, block: &AudioInput) -> Call {

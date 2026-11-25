@@ -3,6 +3,8 @@
 // sRGB code values with no ICC conversion (the engine treats SDR input as sRGB and native decoding
 // has no colour management), and at its own size.
 
+import { blobOf } from "./range-file.js";
+
 /** The longest side the engine decodes, renders, or composes (`MAX_FRAME_DIMENSION`). */
 export const MAX_STILL_DIMENSION = 16_384;
 /** The largest area the engine decodes, renders, or composes (`MAX_FRAME_PIXELS`). */
@@ -12,7 +14,7 @@ export const MAX_STILL_PIXELS = 67_108_864;
  * Decodes an image upright without colour management, rejecting one larger than the engine takes.
  */
 export async function decodeStill(file) {
-  const bitmap = await createImageBitmap(file, {
+  const bitmap = await createImageBitmap(await blobOf(file), {
     imageOrientation: "from-image",
     colorSpaceConversion: "none",
   });
