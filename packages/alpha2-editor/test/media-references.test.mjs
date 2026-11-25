@@ -11,6 +11,7 @@ import {
   RangeFile,
   reviveRangeFile,
 } from "../dist/browser/runtime/range-file.js";
+import { openMediaReference } from "../dist/browser/runtime/media-reference.js";
 import { probeEvidence } from "../dist/browser/runtime/fingerprint.js";
 import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
@@ -57,7 +58,7 @@ async function serve(files, { ranges = true } = {}) {
 test("a range file reads, slices and streams the bytes its URL serves", async () => {
   const server = await serve({ "/a.mp4": video });
   try {
-    const file = await RangeFile.open({
+    const file = await openMediaReference({
       url: server.url("/a.mp4"),
       name: "a.mp4",
     });

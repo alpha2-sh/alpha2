@@ -145,13 +145,10 @@ const server = createServer(async (request, response) => {
       ".webm": "video/webm",
     }[path.slice(path.lastIndexOf("."))];
     response.setHeader("content-type", type ?? "application/octet-stream");
-    const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range ?? "");
+    const range = /^bytes=(\d+)-(\d+)$/.exec(request.headers.range ?? "");
     if (range) {
       const first = Number(range[1]);
-      const last = Math.min(
-        range[2] === "" ? bytes.length - 1 : Number(range[2]),
-        bytes.length - 1,
-      );
+      const last = Math.min(Number(range[2]), bytes.length - 1);
       if (first > last) {
         response
           .writeHead(416, { "content-range": `bytes */${bytes.length}` })

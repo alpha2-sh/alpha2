@@ -38,7 +38,8 @@ import {
   sameProviderSettings,
 } from "./runtime/sources.js";
 import { fingerprintFile } from "./runtime/fingerprint.js";
-import { RangeFile, isRangeFile } from "./runtime/range-file.js";
+import { isRangeFile } from "./runtime/range-file.js";
+import { openMediaReference } from "./runtime/media-reference.js";
 import { hashInWorker } from "./hash-worker.js";
 import { callExtensions } from "./extensions-worker.js";
 import {
@@ -2101,7 +2102,7 @@ export function createBrowserBridge(options) {
   function openMedia(file, signal) {
     return file instanceof Blob || file?.url === undefined
       ? file
-      : RangeFile.open(file, signal);
+      : openMediaReference(file, signal);
   }
   async function nativeBytes(file) {
     if (!isRangeFile(file)) return { blob: file };
