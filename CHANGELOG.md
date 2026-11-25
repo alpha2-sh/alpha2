@@ -35,7 +35,7 @@ All notable changes to this project are documented in this file.
   machines: the first pack's manifest, wasm artifact, resources and licenses with the native
   artifacts of the others. It refuses packs of another id, version, descriptor, about, resources
   or licenses, a target two packs have, and a file that differs from what its manifest pins.
-- `alpha2.scenes` 1.0.0 finds the cuts between shots as instants (`cuts`, `suggest: split_at`)
+- `alpha2.scenes` 1.0.1 finds the cuts between shots as instants (`cuts`, `suggest: split_at`)
   and the stretches of black (`black`, `suggest: remove_ranges`) in a video, each with a `score`.
   It compares 4x4 grids of luma histograms by earth mover's distance against a threshold that
   adapts to recent motion and requires a cut to stand out from its neighbors, so fades,
@@ -51,14 +51,22 @@ All notable changes to this project are documented in this file.
   its translation, rotation and scale from the picked frame (`motion`, similarity), both suggested
   for binding, with frames whose box no longer matches the picked one by `confidence` marked
   lost.
-- `alpha2.transcribe` 1.0.0 finds the words spoken in audio and their times, from a whisper.cpp
+- `alpha2.transcribe` 1.0.1 finds the words spoken in audio and their times, from a whisper.cpp
   ggml model the caller supplies in its `model` slot (none is pinned), run natively on the CPU
   with whisper.cpp linked in, in any ISO 639-1 language whisper knows or `auto`. It transcribes
   30 s windows as audio arrives and joins their overlaps without repeating them; it has no wasm
-  artifact.
+  artifact. On x86-64 it needs SSE4.2, AVX, AVX2, BMI2, FMA and F16C, and `begin` fails naming
+  the missing ones on a CPU without them.
 - A plugin crate opts out of wasm with `wasm = false` under `[package.metadata.alpha2-plugin]`:
-  `alpha2-plugin-pack` then builds native artifacts only and refuses `--no-native`, and
+  `alpha2-plugin-pack` then builds native artifacts only and refuses `--no-native`,
+  `alpha2-plugin-pack builds-wasm <plugin-dir>` prints whether a crate builds wasm, and
   `scripts/pack-plugins.sh --no-native` leaves the crate out.
+- `alpha2-plugin-pack` builds the same artifacts from any working directory and keeps the build
+  machine's paths out of them: source, Cargo home, toolchain and target paths are remapped, for
+  C and C++ too where the compiler is GCC or Clang.
+- `alpha2-plugin-sdk` exports the engine's tick rate (`TICKS_PER_SECOND`) and data limits
+  (`MAX_DATA_*`), and `Context::number_params` reads a table of `NumberParam`s with their
+  defaults and bounds.
 - `alpha2/plugins` exports `parsePluginManifest`, which checks a manifest by the engine loaders'
   rules without fetching anything, the `PluginManifest` types and the manifest limits
   (`MAX_MANIFEST_BYTES`, `MAX_PLUGIN_*`, `MAX_ABOUT_*`); `LoadedPlugin` gains `about`, and
@@ -131,7 +139,8 @@ All notable changes to this project are documented in this file.
 - **Breaking:** `HostV1` gains `resource_path`, appended under the growth rule; the SDK takes a host
   table down to `HOST_V1_BASE_BYTES` (`ALPHA2_HOST_V1_BASE_SIZE` in the C header, which tests an
   appended field with `ALPHA2_HOST_HAS`) and its `Context` gains `supplied`. The mobile
-  `Plugin.load` takes `supplied`, and `Alpha2Error::Failed` gains `details`.
+  `Plugin.load` takes `supplied` (absolute paths; a relative one is refused with
+  `INVALID_REQUEST`), and `Alpha2Error::Failed` gains `details`.
 - **Breaking:** `GpuSubmissionStats` gains `over_budget` (submissions still predicted over the
   submission budget, which the planner cuts passes to avoid) and `budget_ms`; the host's and the
   browser's `gpuSubmissions` add `overBudget`, and the host prints a warning when it is nonzero.
@@ -238,6 +247,8 @@ All notable changes to this project are documented in this file.
 
 ### Removed
 
+- **Breaking:** `PluginExtractor::is_native`; `PluginExtractor::calls_are_bounded` says whether its
+  calls end at the policy's call deadline.
 - **Breaking:** `alpha2-render`'s `SdrOutputTransfer` and `encode_linear_rgb`. Nothing outside
   tests called them, and the export path never applied either curve: it writes the working
   space's sRGB-coded values and tags them BT.709.
