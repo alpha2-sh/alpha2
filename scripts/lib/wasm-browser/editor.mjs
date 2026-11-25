@@ -3,7 +3,16 @@
 const prelude = `
 const { createDocument, createEditor } = await import("/packages/alpha2-editor/dist/index.js");
 const { createBrowserBridge } = await import("/packages/alpha2-editor/dist/browser/index.js");
-const runtimeAssets = { wasmUrl: "/packages/alpha2/wasm/alpha2_wasm_bg.wasm" };
+const extractWorker = "/worker-modules/packages/alpha2-editor/dist/browser/extract-worker-entry.js";
+let workerMessages = 0;
+const runtimeAssets = {
+  wasmUrl: "/packages/alpha2/wasm/alpha2_wasm_bg.wasm",
+  extractWorkerFactory: () => {
+    const worker = new Worker(extractWorker, { type: "module" });
+    worker.addEventListener("message", () => (workerMessages += 1));
+    return worker;
+  },
+};
 const table = await (await fetch("/tests/cases/surface-conformance.json")).json();
 const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -35,8 +44,8 @@ const importVideo = async (bridge, bytes) => {
 `;
 
 // A plugin run through bridge.extract and applyExtraction gives the pinned data, loaded by the
-// bridge, through the app's fetch or loaded once by the app for several runs; a cancelled run and
-// a run whose source goes away meanwhile leave the document alone.
+// bridge, through the app's fetch or loaded once by the app for several runs, in the extraction
+// worker; a cancelled run and a run whose source goes away meanwhile leave the document alone.
 export function pluginEditorExtract() {
   return `${prelude}
 const { dataHash } = await import("/scripts/lib/surface-conformance.mjs");
@@ -75,7 +84,7 @@ const fetching = await bridge.extract(run, {
 });
 const viaFetch = await dataHash(fetching.result.dataSets);
 const sharedOk = shared.every((hash) => hash === found) && viaFetch === found
-  && fetched.length >= 2 && phases.has("load") && phases.has("extract");
+  && fetched.length >= 2 && phases.has("load") && phases.has("extract") && workerMessages > 0;
 
 const before = editor.document;
 const controller = new AbortController();
@@ -86,7 +95,7 @@ const cancelled = await codeOf(cancelling);
 report({
   ok: refused === "missing_asset" && found === fixture.sha256 && madeFrom && sharedOk
     && cancelled === "cancelled" && editor.document === before,
-  refused, found, madeFrom, shared, viaFetch, fetched, phases: [...phases], cancelled,
+  refused, found, madeFrom, shared, viaFetch, fetched, phases: [...phases], workerMessages, cancelled,
 });
 await bridge.dispose();
 `;
@@ -108,6 +117,10 @@ const { result, read } = await drawing.extract(fixture.request, { plugin });
 const found = await dataHash(result.dataSets);
 const applied = generated.applyExtraction(result, { read }).ok;
 await drawing.dispose();
+const inWorker = workerMessages > 0;
+const onPage = createBrowserBridge({ editor: generated, runtimeAssets: { wasmUrl: runtimeAssets.wasmUrl }, audio: false });
+const pageFound = await dataHash((await onPage.extract(fixture.request, { plugin })).result.dataSets);
+await onPage.dispose();
 
 const editor = createEditor({ document: createDocument({
   schema_version: 1, id: "v", name: "V",
@@ -131,11 +144,12 @@ const audio = await codeOf(bridge.extract(audioRun, { extractor: {
 } }));
 await bridge.dispose();
 report({
-  ok: found === fixture.sha256 && applied && capabilities.inputs.video.includes("timeline")
+  ok: found === fixture.sha256 && pageFound === found && inWorker && applied
+    && capabilities.inputs.video.includes("timeline")
     && !capabilities.inputs.audio.includes("timeline")
     && set.times.length === 10 && distinct > 2 && set.anchor.type === "timeline"
     && audio === "INVALID_INPUT",
-  found, applied, capabilities, times: set.times.length, distinct, audio,
+  found, pageFound, inWorker, applied, capabilities, times: set.times.length, distinct, audio,
 });
 `;
 }
@@ -173,8 +187,8 @@ report({
       model: { files: [{ bytes: 3, name: "model" }] },
     })
     && JSON.stringify(recorded) === JSON.stringify(["extra/a.txt", "model"])
-    && missing === "PLUGIN_RESOURCE_INVALID",
-  words, context, recorded, missing,
+    && missing === "PLUGIN_RESOURCE_INVALID" && workerMessages > 0,
+  words, context, recorded, missing, workerMessages,
 });
 `;
 }

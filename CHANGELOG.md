@@ -38,6 +38,12 @@ All notable changes to this project are documented in this file.
   slot, checked with the native loaders' limits and reasons, and the run records the files it
   read in `made_by.plugin.supplied`. `bridge.extract` passes `plugin.supplied` on.
 
+- `bridge.extract` runs a plugin in a worker when `runtimeAssets.extractWorkerFactory` makes one
+  running the new `@alpha2-sh/editor/extract-worker` entry, so a long extraction no longer holds
+  the page's thread; a cancel terminates the worker at once. `transferablePlugin` and
+  `restorePlugin` in `alpha2/plugins` hand a loaded plugin to a worker without fetching or
+  compiling it again.
+
 ### Changed
 
 - **Breaking:** `runExtractor` takes no `plugin`: a plugin's extractor records `made_by.plugin`

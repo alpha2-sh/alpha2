@@ -911,8 +911,8 @@ export async function loadPlugin(
   return pluginOf(parts);
 }
 
-/** What a loaded plugin is made of; a worker can be handed it (`structuredClone` keeps it). */
-interface PluginParts {
+/** What a loaded plugin is made of, every part of which `structuredClone` copies. */
+export interface PluginParts {
   readonly id: string;
   readonly version: string;
   readonly artifactSha256: string;
@@ -923,6 +923,30 @@ interface PluginParts {
   readonly resources: ReadonlyMap<string, Uint8Array>;
   readonly supplied: SuppliedSet;
   readonly memoryBytes: number;
+}
+
+const partsOf = new WeakMap<LoadedPlugin, PluginParts>();
+
+/**
+ * A loaded plugin as a value `postMessage` copies to a worker of the same page: its compiled
+ * module, its checked resources and the files that fill its slots. {@link restorePlugin} makes it
+ * a plugin again there, without fetching or compiling anything.
+ */
+export interface TransferablePlugin {
+  readonly alpha2Plugin: PluginParts;
+}
+
+/** `plugin` as a value a worker can be posted; `plugin` is one {@link loadPlugin} gave. */
+export function transferablePlugin(plugin: LoadedPlugin): TransferablePlugin {
+  const parts = partsOf.get(plugin);
+  if (parts === undefined)
+    throw new TypeError("the plugin was not loaded by loadPlugin");
+  return { alpha2Plugin: parts };
+}
+
+/** The plugin {@link transferablePlugin} made `transferred` of, as it was loaded. */
+export function restorePlugin(transferred: TransferablePlugin): LoadedPlugin {
+  return pluginOf(transferred.alpha2Plugin);
 }
 
 function pluginOf(parts: PluginParts): LoadedPlugin {
@@ -1022,6 +1046,7 @@ function pluginOf(parts: PluginParts): LoadedPlugin {
       };
     },
   };
+  partsOf.set(plugin, parts);
   return plugin;
 }
 

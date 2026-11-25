@@ -125,6 +125,7 @@ import {
   yuvAnamorphic,
 } from "./video.mjs";
 import { heavyEffectSplit, splitFrameRejectedSubmission } from "./watchdog.mjs";
+import { pluginSilenceLongTasks } from "./plugin-perf.mjs";
 
 // \`check\` (function source) can require that the result shows the simulated branch ran.
 const underSimulation = (names, body, check) =>
@@ -294,6 +295,7 @@ export const caseLaunch = {
 // Need inputs the default run does not make.
 export const perfCases = {
   "export-perf": exportPerf,
+  "plugin-silence-long-tasks": pluginSilenceLongTasks,
 };
 
 export const videoImportCases = new Set([

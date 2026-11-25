@@ -27,7 +27,7 @@ import {
   perfCases,
   videoImportCases,
 } from "./lib/wasm-browser/cases.mjs";
-import { page } from "./lib/wasm-browser/page.mjs";
+import { IMPORTS, page } from "./lib/wasm-browser/page.mjs";
 import { runCases } from "./lib/wasm-browser/run-cases.mjs";
 
 const root = resolve(import.meta.dirname, "..");
@@ -128,13 +128,30 @@ const server = createServer(async (request, response) => {
     response.end(page(body(), videoImportCases.has(name)));
     return;
   }
-  const path = servedFile(root, url.pathname);
+  const WORKER_MODULES = "/worker-modules";
+  const workerModule = url.pathname.startsWith(`${WORKER_MODULES}/`);
+  const path = servedFile(
+    root,
+    workerModule ? url.pathname.slice(WORKER_MODULES.length) : url.pathname,
+  );
   if (path === null) {
     response.writeHead(403).end();
     return;
   }
   try {
-    const bytes = await readFile(path);
+    let bytes = await readFile(path);
+    if (workerModule && /\.m?js$/.test(path))
+      bytes = Buffer.from(
+        bytes
+          .toString("utf8")
+          .replace(
+            /(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^"'./][^"']*)\2/g,
+            (whole, keyword, quote, specifier) =>
+              Object.hasOwn(IMPORTS, specifier)
+                ? `${keyword}${quote}${WORKER_MODULES}${IMPORTS[specifier]}${quote}`
+                : whole,
+          ),
+      );
     const type = {
       ".wasm": "application/wasm",
       ".js": "text/javascript",

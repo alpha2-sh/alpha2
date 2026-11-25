@@ -34,6 +34,14 @@ export interface RuntimeAssets {
    * page's thread.
    */
   readonly extensionsWorkerFactory?: () => Worker;
+  /**
+   * Creates a worker running the `@alpha2-sh/editor/extract-worker` entry, in which
+   * `bridge.extract` runs a plugin (one worker per run, terminated when it settles or is
+   * cancelled); the plugin is still fetched, checked and compiled on the page. Without one, or if
+   * it cannot start, the plugin runs on the page's thread. An app's own extractor always runs on
+   * the page.
+   */
+  readonly extractWorkerFactory?: () => Worker;
   /** The engine's wasm binary (`alpha2/wasm`). */
   readonly wasmUrl?: string | URL;
   /**

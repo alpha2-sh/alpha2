@@ -49,6 +49,7 @@ import {
 } from "./runtime/sources.js";
 import { fingerprintFile } from "./runtime/fingerprint.js";
 import { hashInWorker } from "./hash-worker.js";
+import { extractInWorker } from "./extract-worker.js";
 import { callExtensions } from "./extensions-worker.js";
 import {
   keepProviderChoices,
@@ -3124,7 +3125,6 @@ export function createBrowserBridge(options) {
           document.assets[id]?.fingerprint);
       const job = new ExtractionJob(
         async (aborted) => {
-          const binding = await loadWasm();
           const loaded =
             plugin === undefined || typeof plugin.extractor === "function"
               ? plugin
@@ -3141,6 +3141,30 @@ export function createBrowserBridge(options) {
                   ...(onProgress ? { onProgress } : {}),
                   signal: aborted,
                 });
+          const factory = runtimeAssets.extractWorkerFactory;
+          const inWorker =
+            loaded && typeof factory === "function"
+              ? await extractInWorker(factory, {
+                  ...(runtimeAssets.wasmUrl === undefined
+                    ? {}
+                    : {
+                        wasmUrl: new URL(
+                          runtimeAssets.wasmUrl,
+                          globalThis.location?.href,
+                        ).href,
+                      }),
+                  plugin: loaded,
+                  project,
+                  request: run,
+                  ...(file ? { media: { [id]: file } } : {}),
+                  ...(frames ? { timelineFrame: frames.frame } : {}),
+                  ...(madeFrom ? { madeFrom } : {}),
+                  ...(onProgress ? { onProgress } : {}),
+                  signal: aborted,
+                })
+              : null;
+          if (inWorker !== null) return { result: inWorker, read };
+          const binding = await loadWasm();
           const result = await runExtractor(
             {
               binding,
