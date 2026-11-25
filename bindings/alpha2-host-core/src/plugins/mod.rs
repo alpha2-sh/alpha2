@@ -224,6 +224,19 @@ pub struct WorkerCommand {
     pub args: Vec<std::ffi::OsString>,
     /// Variables set in its environment.
     pub envs: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    /// How video frames reach the worker.
+    pub frames: FramePath,
+}
+
+/// How an isolated plugin's video frames reach its worker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FramePath {
+    /// Through memory the host shares with the worker, read-only there; a run whose memory
+    /// cannot be made or mapped falls back to the pipe, with one diagnostic.
+    #[default]
+    Shared,
+    /// Through the worker's pipe, copied by the kernel.
+    Pipe,
 }
 
 /// Where files supplied for resource slots may lie, links resolved.

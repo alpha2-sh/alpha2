@@ -19,6 +19,8 @@ fuzz_target!(|data: &[u8]| {
                 ChildMessage::Loaded { .. }
                     | ChildMessage::LoadFailed { .. }
                     | ChildMessage::Described { .. }
+                    | ChildMessage::RegionMapped { .. }
+                    | ChildMessage::RegionFailed { .. }
                     | ChildMessage::Returned { .. }
             );
             assert_eq!(message.sequence().is_some(), ends, "tag {tag}");

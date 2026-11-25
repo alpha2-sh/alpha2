@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** a native plugin in a worker process gets its video frames through memory its host
+  shares with that worker alone, read-only there, instead of through the worker's pipe: a 1080p
+  RGBA frame no longer goes through the kernel twice. Where the memory cannot be made or mapped,
+  the run goes on through the pipe and the host writes one diagnostic. A plugin that writes into
+  its input frame, which the ABI never allowed, now fails its run with `PLUGIN_TRAPPED`. On Linux
+  and macOS the worker's standard input and output are one Unix socket. In Rust,
+  `WorkerCommand` gains `frames` (`FramePath::Shared`, or `FramePath::Pipe` to compare), and
+  `alpha2-os` gains `SharedRegion`, `MappedRegion`, `write_with_descriptor` and
+  `DescriptorReader`.
+
 ## [0.7.0] - 2026-11-24
 
 ### Changed

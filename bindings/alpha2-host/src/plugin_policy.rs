@@ -249,7 +249,7 @@ impl PluginPolicy {
     /// # Errors
     /// `PLUGIN_LOAD_FAILED` when this host cannot name its own program.
     pub fn isolation(&self) -> Result<alpha2_host_core::plugins::Isolation, PluginError> {
-        use alpha2_host_core::plugins::{Isolation, WorkerCommand};
+        use alpha2_host_core::plugins::{FramePath, Isolation, WorkerCommand};
         Ok(match self.isolation {
             PluginIsolation::InProcess => Isolation::InProcess,
             PluginIsolation::Process => Isolation::Child(WorkerCommand {
@@ -263,6 +263,7 @@ impl PluginPolicy {
                 })?,
                 args: worker_arguments(),
                 envs: worker_environment(),
+                frames: FramePath::Shared,
             }),
         })
     }

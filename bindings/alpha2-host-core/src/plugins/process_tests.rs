@@ -8,8 +8,8 @@ use alpha2_media::CancelToken;
 use serde_json::{Value, json};
 
 use super::tests::{
-    Local, built, loaded, loaded_with, manifest, native_allowed, run, scratch, script,
-    supplied_words,
+    Local, built, descriptor_of, loaded, loaded_with, manifest, native_allowed, run, scratch,
+    script, supplied_words,
 };
 use super::wire::{self, child, host};
 use super::*;
@@ -51,6 +51,7 @@ fn worker_command(test: &str, envs: &[(&str, &str)]) -> WorkerCommand {
             .iter()
             .map(|(key, value)| ((*key).into(), (*value).into()))
             .collect(),
+        frames: FramePath::Shared,
     }
 }
 
@@ -487,7 +488,9 @@ fn lying_worker(mode: &str) {
                 output.write_all(&[child::RECORDS]).expect("write");
                 std::thread::sleep(Duration::from_secs(30));
             }
-            (host::BEGIN, "unknown_tag") => send(&mut output, 0x7f, &[b"?"]),
+            (host::BEGIN, "unknown_tag") | (host::VIDEO_SHARED, "refuse_region") => {
+                send(&mut output, 0x7f, &[b"?"]);
+            }
             (host::BEGIN, "cut_frame") => {
                 output.write_all(&100_u32.to_le_bytes()).expect("write");
                 output.write_all(&[child::RECORDS, 1, 2, 3]).expect("write");
@@ -511,7 +514,16 @@ fn lying_worker(mode: &str) {
                 );
                 send(&mut output, child::RETURNED, &[&seq, &ok]);
             }
-            (host::VIDEO, "refused_records") => {
+            (host::REGION, "refuse_region") => {
+                let failure = json!({ "code": codes::LOAD_FAILED, "message": "refused" });
+                send(
+                    &mut output,
+                    child::REGION_FAILED,
+                    &[&seq, failure.to_string().as_bytes()],
+                );
+            }
+            (host::REGION, _) => send(&mut output, child::REGION_MAPPED, &[&seq]),
+            (host::VIDEO | host::VIDEO_SHARED, "refused_records") => {
                 let mut record = Vec::new();
                 alpha2_plugin_abi::records::encode(
                     &alpha2_plugin_abi::records::Record::Interval {
@@ -594,6 +606,7 @@ fn a_worker_that_cannot_start_is_a_load_failure_without_a_fallback() {
             program: scratch("isolated-missing").join("no-such-worker"),
             args: Vec::new(),
             envs: Vec::new(),
+            frames: FramePath::Shared,
         }),
         ..native_allowed()
     };
@@ -689,5 +702,332 @@ fn time_video_frames_in_process_and_through_a_worker() {
             size.1,
             (there - here) / here * 100.0
         );
+    }
+}
+
+fn video_context(frames: i64, size: u32, format: &str) -> Value {
+    json!({
+        "range": { "start": 0, "end": (frames + 1) * 4000 },
+        "passes": [{ "start": 0, "direction": "forward" }], "from": "source",
+        "video": { "size": size, "format": format }, "audio": null,
+        "frame_rate": null, "params": {}, "supplied": {}
+    })
+}
+
+fn digest_load() -> (wire::Load, Vec<OutputCap>) {
+    let library = built().native[0].clone();
+    let sha256 = sha256_hex(&std::fs::read(&library).expect("library"));
+    let descriptor: Descriptor = serde_json::from_value(descriptor_of(0)).expect("descriptor");
+    let caps = output_caps(&descriptor);
+    let load = wire::Load {
+        library,
+        sha256,
+        check: false,
+        caps: caps
+            .iter()
+            .map(|cap| (cap.name.clone(), cap.items))
+            .collect(),
+        resources: resources::ResourceSet::default(),
+    };
+    (load, caps)
+}
+
+fn digest_worker(frames: FramePath) -> process::ProcessTransport {
+    let mut command = worker_command("run_as_worker", &[(WORKER, "1")]);
+    command.frames = frames;
+    let mut worker = process::ProcessTransport::spawn(
+        &command,
+        &CancelToken::default(),
+        Duration::from_secs(60),
+    )
+    .expect("spawn");
+    let (load, caps) = digest_load();
+    worker.load(&load, caps).expect("load");
+    worker
+        .begin(video_context(8, 128, "rgba8").to_string().as_bytes())
+        .expect("begin");
+    worker.pass(0, direction::FORWARD).expect("pass");
+    worker
+}
+
+const SIZES: [(u32, u32); 4] = [(64, 32), (64, 32), (128, 64), (64, 32)];
+
+fn digests(worker: &mut process::ProcessTransport) -> Vec<Vec<alpha2_plugin_abi::records::Record>> {
+    SIZES
+        .iter()
+        .zip(0_u8..)
+        .map(|(&(width, height), index)| {
+            let pixels = (0..width * height * 4)
+                .map(|at| u8::try_from(at % 251).expect("byte") ^ index)
+                .collect::<Vec<_>>();
+            let time = i64::from(index) * 4000;
+            worker
+                .video(time, width, height, video_format::RGBA8, &pixels)
+                .expect("frame")
+        })
+        .collect()
+}
+
+#[test]
+fn frames_through_shared_memory_give_the_data_the_pipe_gives_and_a_larger_frame_replaces_it() {
+    let mut shared = digest_worker(FramePath::Shared);
+    let mut piped = digest_worker(FramePath::Pipe);
+    let through_memory = digests(&mut shared);
+    assert_eq!(through_memory, digests(&mut piped));
+    assert_eq!(through_memory.len(), SIZES.len());
+    assert_ne!(through_memory[0], through_memory[1]);
+    assert!(
+        matches!(&shared.frames, process::Frames::Shared(region) if region.len() == 128 * 64 * 4),
+        "{:?}",
+        shared.frames
+    );
+    assert!(matches!(piped.frames, process::Frames::Pipe));
+}
+
+fn diagnostics_of(run: impl FnOnce()) -> Vec<String> {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&lines);
+    alpha2_os::set_diagnostic_sink(Some(std::sync::Arc::new(move |line: &str| {
+        if line.contains("the worker's pipe") {
+            kept.lock().expect("lines").push(line.to_owned());
+        }
+    })));
+    run();
+    alpha2_os::set_diagnostic_sink(None);
+    lines.lock().expect("lines").clone()
+}
+
+#[test]
+fn memory_that_cannot_be_made_or_mapped_keeps_the_run_on_the_pipe_with_one_diagnostic() {
+    let lines = diagnostics_of(|| {
+        let mut unmade = digest_worker(FramePath::Shared);
+        unmade.make_region = |_| Err(std::io::Error::other("refused for the test"));
+        let mut piped = digest_worker(FramePath::Pipe);
+        assert_eq!(digests(&mut unmade), digests(&mut piped));
+        assert!(matches!(unmade.frames, process::Frames::Pipe));
+
+        let params = json!({});
+        let mut refused =
+            loaded(&manifest(1, false, true), &params, &lying("refuse_region")).expect("loads");
+        run(&mut refused, &params).expect("the run goes on through the pipe");
+    });
+    let made = lines
+        .iter()
+        .filter(|line| line.contains("cannot be made"))
+        .count();
+    let mapped = lines
+        .iter()
+        .filter(|line| line.contains("cannot map"))
+        .count();
+    assert_eq!((made, mapped), (1, 1), "{lines:?}");
+}
+
+#[test]
+fn a_plugin_that_writes_into_its_frame_fails_the_run_as_a_trap() {
+    let error = scripted_failure(&json!({ "write_input_at": 1 }), &isolated());
+    assert_eq!(error.code, Some(codes::TRAPPED), "{error:?}");
+    #[cfg(unix)]
+    assert!(
+        matches!(detail(&error, "signal"), Some(signal) if signal == json!(libc::SIGSEGV) || signal == json!(libc::SIGBUS)),
+        "{error:?}"
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        detail(&error, "exit"),
+        Some(json!(0xC000_0005_u32)),
+        "{error:?}"
+    );
+}
+
+struct RawWorker {
+    child: std::process::Child,
+    #[cfg(unix)]
+    input: std::os::unix::net::UnixStream,
+    #[cfg(not(unix))]
+    input: std::process::ChildStdin,
+    output: Box<dyn std::io::Read>,
+    sequence: u32,
+}
+
+impl RawWorker {
+    fn start() -> Self {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args(worker_command("run_as_worker", &[]).args)
+            .env(WORKER, "1")
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        let (child, input, output) = {
+            let (host, worker) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+            let child = command
+                .stdin(std::process::Stdio::from(std::os::fd::OwnedFd::from(
+                    worker.try_clone().expect("clone"),
+                )))
+                .stdout(std::process::Stdio::from(std::os::fd::OwnedFd::from(
+                    worker,
+                )))
+                .spawn()
+                .expect("worker");
+            let output: Box<dyn std::io::Read> = Box::new(host.try_clone().expect("clone"));
+            (child, host, output)
+        };
+        #[cfg(not(unix))]
+        let (child, input, output) = {
+            let mut child = command
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("worker");
+            let input = child.stdin.take().expect("stdin");
+            let output: Box<dyn std::io::Read> = Box::new(child.stdout.take().expect("stdout"));
+            (child, input, output)
+        };
+        let mut worker = Self {
+            child,
+            input,
+            output: Box::new(BufReader::new(output)),
+            sequence: 0,
+        };
+        wire::skip_to_magic(&mut worker.output).expect("magic");
+        assert!(matches!(worker.reply(), wire::ChildMessage::Hello(_)));
+        let load = serde_json::to_vec(&digest_load().0).expect("load");
+        assert!(matches!(
+            worker.send(host::LOAD, &[&load], None),
+            wire::ChildMessage::Loaded { .. }
+        ));
+        let context = video_context(2, 64, "rgba8").to_string();
+        assert!(matches!(
+            worker.send(host::BEGIN, &[context.as_bytes()], None),
+            wire::ChildMessage::Returned { status: 0, .. }
+        ));
+        worker
+    }
+
+    fn write(&mut self, tag: u8, parts: &[&[u8]], region: Option<&alpha2_os::SharedRegion>) {
+        self.sequence += 1;
+        #[cfg(unix)]
+        if let Some(region) = region {
+            let mut frame = Vec::new();
+            wire::write_frame(&mut frame, tag, parts).expect("frame");
+            alpha2_os::write_with_descriptor(&self.input, &frame, region.descriptor())
+                .expect("write");
+            return;
+        }
+        #[cfg(not(unix))]
+        let _ = region;
+        wire::write_frame(&mut self.input, tag, parts).expect("write");
+    }
+
+    fn reply(&mut self) -> wire::ChildMessage {
+        loop {
+            let message = wire::read_frame(&mut self.output, wire::MAX_CHILD_FRAME_BYTES)
+                .and_then(wire::parse_child)
+                .expect("a frame");
+            if !matches!(
+                message,
+                wire::ChildMessage::Log { .. } | wire::ChildMessage::Records(_)
+            ) {
+                return message;
+            }
+        }
+    }
+
+    fn send(
+        &mut self,
+        tag: u8,
+        parts: &[&[u8]],
+        region: Option<&alpha2_os::SharedRegion>,
+    ) -> wire::ChildMessage {
+        self.write(tag, parts, region);
+        self.reply()
+    }
+
+    fn region(&mut self, len: usize) -> (alpha2_os::SharedRegion, wire::ChildMessage) {
+        let region = alpha2_os::SharedRegion::create(len).expect("region");
+        let length = u64::try_from(len).expect("length").to_le_bytes();
+        #[cfg(windows)]
+        let handle = region.share_with(&self.child).expect("share").to_le_bytes();
+        #[cfg(windows)]
+        let parts: [&[u8]; 2] = [&length, &handle];
+        #[cfg(not(windows))]
+        let parts: [&[u8]; 1] = [&length];
+        let reply = self.send(host::REGION, &parts, Some(&region));
+        (region, reply)
+    }
+
+    fn exit_code(mut self) -> Option<i32> {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(30) {
+            if let Some(status) = self.child.try_wait().expect("wait") {
+                return status.code();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.child.kill();
+        None
+    }
+}
+
+fn shared_frame(width: u32, height: u32, offset: u64, len: u64) -> Vec<u8> {
+    [
+        &0_i64.to_le_bytes()[..],
+        &width.to_le_bytes(),
+        &height.to_le_bytes(),
+        &video_format::RGBA8.to_le_bytes(),
+        &offset.to_le_bytes(),
+        &len.to_le_bytes(),
+    ]
+    .concat()
+}
+
+#[test]
+fn a_worker_maps_the_frames_memory_and_ends_broken_on_frames_the_wire_does_not_allow() {
+    let mut honest = RawWorker::start();
+    let (region, mapped) = honest.region(64 * 64 * 4);
+    assert!(
+        matches!(mapped, wire::ChildMessage::RegionMapped { .. }),
+        "{mapped:?}"
+    );
+    let frame = shared_frame(64, 64, 0, 64 * 64 * 4);
+    let returned = honest.send(host::VIDEO_SHARED, &[&frame], None);
+    assert!(
+        matches!(returned, wire::ChildMessage::Returned { status: 0, .. }),
+        "{returned:?}"
+    );
+    honest.write(host::SHUTDOWN, &[], None);
+    drop(region);
+    assert_eq!(honest.exit_code(), Some(0));
+
+    let broken = |case: &str, worker: RawWorker| {
+        assert_eq!(worker.exit_code(), Some(3), "{case}");
+    };
+    let mut worker = RawWorker::start();
+    worker.write(host::VIDEO_SHARED, &[&shared_frame(16, 16, 0, 1024)], None);
+    broken("no region", worker);
+
+    let mut worker = RawWorker::start();
+    let (_region, _) = worker.region(1024);
+    worker.write(
+        host::VIDEO_SHARED,
+        &[&shared_frame(16, 16, 512, 1024)],
+        None,
+    );
+    broken("past the region", worker);
+
+    let mut worker = RawWorker::start();
+    let (_region, _) = worker.region(8192);
+    worker.write(host::VIDEO_SHARED, &[&shared_frame(32, 32, 0, 4000)], None);
+    broken("a short length", worker);
+
+    #[cfg(unix)]
+    {
+        let mut worker = RawWorker::start();
+        worker.write(host::REGION, &[&1024_u64.to_le_bytes()], None);
+        broken("a region without a descriptor", worker);
+
+        let region = alpha2_os::SharedRegion::create(1024).expect("region");
+        let mut worker = RawWorker::start();
+        worker.write(host::DESCRIBE, &[], Some(&region));
+        broken("a descriptor with another frame", worker);
     }
 }
