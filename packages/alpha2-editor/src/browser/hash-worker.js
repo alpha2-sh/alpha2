@@ -2,6 +2,7 @@
 // Hosts bundling the `@alpha2-sh/editor/hash-worker` entry pass `runtimeAssets.hashWorkerFactory`;
 // each file gets its own worker, terminated on cancel.
 import { sha256Blob } from "alpha2/assets";
+import { reviveRangeFile } from "./runtime/range-file.js";
 
 /**
  * Answers hash requests posted to `scope` (a dedicated worker's global): `{ type: "hash", file }`
@@ -13,7 +14,7 @@ export function installHashWorker(scope) {
   scope.onmessage = async ({ data }) => {
     if (data?.type !== "hash") return;
     try {
-      const sha256 = await sha256Blob(data.file, {
+      const sha256 = await sha256Blob(reviveRangeFile(data.file), {
         onProgress: (bytes) => scope.postMessage({ type: "progress", bytes }),
       });
       scope.postMessage({ type: "hashed", sha256 });

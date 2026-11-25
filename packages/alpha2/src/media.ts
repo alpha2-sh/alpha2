@@ -275,7 +275,30 @@ export const UPRIGHT: VideoOrientation = Object.freeze({
   mirror: false,
 });
 
-export type ContainerBytes = Blob | ArrayBuffer | ArrayBufferView;
+/**
+ * Media read in byte ranges rather than held whole, such as a file a URL serves. `read` resolves
+ * bytes `[start, end)`, `0 <= start <= end <= size`.
+ */
+export interface RangeReader {
+  readonly size: number;
+  readonly name?: string;
+  read(start: number, end: number): Promise<Uint8Array>;
+}
+
+/** Whether `value` is a {@link RangeReader} rather than a `Blob` or bytes. */
+export function isRangeReader(value: unknown): value is RangeReader {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !(value instanceof Blob) &&
+    !(value instanceof ArrayBuffer) &&
+    !ArrayBuffer.isView(value) &&
+    typeof (value as RangeReader).read === "function" &&
+    typeof (value as RangeReader).size === "number"
+  );
+}
+
+export type ContainerBytes = Blob | ArrayBuffer | ArrayBufferView | RangeReader;
 
 const MAX_HEADER_SCAN_BYTES = 64 * 1024 * 1024;
 /** Boxes one level of an MP4 walk visits; each costs one 16-byte read, wherever it starts. */
@@ -308,7 +331,9 @@ class ByteReader {
   constructor(container: ContainerBytes) {
     this.#container = container;
     this.size =
-      container instanceof Blob ? container.size : container.byteLength;
+      container instanceof Blob || isRangeReader(container)
+        ? container.size
+        : container.byteLength;
   }
   async read(offset: number, length: number): Promise<Uint8Array> {
     const end = Math.min(this.size, offset + length);
@@ -316,6 +341,7 @@ class ByteReader {
     const container = this.#container;
     if (container instanceof Blob)
       return new Uint8Array(await container.slice(offset, end).arrayBuffer());
+    if (isRangeReader(container)) return container.read(offset, end);
     if (container instanceof ArrayBuffer)
       return new Uint8Array(container, offset, end - offset);
     return new Uint8Array(

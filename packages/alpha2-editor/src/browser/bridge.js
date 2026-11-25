@@ -48,6 +48,8 @@ import {
   sameProviderSettings,
 } from "./runtime/sources.js";
 import { fingerprintFile } from "./runtime/fingerprint.js";
+import { isRangeFile } from "./runtime/range-file.js";
+import { openMediaReference } from "./runtime/media-reference.js";
 import { hashInWorker } from "./hash-worker.js";
 import { extractInWorker } from "./extract-worker.js";
 import { callExtensions } from "./extensions-worker.js";
@@ -2108,11 +2110,23 @@ export function createBrowserBridge(options) {
       },
     };
   }
+  function openMedia(file, signal) {
+    return file instanceof Blob || file?.url === undefined
+      ? file
+      : openMediaReference(file, signal);
+  }
+  async function nativeBytes(file) {
+    if (!isRangeFile(file)) return { blob: file };
+    return file.path === undefined
+      ? { blob: await file.blob() }
+      : { path: file.path };
+  }
   function importFiles(files, options = {}) {
     return importUnits(
       files.map((file) => ({
         name: file.name,
-        stage: (signal) => mediaAdapter.stage(file, signal),
+        stage: async (signal) =>
+          mediaAdapter.stage(await openMedia(file, signal), signal),
       })),
       options,
     );
@@ -2159,7 +2173,12 @@ export function createBrowserBridge(options) {
       );
     return {
       name: null,
-      stage: (signal) => mediaAdapter.stageSequence(files, options, signal),
+      stage: async (signal) =>
+        mediaAdapter.stageSequence(
+          await Promise.all(files.map((file) => openMedia(file, signal))),
+          options,
+          signal,
+        ),
     };
   }
   /**
@@ -2897,7 +2916,7 @@ export function createBrowserBridge(options) {
       importFiles([file], { ...options, relinkId: id }),
     importSequence,
     relinkSequence,
-    async putProviderSource({ id, name, provider }, { signal } = {}) {
+    async putProviderSource({ id, name, provider }, { signal, then } = {}) {
       if (providerReadsFile(provider))
         throw new EditorError(
           "unsupported_media",
@@ -2925,7 +2944,7 @@ export function createBrowserBridge(options) {
         (candidate) => candidate.id === assetId,
       );
       const kind = providerKind(provider);
-      const result = editor.dispatch({
+      const put = {
         type: "asset.put",
         asset: {
           ...(descriptor ?? { contentRevision: 0 }),
@@ -2941,7 +2960,20 @@ export function createBrowserBridge(options) {
           locator: "",
           provider,
         },
-      });
+      };
+      const following =
+        typeof then === "function"
+          ? then({
+              assetId,
+              width: read.report?.width ?? null,
+              height: read.report?.height ?? null,
+            })
+          : (then ?? []);
+      const result = editor.dispatch(
+        following.length
+          ? { type: "transaction", commands: [put, ...following] }
+          : put,
+      );
       if (!result.ok) throw result.error;
       const runtime = filelessRuntime(editor.document, assetId);
       if (runtime) describe(runtime, provider, read);
@@ -3381,7 +3413,7 @@ export function createBrowserBridge(options) {
               result.push({
                 id: `${asset.id}:${result.length}`,
                 kind: "frames",
-                blob: file,
+                ...(await nativeBytes(file)),
                 name: file.name,
                 locator,
               });
@@ -3394,6 +3426,21 @@ export function createBrowserBridge(options) {
               blob: runtime.file,
               name: `${asset.id}.proxy.mp4`,
               madeFrom: proxies.get(hashOf(asset)).record.made_from,
+            });
+            continue;
+          }
+          const kind =
+            asset.kind === "font"
+              ? "caption-fonts"
+              : asset.kind === "lut3d"
+                ? "effect-assets"
+                : "assets";
+          if (isRangeFile(runtime.file)) {
+            result.push({
+              id: asset.id,
+              kind,
+              ...(await nativeBytes(runtime.file)),
+              name: asset.name,
             });
             continue;
           }
@@ -3430,12 +3477,7 @@ export function createBrowserBridge(options) {
           if (!blob) throw Error(`Missing native bytes: ${asset.name}`);
           result.push({
             id: asset.id,
-            kind:
-              asset.kind === "font"
-                ? "caption-fonts"
-                : asset.kind === "lut3d"
-                  ? "effect-assets"
-                  : "assets",
+            kind,
             blob,
             name: asset.kind === "text" ? "text.png" : asset.name,
           });

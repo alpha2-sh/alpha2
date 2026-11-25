@@ -71,6 +71,28 @@ All notable changes to this project are documented in this file.
   `VideoFrameMode.cpu` turns both off.
 - macOS: the Metal interop helpers drain an autorelease pool, so the Objective-C objects they
   autoreleased no longer leak on the host's long-lived worker threads.
+- The browser bridge imports, relinks and reads image sequence frames from media references,
+  `{ url, name, path? }` whose URL answers `Range` requests, in place of a `File`: every reader of
+  the media (probing, hashing, preview and its workers, proxies, extraction, browser export) reads
+  it by range. `alpha2/mediabunny` inputs and `alpha2/media` container readers take a
+  `RangeReader` (`size`, `read(start, end)`), and `sha256Blob` anything with `stream()`.
+- A native export reads a referenced file by its `path` instead of uploading it: `nativeAssets`
+  gives `{ path }` for it, and the native client sends such assets in the render request's
+  `paths` (`{ [kind]: { [id]: path } }`) without an upload. `NativeAsset` has either `blob` or
+  `path`.
+- `bridge.putProviderSource` takes `then`: commands, or a function of the new source's ID and
+  opened size returning them, committed in the same undo step as the source, such as the clip that
+  places it.
+- `failureClassOfHttpStatus` in `alpha2/export-failure` classifies an export service's HTTP error
+  status: 413 `RESOURCE_LIMIT`, 429 and 503 `RESOURCE_BUSY`, 507 `STORAGE_QUOTA_EXCEEDED`.
+- The native client treats a 404 to an asset upload or a render request as a job the service lost,
+  so the next attempt allocates and uploads it again instead of failing three times, and no longer
+  retries an upload or a project the service refuses as too large (413): the export fails at once
+  with `RESOURCE_LIMIT` and the service's `limitBytes` in `diagnostics`. Its job failures are
+  `ExportFailureError`s with the service's message.
+- `bake` of a linear source-anchored data set read through a clip no longer stops the motion at
+  the clip's last sample: the baked keys follow the live value toward the next sample up to the
+  clip's end, at loop pass boundaries, and over the frames a reversed pass holds.
 
 ## [0.7.0] - 2026-11-24
 

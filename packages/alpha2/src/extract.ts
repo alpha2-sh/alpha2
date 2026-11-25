@@ -3,8 +3,6 @@
 
 import {
   ALL_FORMATS,
-  BlobSource,
-  BufferSource,
   EncodedPacketSink,
   Input,
   type VideoSample,
@@ -40,6 +38,7 @@ import {
   decodeRefusalMessage,
 } from "./hdr-frames.js";
 import { microsecondsToTicks, readVideoOrientation } from "./media.js";
+import { mediaSource } from "./media-source.js";
 import {
   type AudioResamplerBinding,
   MediabunnyAudioDecoder,
@@ -157,10 +156,7 @@ class SourceFrames {
     resource: MediabunnyInput,
     id: string,
   ): Promise<SourceFrames> {
-    const source =
-      resource instanceof Blob
-        ? new BlobSource(resource)
-        : new BufferSource(resource);
+    const source = mediaSource(resource);
     const input = new Input({ source, formats: ALL_FORMATS });
     const track = await input.getPrimaryVideoTrack();
     if (track === null) {

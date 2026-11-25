@@ -3,8 +3,8 @@
 use super::{BakeTarget, EditError, EditReport};
 use crate::SampleContext;
 use alpha2_model::{
-    Animated, AnimatedPoint, DataBinding, DataInterpolation, DataSpace, DataValues, Domain,
-    Interpolation, Keyframe, PointKeyframe, Project, Vec2,
+    Animated, AnimatedPoint, DataAnchor, DataBinding, DataInterpolation, DataSpace, DataValues,
+    DataVia, Domain, Interpolation, Keyframe, PointKeyframe, Project, Vec2,
 };
 use alpha2_time::{MediaTime, TimeRange};
 
@@ -236,7 +236,8 @@ fn binding_of<'a>(slot: &'a Slot<'_>) -> Option<&'a DataBinding> {
 /// The times a baked binding gets keyframes at: where its value can change inside `window`
 /// (timeline places) or at each sample (composition places), plus every frame start for canvas
 /// space, which also follows the other clip's motion. A `linear` binding also keys the first
-/// change after the window, so its last line keeps its slope.
+/// change after the window, so its last line keeps its slope, and where the clip it reads
+/// through stops showing source time along one line, past which no change is read.
 fn key_times(
     project: &Project,
     binding: &DataBinding,
@@ -284,6 +285,9 @@ fn key_times(
         times.push(next.ticks());
         cursor = next.ticks();
     }
+    if linear {
+        times.extend(line_breaks(project, set, binding, window));
+    }
     if binding.space == Some(DataSpace::Canvas) {
         let rate = project.settings.frame_rate;
         let first = rate.frame_at_or_before(window.start()).unwrap_or(0);
@@ -301,6 +305,37 @@ fn key_times(
     times.sort_unstable();
     times.dedup();
     times
+}
+
+fn line_breaks(
+    project: &Project,
+    set: &alpha2_model::DataSet,
+    binding: &DataBinding,
+    window: TimeRange,
+) -> Vec<i64> {
+    let (DataAnchor::Source { .. }, Some(DataVia::Clip(via))) = (&set.anchor, &binding.via) else {
+        return Vec::new();
+    };
+    let Some(clip) = project
+        .timeline
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .find(|clip| &clip.id == via)
+    else {
+        return Vec::new();
+    };
+    let (start, end) = (window.start().ticks(), window.end().ticks());
+    let mut breaks = crate::picture_line_breaks(
+        clip.timeline_range,
+        clip.source_range,
+        clip.time_map,
+        project.settings.frame_rate,
+    )
+    .unwrap_or_default();
+    breaks.push(end - 1);
+    breaks.retain(|tick| (start..end).contains(tick));
+    breaks
 }
 
 #[allow(clippy::too_many_lines)]
