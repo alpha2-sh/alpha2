@@ -1,5 +1,6 @@
 #include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurfaceRef.h>
+#include <TargetConditionals.h>
 #include <Metal/Metal.h>
 #include <VideoToolbox/VideoToolbox.h>
 #include <math.h>
@@ -179,18 +180,20 @@ int32_t alpha2_native_gpu_metal_encoder_plane(void *device, void *pixel_buffer,
     }
 }
 
+#if TARGET_OS_OSX
 /*
  * Whether VideoToolbox decodes `codec_type` (a CMVideoCodecType) in hardware. The supplemental
  * VP9 and AV1 decoders are registered first, as FFmpeg does.
  */
 int32_t alpha2_native_gpu_vt_hardware_decodes(uint32_t codec_type) {
     @autoreleasepool {
-        if (@available(macOS 11.0, iOS 26.2, *)) {
+        if (@available(macOS 11.0, *)) {
             VTRegisterSupplementalVideoDecoderIfAvailable((CMVideoCodecType)codec_type);
         }
         return VTIsHardwareDecodeSupported((CMVideoCodecType)codec_type) ? 1 : 0;
     }
 }
+#endif
 
 /*
  * The system-wide ID of the IOSurface behind a pixel buffer, or 0 for null or no IOSurface. The
