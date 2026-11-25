@@ -8,7 +8,7 @@ import type {
   ExtractFrame,
   Extractor,
   ExtractorDescriptor,
-} from "./extract.js";
+} from "./extractor.js";
 import {
   resolveSupplied,
   SuppliedReader,
