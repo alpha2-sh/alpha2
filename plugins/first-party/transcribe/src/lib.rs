@@ -80,6 +80,43 @@ fn language(context: &Context) -> Result<Option<&'static str>, Error> {
     }
 }
 
+/// What ggml's build enables on x86-64 with `GGML_NATIVE` off, and whether this CPU has each.
+#[cfg(target_arch = "x86_64")]
+fn ggml_instructions() -> Vec<(&'static str, bool)> {
+    vec![
+        ("SSE4.2", is_x86_feature_detected!("sse4.2")),
+        ("AVX", is_x86_feature_detected!("avx")),
+        ("AVX2", is_x86_feature_detected!("avx2")),
+        ("BMI2", is_x86_feature_detected!("bmi2")),
+        ("FMA", is_x86_feature_detected!("fma")),
+        ("F16C", is_x86_feature_detected!("f16c")),
+    ]
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn ggml_instructions() -> Vec<(&'static str, bool)> {
+    Vec::new()
+}
+
+fn check_cpu(instructions: &[(&str, bool)]) -> Result<(), Error> {
+    let named = |missing_only: bool| {
+        instructions
+            .iter()
+            .filter(|(_, present)| !(missing_only && *present))
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let missing = named(true);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(Error(format!(
+        "alpha2.transcribe needs a CPU with {}; this one lacks {missing}",
+        named(false)
+    )))
+}
+
 fn to_sample_ceil(ticks: i64) -> i64 {
     (ticks * RATE).div_euclid(TICKS_PER_SECOND)
         + i64::from((ticks * RATE).rem_euclid(TICKS_PER_SECOND) != 0)
@@ -338,6 +375,7 @@ impl Extractor for Transcribe {
     const DESCRIPTOR: &'static str = include_str!("../descriptor.json");
 
     fn begin(context: &Context, host: &Host) -> Result<Self, Error> {
+        check_cpu(&ggml_instructions())?;
         let language = language(context)?;
         let whisper = load(context, host, language)?;
         let detect = language.is_none() && whisper.is_multilingual();
@@ -502,6 +540,19 @@ mod tests {
         assert_eq!(grid.touched(WINDOW, WINDOW + 1), 1..2);
         assert_eq!(grid.touched(99 * RATE, 100 * RATE), 3..4);
         assert_eq!(grid.touched(STEP - 10, WINDOW + 10), 0..2);
+    }
+
+    #[test]
+    fn a_cpu_without_an_instruction_set_ggml_uses_is_refused_naming_it() {
+        assert_eq!(check_cpu(&[("AVX", true), ("FMA", true)]), Ok(()));
+        assert_eq!(check_cpu(&[]), Ok(()));
+        let refused = check_cpu(&[("AVX", true), ("AVX2", false), ("FMA", false)])
+            .expect_err("refused")
+            .0;
+        assert!(
+            refused.ends_with("needs a CPU with AVX, AVX2, FMA; this one lacks AVX2, FMA"),
+            "{refused}"
+        );
     }
 
     #[test]
