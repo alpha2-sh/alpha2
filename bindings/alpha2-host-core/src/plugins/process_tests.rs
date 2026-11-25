@@ -806,6 +806,47 @@ fn time_video_frames_in_process_and_through_a_worker() {
     }
 }
 
+const TIMED_STARTS: usize = 20;
+
+fn median_and_max(mut milliseconds: Vec<f64>) -> (f64, f64) {
+    milliseconds.sort_by(f64::total_cmp);
+    (
+        milliseconds[milliseconds.len() / 2],
+        milliseconds[milliseconds.len() - 1],
+    )
+}
+
+#[test]
+#[ignore = "a measurement, run in release with --nocapture"]
+fn time_worker_starts() {
+    let command = worker_command("run_as_worker", &[(WORKER, "1")]);
+    let scripted = manifest(1, false, true);
+    let mut spawned = Vec::with_capacity(TIMED_STARTS);
+    let mut loads = Vec::with_capacity(TIMED_STARTS);
+    for _ in 0..TIMED_STARTS {
+        let started = Instant::now();
+        let worker = process::ProcessTransport::spawn(
+            &command,
+            &CancelToken::default(),
+            Duration::from_secs(60),
+        )
+        .expect("spawn");
+        spawned.push(started.elapsed().as_secs_f64() * 1000.0);
+        drop(worker);
+        let started = Instant::now();
+        let plugin = loaded(&scripted, &json!({}), &isolated()).expect("loads");
+        loads.push(started.elapsed().as_secs_f64() * 1000.0);
+        drop(plugin);
+    }
+    let (spawn_median, spawn_max) = median_and_max(spawned);
+    let (load_median, load_max) = median_and_max(loads);
+    println!(
+        "worker starts over {TIMED_STARTS} runs: spawn and hello median {spawn_median:.1} ms, \
+         max {spawn_max:.1}; spawn, hello, load and describe of the scripted plugin median \
+         {load_median:.1} ms, max {load_max:.1}"
+    );
+}
+
 fn video_context(frames: i64, size: u32, format: &str) -> Value {
     json!({
         "range": { "start": 0, "end": (frames + 1) * 4000 },

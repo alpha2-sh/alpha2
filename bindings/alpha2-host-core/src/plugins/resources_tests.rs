@@ -720,3 +720,50 @@ fn a_link_retargeted_outside_the_root_after_the_load_is_refused_where_it_is_read
     );
     drop(link);
 }
+
+const TIMED_HASH_BYTES: u64 = 3_000_000_000;
+
+struct RemovedOnDrop(PathBuf);
+
+impl Drop for RemovedOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+#[ignore = "a measurement, run in release with --nocapture"]
+fn time_hashing_a_large_supplied_file() {
+    use std::io::Write;
+    let dir = RemovedOnDrop(scratch("timed-hash"));
+    let model = dir.0.join("model.bin");
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&model).expect("create"));
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut chunk = vec![0_u8; 1 << 20];
+    let mut written = 0_u64;
+    while written < TIMED_HASH_BYTES {
+        for word in chunk.as_chunks_mut::<8>().0 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *word = state.to_le_bytes();
+        }
+        let take =
+            usize::try_from((TIMED_HASH_BYTES - written).min(chunk.len() as u64)).expect("a chunk");
+        file.write_all(&chunk[..take]).expect("write");
+        written += take as u64;
+    }
+    file.into_inner().expect("flush").sync_all().expect("sync");
+    for run in 1..=2 {
+        let set = resolve(&slots(), &[("model", &model)], &ResourceRoot::Any).expect("resolves");
+        let mut reader = ResourceReader::new(set, CancelToken::default());
+        let started = Instant::now();
+        reader.path("model").expect("hashed");
+        let seconds = started.elapsed().as_secs_f64();
+        assert!(reader.take_failure().is_none());
+        assert_eq!(reader.supplied()[0].bytes, TIMED_HASH_BYTES);
+        #[expect(clippy::cast_precision_loss, reason = "a rate to print")]
+        let rate = TIMED_HASH_BYTES as f64 / seconds / 1e9;
+        println!("hash run {run}: {TIMED_HASH_BYTES} bytes in {seconds:.2} s, {rate:.2} GB/s");
+    }
+}
