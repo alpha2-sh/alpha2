@@ -4,18 +4,21 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Weak};
 
+use alpha2_engine::ExportStepTimings;
 use alpha2_engine::{
     EngineProject, ExportPlaneStep, Exporter, FrameProvider, FramesWithText, TextTextures,
 };
 use alpha2_eval::FrameNeed;
 use alpha2_media::{CancelToken, DecodedVideoFrame, EncodeError, PixelLayout, SourceId};
-use alpha2_render::{ColorPolicy, CpuRenderer, CpuSource, PlaneTarget, RenderSize, Renderer};
+use alpha2_render::{
+    ColorPolicy, CpuRenderer, CpuSource, Nv12PlaneTargets, PlaneTarget, RenderSize, Renderer,
+};
 use alpha2_time::MediaTime;
 
 use super::budget::FrameBudget;
 use super::prepare::{GpuSource, SurfaceImport, prepare_cpu, prepare_gpu};
 use crate::cursor::{CursorReads, DecodeCursorKey, decode_cursor_key};
-use crate::encode::PlaneBuffer;
+use crate::encode::{LentBuffer, PlaneBuffer};
 use crate::video_stream::{BackendImage, DroppedLayer, FrameFacts, StreamFrame, SurfaceLease};
 use alpha2_engine::frame_store::FrameStore;
 
@@ -107,6 +110,57 @@ pub trait VideoSink {
     fn settle(&mut self) -> Result<(), EncodeError> {
         Ok(())
     }
+
+    /// The encoder's buffers to render frames into, when it lends them. The default lends none.
+    fn lender(&mut self) -> Option<&mut dyn SinkLender> {
+        None
+    }
+}
+
+/// A sink whose encoder lends its input buffers: the renderer draws a frame into one, and the
+/// sink encodes it.
+pub trait SinkLender {
+    /// A buffer for the next frame, waiting while the encoder is busy.
+    ///
+    /// # Errors
+    /// An encoder failure, or an encoder that stays busy.
+    fn lend(&mut self) -> Result<LentBuffer, EncodeError>;
+
+    /// Encodes frame `index` at `time`, drawn into `buffer`.
+    ///
+    /// # Errors
+    /// An encoder or output failure.
+    fn write_lent(
+        &mut self,
+        index: u64,
+        time: MediaTime,
+        buffer: LentBuffer,
+    ) -> Result<(), EncodeError>;
+}
+
+/// The luma and chroma render targets of a lent buffer, as the NV12 pack writes them.
+#[derive(Clone, Debug)]
+pub struct LentPlanes {
+    /// `R8Unorm`, at the output size.
+    pub luma: wgpu::TextureView,
+    /// `Rg8Unorm`, at half the output size each way.
+    pub chroma: wgpu::TextureView,
+}
+
+/// Makes lent encoder buffers render targets on the GPU renderer's device: the platform's half
+/// of rendering frames in place, as [`SurfaceImport`] is of decoding them.
+pub trait EncoderTargets {
+    /// The planes of `buffer` as render targets for a frame of `size`.
+    ///
+    /// # Errors
+    /// A buffer that cannot be a render target there; the export then reads frames back.
+    fn planes(&mut self, buffer: &LentBuffer, size: RenderSize) -> Result<LentPlanes, String>;
+
+    /// Waits until the GPU finished the frame rendered into `buffer`'s planes.
+    ///
+    /// # Errors
+    /// A wait that failed or ran out of time.
+    fn finished(&mut self, buffer: &LentBuffer) -> Result<(), String>;
 }
 
 /// Why an export stopped.
@@ -250,7 +304,9 @@ impl SourceFrameCache {
 /// Frames wait for their sources and never repeat a late one, so output does not depend on
 /// decode timing. Decoded frames stay within `budget`, read before every frame. `before_frame`
 /// runs at the top of every turn with the sink (it may block, as a host's pause does), and
-/// `progress` is told after each frame.
+/// `progress` is told after each frame. With the GPU renderer, `targets` and a sink that lends,
+/// frames are drawn into the encoder's buffers; once `targets` refuses one, the rest of the
+/// export reads frames back.
 ///
 /// # Errors
 /// Cancellation, a source or render failure, a frame whose sources never arrive, or a sink
@@ -259,7 +315,7 @@ impl SourceFrameCache {
 pub fn export_video(
     snapshot: &EngineProject,
     exporter: &mut Exporter,
-    renderer: ExportRenderer<'_>,
+    (renderer, mut targets): (ExportRenderer<'_>, Option<&mut (dyn EncoderTargets + '_)>),
     texts: &mut TextTextures,
     sources: &mut dyn SourceFrames,
     sink: &mut dyn VideoSink,
@@ -273,20 +329,9 @@ pub fn export_video(
     let color = alpha2_engine::color_policy(&snapshot.project().settings.color);
     let mut store = SourceFrameCache::for_renderer(renderer, budget.bytes());
     let layout = exporter.pixels();
-    let mut planes = layout
-        .planes(size.width, size.height)
-        .into_iter()
-        .map(|(width, height, bytes)| {
-            let stride = usize::try_from(width * bytes).unwrap_or(0);
-            PlaneBuffer {
-                bytes: vec![0; stride * usize::try_from(height).unwrap_or(0)],
-                stride,
-                width,
-                height,
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut planes = plane_buffers(layout, size);
     let mut refills = 0;
+    let mut kept: Option<LentBuffer> = None;
     loop {
         before_frame(sink).map_err(ExportError::Encode)?;
         if cancel.is_cancelled() {
@@ -319,26 +364,35 @@ pub fn export_video(
                 .map_err(|error| ExportError::Render(error.to_string()))?;
         }
         let provider = FramesWithText::new(store.provider(), texts);
-        let mut targets = planes
-            .iter_mut()
-            .map(|plane| PlaneTarget::new(&mut plane.bytes, plane.stride))
-            .collect::<Vec<_>>();
-        let step = match renderer {
-            ExportRenderer::Gpu(renderer) => {
-                exporter.render_next_into_planes(snapshot, renderer, &provider, &mut targets, None)
+        let lent = match (renderer, targets.as_deref_mut(), sink.lender()) {
+            (ExportRenderer::Gpu(gpu), Some(lending), Some(lender)) => Some(render_lent(
+                (snapshot, exporter, gpu, &provider, size),
+                lending,
+                lender,
+                &mut kept,
+            )?),
+            _ => None,
+        };
+        let (step, buffer) = match lent {
+            Some(LentStep::Drawn(step, buffer)) => (step, Some(buffer)),
+            refused => {
+                if matches!(refused, Some(LentStep::Refused)) {
+                    targets = None;
+                }
+                let step = render_readback(snapshot, exporter, renderer, &provider, &mut planes)?;
+                (step, None)
             }
-            ExportRenderer::Cpu(renderer) => {
-                exporter.render_next_into_planes(snapshot, renderer, &provider, &mut targets, None)
-            }
-        }
-        .map_err(|error| ExportError::Render(error.to_string()))?;
-        drop(targets);
+        };
         match step {
             ExportPlaneStep::Rendered { index, time } => {
                 refills = 0;
                 store.unpin();
-                sink.write_video(index, time, layout, &planes)
-                    .map_err(ExportError::Encode)?;
+                match buffer {
+                    Some(buffer) => write_lent(targets.as_deref_mut(), sink, index, time, buffer)?,
+                    None => sink
+                        .write_video(index, time, layout, &planes)
+                        .map_err(ExportError::Encode)?,
+                }
                 let done = exporter.progress();
                 progress(done.completed, done.total);
             }
@@ -346,6 +400,7 @@ pub fn export_video(
                 time,
                 missing_sources,
             } => {
+                kept = buffer;
                 refills += 1;
                 if refills > MAX_EXPORT_REFILLS {
                     return Err(ExportError::Stalled {
@@ -357,6 +412,101 @@ pub fn export_video(
             ExportPlaneStep::Complete => return Ok(()),
         }
     }
+}
+
+fn plane_buffers(layout: PixelLayout, size: RenderSize) -> Vec<PlaneBuffer> {
+    layout
+        .planes(size.width, size.height)
+        .into_iter()
+        .map(|(width, height, bytes)| {
+            let stride = usize::try_from(width * bytes).unwrap_or(0);
+            PlaneBuffer {
+                bytes: vec![0; stride * usize::try_from(height).unwrap_or(0)],
+                stride,
+                width,
+                height,
+            }
+        })
+        .collect()
+}
+
+enum LentStep {
+    Drawn(ExportPlaneStep, LentBuffer),
+    Refused,
+}
+
+fn render_lent(
+    (snapshot, exporter, renderer, provider, size): (
+        &EngineProject,
+        &mut Exporter,
+        &Renderer,
+        &dyn FrameProvider,
+        RenderSize,
+    ),
+    targets: &mut (dyn EncoderTargets + '_),
+    lender: &mut dyn SinkLender,
+    kept: &mut Option<LentBuffer>,
+) -> Result<LentStep, ExportError> {
+    let buffer = match kept.take() {
+        Some(buffer) => buffer,
+        None => lender.lend().map_err(ExportError::Encode)?,
+    };
+    let Ok(planes) = targets.planes(&buffer, size) else {
+        return Ok(LentStep::Refused);
+    };
+    let step = exporter
+        .render_next_nv12_timed(
+            snapshot,
+            renderer,
+            provider,
+            Nv12PlaneTargets {
+                luma: &planes.luma,
+                chroma: &planes.chroma,
+            },
+            &mut ExportStepTimings::default(),
+        )
+        .map_err(|error| ExportError::Render(error.to_string()))?;
+    Ok(LentStep::Drawn(step, buffer))
+}
+
+fn render_readback(
+    snapshot: &EngineProject,
+    exporter: &mut Exporter,
+    renderer: ExportRenderer<'_>,
+    provider: &dyn FrameProvider,
+    planes: &mut [PlaneBuffer],
+) -> Result<ExportPlaneStep, ExportError> {
+    let mut targets = planes
+        .iter_mut()
+        .map(|plane| PlaneTarget::new(&mut plane.bytes, plane.stride))
+        .collect::<Vec<_>>();
+    match renderer {
+        ExportRenderer::Gpu(renderer) => {
+            exporter.render_next_into_planes(snapshot, renderer, provider, &mut targets, None)
+        }
+        ExportRenderer::Cpu(renderer) => {
+            exporter.render_next_into_planes(snapshot, renderer, provider, &mut targets, None)
+        }
+    }
+    .map_err(|error| ExportError::Render(error.to_string()))
+}
+
+fn write_lent(
+    targets: Option<&mut (dyn EncoderTargets + '_)>,
+    sink: &mut dyn VideoSink,
+    index: u64,
+    time: MediaTime,
+    buffer: LentBuffer,
+) -> Result<(), ExportError> {
+    let (Some(targets), Some(lender)) = (targets, sink.lender()) else {
+        return Err(ExportError::Render(
+            "a frame drawn into a lent buffer lost its lender".into(),
+        ));
+    };
+    targets.finished(&buffer).map_err(ExportError::Render)?;
+    lender
+        .write_lent(index, time, buffer)
+        .map_err(ExportError::Encode)
 }
 
 /// Decodes and prepares every frame `needs` names that the store does not hold, pinning them.

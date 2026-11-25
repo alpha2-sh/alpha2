@@ -30,7 +30,7 @@ let engine = Alpha2(config: EngineConfig(renderer: .auto, videoDecode: .auto, vi
 
 - `RendererMode`: `.auto` draws on the GPU and on the CPU renderer when no GPU device opens, `.gpu` fails with `GpuInitFailed` instead, `.cpu` never opens a GPU device. It applies to exports and stills; a `Player` always draws on a GPU device that presents to its layer.
 - `VideoDecodeMode`: `.auto` uses the hardware decoder and falls back to the software one once per source; `.hardware` and `.software` use only one kind.
-- `VideoFrameMode`: on iOS, decoded frames are copied through memory in this release whatever the mode.
+- `VideoFrameMode`: `.auto` keeps hardware-decoded frames on the GPU, where the renderer samples the `VideoToolbox` pixel buffers in place, and renders each exported frame straight into the H.264 or HEVC encoder's pixel buffer instead of reading it back. `.cpu` copies decoded frames through memory and reads rendered frames back for the encoder. Under `.auto` a picture the renderer cannot sample in place (a left or top crop, or one beyond what a decoder may hold) is copied, and a pixel buffer the GPU refuses is copied and counted in the report.
 - `try engine.setFonts(fonts: [FontFile(bytes: fontData, faceIndex: 0)])` sets the fonts text may use, in fallback order, and returns each one's family names. A project with text needs them before it renders.
 
 ## Export
@@ -76,7 +76,7 @@ Results are JSON strings in the library's own shapes, which are not the desktop 
 | --- | --- |
 | `capabilities()` | `hostVersion`, `os`, `osVersion`, `arch`, `renderer` (`gpu` or `cpu`), `gpu` (`adapter`, `backend`, `driver`, `softwareRasterizer`, or `unavailable` with the reason, or `null` under `.cpu`), `features` (`extensions.svg`, `extensions.animated-image`, `extensions.lottie`, `extensions.exr`, `extensions.pdf`, `extensions.image-sequence`, `extensions.latex`, each `{available}`), `media` (`platform`: `ios`, `containers`, `videoEncoders`, `audioEncoders`) |
 | `conform()` | `sources`: `{id, path, readable, reason}` each |
-| `outcome().reportJson` | `container`, `videoCodec`, `videoEncoder`, `hardwareEncoder`, `softwareRetry`, `audioCodec`, `audioEncoder`, `audioBitrate`, `renderer`, `gpuUnavailable` (why no GPU drew, when one was allowed), `surfaceFrames` (0 on iOS), `decodeDiagnostics`, `frames`, `width`, `height` |
+| `outcome().reportJson` | `container`, `videoCodec`, `videoEncoder`, `hardwareEncoder`, `softwareRetry`, `audioCodec`, `audioEncoder`, `audioBitrate`, `renderer`, `gpuUnavailable` (why no GPU drew, when one was allowed), `surfaceFrames` (decoded frames sampled in place), `surfaceFallbacks` (pixel buffers the GPU refused, copied instead), `framesRenderedInPlace` (frames rendered into the encoder's pixel buffers), `decodeDiagnostics`, `frames`, `width`, `height` |
 | `stills()` | `stills`: `{output, frameTime, width, height}` each, `renderer`, `gpuUnavailable` |
 
 ## Preview

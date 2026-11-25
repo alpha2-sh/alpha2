@@ -16,34 +16,28 @@ All notable changes to this project are documented in this file.
   `x-alpha2-order`, `x-alpha2-group`, `x-alpha2-advanced`), which every params check ignores.
 - `alpha2.silence` 1.1.0 carries its `about`, an output label and annotated params. Its outputs
   are unchanged (`descriptor.version` 1).
-
 - `alpha2/plugins` exports `parsePluginManifest`, which checks a manifest by the engine loaders'
   rules without fetching anything, the `PluginManifest` types and the manifest limits
   (`MAX_MANIFEST_BYTES`, `MAX_PLUGIN_*`, `MAX_ABOUT_*`); `LoadedPlugin` gains `about`, and
   `loadPlugin` takes `onProgress`, called as each pinned file arrives.
 - `bridge.extract` takes a plugin the app loaded with `loadPlugin`, which many runs share, or a
   `fetch` beside the manifest; its `onProgress` reports the plugin's files (`phase: "load"`).
-
 - `bridge.extractCapabilities()` says what `bridge.extract` runs (the inputs of each media, the
   artifacts, whether it fills resource slots), and `pluginProblem(manifest, capabilities)` in
   `alpha2/plugins` says why a plugin would not run there. A host's `capabilities` result reports
   its plugin policy as `plugins` (`mode`, `slots`, `isolation`), typed in `@alpha2-sh/node`.
-
 - `bridge.extract` reads the timeline: it draws the frames an extractor asks for on a CPU renderer
   of its own at export quality, the bytes every surface reads timeline frames as. Timeline audio
   is not supplied (`INVALID_INPUT`), as on the native hosts.
-
 - The browser fills a plugin's resource slots: `loadPlugin(manifest, sha256, { supplied })` takes a
   `File` for a `file` slot and a directory handle or a directory picker's files for a `directory`
   slot, checked with the native loaders' limits and reasons, and the run records the files it
   read in `made_by.plugin.supplied`. `bridge.extract` passes `plugin.supplied` on.
-
 - `bridge.extract` runs a plugin in a worker when `runtimeAssets.extractWorkerFactory` makes one
   running the new `@alpha2-sh/editor/extract-worker` entry, so a long extraction no longer holds
   the page's thread; a cancel terminates the worker at once. `transferablePlugin` and
   `restorePlugin` in `alpha2/plugins` hand a loaded plugin to a worker without fetching or
   compiling it again.
-
 - `bindableProperties(project, owner)` in `alpha2/project` lists the properties of a clip, track,
   transition, composition node or the master bus that data can be bound to, in the path syntax of
   `dataReferences` and `bake`, with the data kinds each reads.
@@ -57,10 +51,26 @@ All notable changes to this project are documented in this file.
   file as soon as more bytes arrive than the manifest pins. `LoadedPlugin.descriptor` is the
   descriptor as the engine reads it, with `max_size`, `block_frames` and `params_schema` filled
   in.
+- **Breaking:** `alpha2-native-gpu`'s Metal import takes a raw `CVPixelBufferRef`
+  (`SharedMetalContext::import_pixel_buffer`, `pixel_buffer_planes`, `MetalImportError`) under a
+  new FFmpeg-free `iosurface-import` feature for every Apple target; `import_surface` and
+  `encoder_planes` remain as the `hwdevice` adapters on macOS.
+- **Breaking:** `alpha2_host_core::export::export_video` takes the renderer together with
+  optional `EncoderTargets`; `VideoEncodeBackend` and `VideoSink` gain `lender`, which lends
+  encoder input buffers (`LentBuffer`, `PoolLender`, `SinkLender`).
 
 ### Fixed
 
 - The Python client's params check words an `enum` or `const` refusal as `schemaProblem` does.
+- iOS: hardware-decoded frames stay on the GPU. The renderer samples `VideoToolbox` pixel buffers
+  as Metal textures, as Android imports decoder buffers, in exports, stills and the `Player`; the
+  export report's `surfaceFrames` counts them. A pixel buffer the GPU refuses is copied through
+  memory instead, once reported as a diagnostic and counted as `surfaceFallbacks`.
+- iOS: an export renders each frame straight into the H.264 or HEVC encoder's pixel buffer
+  instead of reading it back; the report's `framesRenderedInPlace` counts them.
+  `VideoFrameMode.cpu` turns both off.
+- macOS: the Metal interop helpers drain an autorelease pool, so the Objective-C objects they
+  autoreleased no longer leak on the host's long-lived worker threads.
 
 ## [0.7.0] - 2026-11-24
 

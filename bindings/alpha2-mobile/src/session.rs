@@ -37,14 +37,15 @@ pub enum VideoDecodeMode {
     Software,
 }
 
-/// How decoded video frames reach the renderer.
+/// How video frames move between the platform's codecs and the renderer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
 pub enum VideoFrameMode {
-    /// Hardware-decoded frames stay on the GPU when the GPU renderer's device imports them;
-    /// otherwise frames are copied into memory.
+    /// Hardware-decoded frames stay on the GPU when the GPU renderer's device imports them, and
+    /// on iOS exported frames are rendered into the encoder's pixel buffers; otherwise frames
+    /// are copied through memory.
     #[default]
     Auto,
-    /// Frames are always copied into memory, as on devices without the import.
+    /// Frames are always copied through memory both ways, as on devices without the import.
     Cpu,
 }
 

@@ -240,7 +240,7 @@ fn refuses(name: &str) -> Option<&'static str> {
 fn apple() -> ContainerBackend {
     ContainerBackend::new(
         "apple",
-        Arc::new(AppleVideo),
+        Arc::new(AppleVideo::default()),
         Arc::new(WithPcm(AppleAudio)),
         refuses,
     )

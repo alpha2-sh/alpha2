@@ -97,7 +97,7 @@ Results are JSON strings in the library's own shapes, which are not the desktop 
 | --- | --- |
 | `capabilities()` | `hostVersion`, `os`, `osVersion`, `arch`, `renderer` (`gpu` or `cpu`), `gpu` (`adapter`, `backend`, `driver`, `softwareRasterizer`, or `unavailable` with the reason, or `null` under `RendererMode.CPU`), `features` (`extensions.svg`, `extensions.animated-image`, `extensions.lottie`, `extensions.exr`, `extensions.pdf`, `extensions.image-sequence`, `extensions.latex`, each `{available}`), `media` (`platform`: `android`, `containers`, `videoEncoders`, `audioEncoders`) |
 | `conform()` | `sources`: `{id, path, readable, reason}` each |
-| `outcome().reportJson` | `container`, `videoCodec`, `videoEncoder`, `hardwareEncoder`, `softwareRetry`, `audioCodec`, `audioEncoder`, `audioBitrate`, `renderer`, `gpuUnavailable` (why no GPU drew, when one was allowed), `surfaceFrames` (frames that stayed on the GPU), `decodeDiagnostics`, `frames`, `width`, `height` |
+| `outcome().reportJson` | `container`, `videoCodec`, `videoEncoder`, `hardwareEncoder`, `softwareRetry`, `audioCodec`, `audioEncoder`, `audioBitrate`, `renderer`, `gpuUnavailable` (why no GPU drew, when one was allowed), `surfaceFrames` (frames that stayed on the GPU), `surfaceFallbacks` and `framesRenderedInPlace` (0 on Android), `decodeDiagnostics`, `frames`, `width`, `height` |
 | `stills()` | `stills`: `{output, frameTime, width, height}` each, `renderer`, `gpuUnavailable` |
 
 ## Preview
