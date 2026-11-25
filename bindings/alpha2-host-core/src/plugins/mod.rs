@@ -163,8 +163,6 @@ pub mod slot_reasons {
     pub const NAME_TOO_LONG: &str = "name_too_long";
     /// A file whose name is not UTF-8.
     pub const NOT_UTF8: &str = "not_utf8";
-    /// This loader fills no slots.
-    pub const UNSUPPORTED: &str = "unsupported";
 }
 
 impl fmt::Display for PluginError {

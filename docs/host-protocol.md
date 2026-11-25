@@ -377,7 +377,7 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The answer to a `ca
 | `PLUGIN_LOAD_FAILED` | The manifest is not one (including a `url` outside its directory), or the artifact did not load (including a native table shorter than this host's or with a null entry). |
 | `PLUGIN_TRAPPED` | The wasm module trapped, the native plugin caught a panic at its boundary, or its worker ended without its reply (`details.exit` or `details.signal`) or broke the protocol (`details.wire`). |
 | `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or table bound, a plugin call (wasm, or native in a worker) ran past its deadline, or a native call inside the host did not return within three stall limits. |
-| `PLUGIN_RESOURCE_INVALID` | A file the request supplied for a resource slot does not fit it; `details` is `{ "slot", "reason" }`, the reason one of `missing`, `unknown_slot`, `shape`, `too_large`, `too_many_files`, `too_deep`, `name_too_long`, `not_utf8`, `unsupported`. |
+| `PLUGIN_RESOURCE_INVALID` | A file the request supplied for a resource slot does not fit it; `details` is `{ "slot", "reason" }`, the reason one of `missing`, `unknown_slot`, `shape`, `too_large`, `too_many_files`, `too_deep`, `name_too_long`, `not_utf8`. |
 | `HOST_RETIRING` | The host is `draining` and did not start the request; send it to another host. |
 | `INTERNAL` | A defect in the host or the engine failed the request. When the request panicked, the host drains with reason `defect`: requests running finish, and those it has read but not started and later ones are answered `HOST_RETIRING`. |
 | `ALPHA2_ERROR` | A failure no other code describes. |
