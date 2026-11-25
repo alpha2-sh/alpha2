@@ -68,6 +68,8 @@ fn the_retry_decisions_corpus() {
                 AttemptOutcome {
                     failure: AttemptFailure {
                         code: class(&failure["code"]),
+                        resource: MemoryResource::parse(&text(&failure["resource"]))
+                            .expect("a resource"),
                         phase: text(&failure["phase"]),
                         frame: failure["frameIndex"].as_u64(),
                         retry_after_ms: failure["retryAfterMs"].as_u64(),
