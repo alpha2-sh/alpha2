@@ -4,6 +4,7 @@
 members = [
     "sdk",
     "pack",
+    "first-party/beats",
     "first-party/scenes",
     "first-party/silence",
     "fixtures/digest",

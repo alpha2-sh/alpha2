@@ -7,6 +7,16 @@ name = "alpha2-plugin-abi"
 version = "0.7.0"
 
 [[package]]
+name = "alpha2-plugin-beats"
+version = "1.0.0"
+dependencies = [
+ "alpha2-plugin-abi",
+ "alpha2-plugin-sdk",
+ "rustfft",
+ "serde_json",
+]
+
+[[package]]
 name = "alpha2-plugin-fixture-digest"
 version = "0.7.0"
 dependencies = [

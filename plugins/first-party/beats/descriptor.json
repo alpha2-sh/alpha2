@@ -1,0 +1,76 @@
+{
+  "id": "alpha2.beats",
+  "version": 1,
+  "input": {
+    "media": "audio",
+    "from": ["source", "timeline"],
+    "format": "f32",
+    "sample_rate": 22050,
+    "channels": "mono",
+    "block_frames": 512
+  },
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "min_bpm": {
+        "type": "number",
+        "minimum": 30,
+        "maximum": 300,
+        "title": "Slowest tempo",
+        "description": "The slowest tempo the beats may have, in beats per minute. It must be below the fastest.",
+        "default": 60,
+        "x-alpha2-unit": "BPM",
+        "x-alpha2-step": 1,
+        "x-alpha2-order": 1
+      },
+      "max_bpm": {
+        "type": "number",
+        "minimum": 30,
+        "maximum": 300,
+        "title": "Fastest tempo",
+        "description": "The fastest tempo the beats may have, in beats per minute. It must be above the slowest.",
+        "default": 200,
+        "x-alpha2-unit": "BPM",
+        "x-alpha2-step": 1,
+        "x-alpha2-order": 2
+      },
+      "sensitivity": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "title": "Onset sensitivity",
+        "description": "How readily a rise in the onset envelope counts as an onset: higher finds softer notes.",
+        "default": 0.5,
+        "x-alpha2-display": "percent",
+        "x-alpha2-step": 0.05,
+        "x-alpha2-order": 3
+      }
+    },
+    "additionalProperties": false
+  },
+  "outputs": [
+    {
+      "name": "beats",
+      "kind": "intervals",
+      "suggest": "split_at",
+      "label": "Beats",
+      "description": "The beats at one steady tempo, each an instant scored 0 to 1 by the onset strength at the beat."
+    },
+    {
+      "name": "onsets",
+      "kind": "intervals",
+      "suggest": "split_at",
+      "label": "Onsets",
+      "description": "Where notes and hits start, each an instant scored 0 to 1 by its onset strength."
+    },
+    {
+      "name": "envelope",
+      "kind": "scalars",
+      "channels": ["onset", "rms"],
+      "interpolation": "linear",
+      "suggest": "bind",
+      "label": "Onset envelope",
+      "description": "Every 512 samples at 22050 Hz: onset, the spectral flux, and rms, the loudness, each divided by its largest value in the range, so 0 to 1."
+    }
+  ]
+}
