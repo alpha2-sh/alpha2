@@ -23,7 +23,6 @@ export const MAX_SLOT_DEPTH = 8;
  */
 export type SuppliedSource = File | FileSystemDirectoryHandle | readonly File[];
 
-/** One file a slot offers. */
 interface Offered {
   readonly slot: string;
   readonly file: File;
@@ -78,7 +77,6 @@ const isDirectoryHandle = (
   (value as { kind?: unknown }).kind === "directory" &&
   typeof (value as { entries?: unknown }).entries === "function";
 
-/** Each file under `handle` by its path below it, in the walk's order. */
 async function walkHandle(
   slot: string,
   handle: FileSystemDirectoryHandle,
@@ -120,7 +118,6 @@ async function walkHandle(
   }
 }
 
-/** The files a directory picker gave, by their path below the picked directory. */
 function pickedFiles(slot: string, files: readonly File[]): [string[], File][] {
   const found: [string[], File][] = [];
   for (const file of files) {
@@ -246,7 +243,6 @@ export async function resolveSupplied(
   return { files, context };
 }
 
-/** Bytes read from a file at a time, and hashed as they arrive. */
 const READ_STEP_BYTES = 8 * 1024 * 1024;
 
 type SyncReader = { readAsArrayBuffer(blob: Blob): ArrayBuffer };

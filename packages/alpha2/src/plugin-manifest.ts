@@ -141,7 +141,7 @@ export interface PluginManifest {
 
 type Json = Record<string, unknown>;
 
-/** Why a manifest is refused, as `ManifestError::Invalid`. */
+/** Mirrors `ManifestError::Invalid`. */
 class Invalid extends Error {}
 
 const fail = (why: string): never => {
@@ -166,7 +166,6 @@ function fields(
   return value;
 }
 
-/** A serde `Option`: absent and `null` are both none. */
 function optional(value: unknown): unknown {
   return value === null ? undefined : value;
 }
@@ -538,7 +537,6 @@ function checkDescriptor(descriptor: ExtractorDescriptor): void {
     fail("block_frames or sample_rate out of range");
 }
 
-/** Reads a descriptor as the engine does, with the defaults it fills in. */
 function readDescriptor(value: unknown): ExtractorDescriptor {
   const descriptor = fields(
     value,
