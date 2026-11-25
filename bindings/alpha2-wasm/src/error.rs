@@ -32,7 +32,7 @@ impl Code {
     pub(crate) const GPU_DEVICE_HUNG: Self = Self::Engine(ErrorCode::GpuDeviceHung);
     pub(crate) const GPU_TIMEOUT: Self = Self::Engine(ErrorCode::GpuTimeout);
     /// A failure of the binding's own steps, not of the caller's input.
-    pub(crate) const INTERNAL: Self = Self::Engine(ErrorCode::Alpha2Error);
+    pub(crate) const ALPHA2_ERROR: Self = Self::Engine(ErrorCode::Alpha2Error);
 
     /// Every code the binding makes.
     #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -129,7 +129,7 @@ impl BindingError {
 
     pub(crate) fn typed<E: EngineTyped>(error: &E) -> Self {
         Self::new(
-            ErrorCode::of(error).map_or(Code::INTERNAL, Code::Engine),
+            ErrorCode::of(error).map_or(Code::ALPHA2_ERROR, Code::Engine),
             error.to_string(),
         )
     }
@@ -177,7 +177,7 @@ mod tests {
             Code::Engine(ErrorCode::EncodeError),
             Code::GPU_TIMEOUT,
             Code::Engine(ErrorCode::Internal),
-            Code::INTERNAL,
+            Code::ALPHA2_ERROR,
             Code::InvalidState,
             Code::ResourceLimit,
             Code::GpuInitFailed,
@@ -278,7 +278,7 @@ mod tests {
         let rejected = BindingError::typed(&RenderError::Gpu {
             kind: alpha2_gpu::GpuErrorKind::Validation,
         });
-        assert_eq!(rejected.code, Code::INTERNAL);
+        assert_eq!(rejected.code, Code::ALPHA2_ERROR);
         assert!(!rejected.fatal());
     }
 }
