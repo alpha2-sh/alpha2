@@ -7,8 +7,13 @@
 //! documented only with the `wgpu-interop` feature, track `wgpu`'s major version, and are
 //! otherwise hidden and not part of this crate's API.
 
-// Its thread locals are `const`; clippy misreads the emulated-TLS expansion used on Android.
-#![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
+#![cfg_attr(
+    target_os = "android",
+    expect(
+        clippy::missing_const_for_thread_local,
+        reason = "clippy misreads the emulated-TLS expansion of `const` thread locals on Android"
+    )
+)]
 
 mod backend;
 mod bind_group;

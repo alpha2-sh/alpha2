@@ -659,9 +659,9 @@ fn a_readback_maps_no_more_than_the_frame_its_encoder_takes() {
         let layout = alpha2_media::PixelLayout::from_ffmpeg_name(name).expect("layout");
         let staging = crate::frames::estimated_staging_bytes(size, layout);
         let packed = layout.frame_bytes(size.width, size.height);
-        // A tenth covers rows padded to the copy alignment, plane placement and the canary.
+        let padding_placement_and_canary = packed / 10;
         assert!(
-            staging <= packed + packed / 10,
+            staging <= packed + padding_placement_and_canary,
             "{name}: {staging} bytes mapped for a {packed}-byte frame"
         );
     }

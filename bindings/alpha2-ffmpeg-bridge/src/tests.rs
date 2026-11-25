@@ -186,8 +186,6 @@ fn plane_sum(plane: &[u8]) -> u64 {
     plane.iter().map(|byte| u64::from(*byte)).sum()
 }
 
-/// A frame an encoder still references keeps its pixels; the next write goes to fresh, fully
-/// written memory with the same layout, without the old picture.
 #[test]
 fn a_frame_buffer_an_encoder_still_holds_is_moved_away_before_it_is_rewritten() {
     let mut buffer = Yuv420pFrameBuffer::new(6, 4).expect("buffer");

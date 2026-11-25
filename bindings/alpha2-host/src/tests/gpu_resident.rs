@@ -1483,7 +1483,6 @@ fn assert_gpu_time_reported(case: &str, performance: &Value, gpu: bool, timestam
         .as_str()
         .is_some_and(|reason| reason.contains("did not advance"));
     if timestamps && !flat {
-        // Thirty frames, every eighth sampled: four, at least the first read back before the end.
         let sampled = performance["gpuTimeSampledFrames"].as_u64().unwrap_or(0);
         assert!((1..=4).contains(&sampled), "{case}: {performance}");
         assert!(

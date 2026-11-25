@@ -37,13 +37,15 @@ impl EncodedVideoFilter {
     /// # Errors
     /// Fails for a codec other than H.264, HEVC or AV1, or when a filter is
     /// missing or refuses the stream.
-    // Used by the D3D12VA and Vulkan HEVC backends (Windows and Linux only) and the tests.
     #[cfg_attr(
         not(any(
             test,
             all(feature = "hwencode", any(target_os = "windows", target_os = "linux"))
         )),
-        allow(dead_code)
+        expect(
+            dead_code,
+            reason = "only the D3D12VA and Vulkan HEVC backends and the tests open an in-band chain"
+        )
     )]
     pub(crate) fn in_band(
         parameters: &AVCodecParameters,
