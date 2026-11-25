@@ -4,15 +4,17 @@
 //!
 //! ```text
 //! cargo run -p alpha2-plugin-pack -- <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
+//! cargo run -p alpha2-plugin-pack -- merge <pack-dir> <pack-dir>... --out <dir>
 //! ```
 //!
 //! The plugin crate has `descriptor.json` at its root; files under `resources/` are copied, and
 //! `resources.json` lists entries written to the manifest as they are: resources hosted elsewhere
 //! (`name`, `url`, `sha256`, `bytes`) and slots the caller fills (`name`, `supplied`);
 //! `about.json`, when present, is written as the manifest's `about`. Native targets default to the
-//! host's. Nothing is uploaded.
+//! host's. `merge` joins packs of one plugin made on several machines. Nothing is uploaded.
 
 mod check;
+mod merge;
 mod notices;
 
 use std::path::{Path, PathBuf};
@@ -26,7 +28,8 @@ const WASM_RUSTFLAGS: &str =
     "-Ctarget-feature=-relaxed-simd --cfg getrandom_backend=\"unsupported\"";
 
 const USAGE: &str =
-    "usage: alpha2-plugin-pack <plugin-dir> --out <dir> [--target <triple>]... [--no-native]";
+    "usage: alpha2-plugin-pack <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
+       alpha2-plugin-pack merge <pack-dir> <pack-dir>... --out <dir>";
 
 struct Options {
     plugin: PathBuf,
@@ -35,8 +38,32 @@ struct Options {
     native: bool,
 }
 
-fn options() -> Result<Options, String> {
-    let mut args = std::env::args().skip(1);
+enum Job {
+    Pack(Options),
+    Merge { inputs: Vec<PathBuf>, out: PathBuf },
+}
+
+fn job() -> Result<Job, String> {
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().map(String::as_str) != Some("merge") {
+        return options(args).map(Job::Pack);
+    }
+    args.next();
+    let (mut inputs, mut out) = (Vec::new(), None);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--out" => out = args.next().map(PathBuf::from),
+            _ if !arg.starts_with('-') => inputs.push(PathBuf::from(arg)),
+            _ => return Err(USAGE.to_owned()),
+        }
+    }
+    Ok(Job::Merge {
+        inputs,
+        out: out.ok_or(USAGE)?,
+    })
+}
+
+fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let (mut plugin, mut out, mut targets, mut native) = (None, None, Vec::new(), true);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -269,7 +296,11 @@ fn manifest_text(mut manifest: Value, descriptor: &str) -> Result<String, String
 }
 
 fn main() -> ExitCode {
-    match options().and_then(|options| pack(&options)) {
+    let done = job().and_then(|job| match job {
+        Job::Pack(options) => pack(&options),
+        Job::Merge { inputs, out } => merge::merge(&inputs, &out),
+    });
+    match done {
         Ok(path) => {
             println!("{}", path.display());
             ExitCode::SUCCESS

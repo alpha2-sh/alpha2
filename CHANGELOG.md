@@ -162,6 +162,12 @@ All notable changes to this project are documented in this file.
   `x-alpha2-order`, `x-alpha2-group`, `x-alpha2-advanced`), which every params check ignores.
 - `alpha2.silence` 1.1.0 carries its `about`, an output label and annotated params. Its outputs
   are unchanged (`descriptor.version` 1).
+- `alpha2-plugin-pack merge <pack-dir>... --out <dir>` joins packs of one plugin made on several
+  machines: the first pack's manifest, wasm artifact, resources and licences with the native
+  artifacts of the others. It refuses packs of another id, version, descriptor, about, resources
+  or licences, a target two packs have, and a file that differs from what its manifest pins.
+- `alpha2.silence` 1.1.1 is 1.1.0 with no code change, to be published with macOS and Windows
+  native artifacts beside the Linux one.
 - `alpha2/plugins` exports `parsePluginManifest`, which checks a manifest by the engine loaders'
   rules without fetching anything, the `PluginManifest` types and the manifest limits
   (`MAX_MANIFEST_BYTES`, `MAX_PLUGIN_*`, `MAX_ABOUT_*`); `LoadedPlugin` gains `about`, and
