@@ -263,7 +263,27 @@ fn alive(pid: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "asks Windows for a process's exit code")]
+fn alive(pid: &str) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let pid = pid.trim().parse::<u32>().expect("a process id");
+    // SAFETY: `OpenProcess` takes plain values and returns a new handle or null.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let mut code = 0_u32;
+    // SAFETY: `handle` is open and `code` outlives the call, which writes only it.
+    let queried = unsafe { GetExitCodeProcess(handle, &raw mut code) };
+    // SAFETY: `handle` is open and closed once here.
+    unsafe { CloseHandle(handle) };
+    queried != 0 && code == STILL_ACTIVE.cast_unsigned()
+}
+
 fn gone_within(pid: &str, wait: Duration) -> bool {
     let started = Instant::now();
     while started.elapsed() < wait {
@@ -275,7 +295,6 @@ fn gone_within(pid: &str, wait: Duration) -> bool {
     false
 }
 
-#[cfg(unix)]
 #[test]
 fn nothing_the_plugin_started_survives_the_kill_at_the_deadline() {
     let pid_file = scratch("isolated-spawn").join("pid");
@@ -291,7 +310,6 @@ fn nothing_the_plugin_started_survives_the_kill_at_the_deadline() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn nothing_the_plugin_started_survives_its_worker_crashing_or_ending() {
     for then in ["abort", "return"] {
@@ -323,7 +341,6 @@ fn run_a_host_whose_worker_sleeps() {
     let _ = run(&mut plugin, &params);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_worker_whose_host_was_killed_ends() {
     let report = scratch("isolated-orphan").join("report");
@@ -360,6 +377,47 @@ fn a_worker_whose_host_was_killed_ends() {
         gone_within(&pid, Duration::from_secs(5)),
         "worker {pid} outlived its host"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_file_the_host_held_open_while_its_worker_started_can_be_renamed_while_the_worker_lives() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    let dir = scratch("isolated-rename");
+    let held = dir.join("model.bin");
+    std::fs::write(&held, b"weights").expect("file");
+    let open = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&held)
+        .expect("open");
+    let report = dir.join("report");
+    let params = json!({ "report": report, "sleep_at": 0 });
+    let mut plugin = loaded(
+        &manifest(1, false, true),
+        &params,
+        &with_deadline(isolated(), Duration::from_secs(10)),
+    )
+    .expect("loads");
+    let renamed = std::thread::scope(|scope| {
+        let renaming = scope.spawn(|| {
+            let started = Instant::now();
+            while !report.exists() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(60),
+                    "the worker never reported"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            drop(open);
+            std::fs::rename(&held, dir.join("renamed.bin"))
+        });
+        let error = failure(run(&mut plugin, &params));
+        assert_eq!(error.code, Some(codes::LIMIT), "{error:?}");
+        renaming.join().expect("the renaming thread")
+    });
+    renamed.expect("the worker holds no handle to the file");
 }
 
 /// The descriptors an isolated scripted run's worker holds at `begin`.
