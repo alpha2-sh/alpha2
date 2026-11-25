@@ -26,9 +26,11 @@ use std::process::{Command, ExitCode};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-/// The flags every wasm artifact is built with.
-const WASM_RUSTFLAGS: &str =
-    "-Ctarget-feature=+simd128,-relaxed-simd --cfg getrandom_backend=\"unsupported\"";
+const WASM_RUSTFLAGS: [&str; 3] = [
+    "-Ctarget-feature=+simd128,-relaxed-simd",
+    "--cfg",
+    "getrandom_backend=\"unsupported\"",
+];
 
 const NATIVE_BUILD_ENV: [(&str, &str); 2] = [("GGML_NATIVE", "OFF"), ("GGML_CCACHE", "OFF")];
 
@@ -116,13 +118,60 @@ fn cargo() -> Command {
     Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
 }
 
-fn host_triple() -> Result<String, String> {
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    run(Command::new(rustc).arg("-vV"))?
+fn rustc() -> Command {
+    Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+}
+
+fn rustc_version(field: &str) -> Result<String, String> {
+    run(rustc().arg("-vV"))?
         .lines()
-        .find_map(|line| line.strip_prefix("host: "))
+        .find_map(|line| line.strip_prefix(field)?.strip_prefix(": "))
         .map(str::to_owned)
-        .ok_or_else(|| "rustc -vV names no host".to_owned())
+        .ok_or_else(|| format!("rustc -vV names no {field}"))
+}
+
+fn host_triple() -> Result<String, String> {
+    rustc_version("host")
+}
+
+fn local_root(metadata: &Value) -> Option<PathBuf> {
+    let mut directories = metadata["packages"]
+        .as_array()?
+        .iter()
+        .filter(|package| package["source"].is_null())
+        .filter_map(|package| Path::new(package["manifest_path"].as_str()?).parent());
+    let first = directories.next()?.to_owned();
+    let root = directories.try_fold(first, |root, directory| {
+        root.ancestors()
+            .find(|ancestor| directory.starts_with(ancestor))
+            .map(Path::to_owned)
+    })?;
+    root.parent().is_some().then_some(root)
+}
+
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| Some(std::env::home_dir()?.join(".cargo")))
+}
+
+/// rustc applies the last `--remap-path-prefix` that matches, so a nested directory comes later.
+fn path_prefixes(metadata: &Value, target_dir: &Path) -> Result<Vec<(PathBuf, String)>, String> {
+    let sysroot = PathBuf::from(run(rustc().args(["--print", "sysroot"]))?.trim());
+    let commit = rustc_version("commit-hash")?;
+    let mut prefixes = Vec::new();
+    if let Some(root) = local_root(metadata) {
+        prefixes.push((root, "/alpha2".to_owned()));
+    }
+    if let Some(home) = cargo_home() {
+        prefixes.push((home, "/cargo".to_owned()));
+    }
+    prefixes.push((
+        sysroot.join("lib").join("rustlib").join("src").join("rust"),
+        format!("/rustc/{commit}"),
+    ));
+    prefixes.push((target_dir.to_owned(), "/target".to_owned()));
+    Ok(prefixes)
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {
@@ -160,19 +209,43 @@ fn native_file(library: &str, target: &str) -> String {
     }
 }
 
-fn build(manifest: &Path, target: &str, wasm: bool) -> Result<(), String> {
+fn build(
+    manifest: &Path,
+    target: &str,
+    wasm: bool,
+    prefixes: &[(PathBuf, String)],
+) -> Result<(), String> {
     let mut command = cargo();
     command.args(["build", "--release", "--target", target, "--manifest-path"]);
     command.arg(manifest);
+    let mut rustflags: Vec<String> = Vec::new();
     if wasm {
         // Relaxed SIMD results differ between runtimes; the target never enables threads. A
         // plugin has no randomness, so getrandom reports it unsupported instead of importing it.
-        command.env(
-            "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS",
-            WASM_RUSTFLAGS,
-        );
+        rustflags.extend(WASM_RUSTFLAGS.map(str::to_owned));
     } else {
         command.envs(NATIVE_BUILD_ENV);
+    }
+    let mut cflags = Vec::new();
+    for (from, to) in prefixes {
+        let from = from
+            .to_str()
+            .ok_or_else(|| format!("{} is not UTF-8", from.display()))?;
+        rustflags.push(format!("--remap-path-prefix={from}={to}"));
+        if !from.contains(char::is_whitespace) {
+            cflags.push(format!("-ffile-prefix-map={from}={to}"));
+        }
+    }
+    command.env("CARGO_ENCODED_RUSTFLAGS", rustflags.join("\u{1f}"));
+    if !wasm && !target.contains("msvc") {
+        for variable in ["CFLAGS", "CXXFLAGS"] {
+            let given = std::env::var(variable).unwrap_or_default();
+            let flags = std::iter::once(given.as_str())
+                .chain(cflags.iter().map(String::as_str))
+                .filter(|flag| !flag.is_empty())
+                .collect::<Vec<_>>();
+            command.env(variable, flags.join(" "));
+        }
     }
     run(&mut command).map(drop)
 }
@@ -271,10 +344,11 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
         ));
     }
 
+    let prefixes = path_prefixes(&metadata, &target_dir)?;
     std::fs::create_dir_all(&options.out).map_err(|error| error.to_string())?;
     let mut artifacts = Vec::new();
     if wasm {
-        build(&manifest_path, "wasm32-unknown-unknown", true)?;
+        build(&manifest_path, "wasm32-unknown-unknown", true, &prefixes)?;
         let module =
             read(&target_dir.join(format!("wasm32-unknown-unknown/release/{library}.wasm")))?;
         check::wasm_module(&module)?;
@@ -288,7 +362,7 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
         targets.push(host_triple()?);
     }
     for target in targets.iter().filter(|_| options.native) {
-        build(&manifest_path, target, false)?;
+        build(&manifest_path, target, false, &prefixes)?;
         let file = native_file(&library, target);
         let bytes = read(&target_dir.join(target).join("release").join(&file))?;
         let mut entry = place(&options.out, &format!("{target}/{file}"), &bytes)?;
