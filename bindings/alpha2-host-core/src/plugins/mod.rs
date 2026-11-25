@@ -855,12 +855,6 @@ fn transport(
 }
 
 impl PluginExtractor {
-    /// Whether the plugin is a native library.
-    #[must_use]
-    pub const fn is_native(&self) -> bool {
-        self.native
-    }
-
     /// Whether its calls end at the policy's call deadline: a wasm module's, and an isolated
     /// native library's; a native call in this process runs to its end.
     #[must_use]

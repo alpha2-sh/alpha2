@@ -713,6 +713,47 @@ fn a_cancel_stops_a_hung_native_call_in_its_worker() {
 }
 
 #[test]
+fn a_native_call_in_its_worker_outlasts_the_request_stall_limit() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-isolated-stall");
+    let (manifest, sha256) = plugin_dir(&dir, "scripted", false, true);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_REQUEST_STALL_MS", "200"),
+            (
+                "ALPHA2_TEST_SERVE_ARGS",
+                "--plugins native --plugin-call-timeout 3000",
+            ),
+        ],
+    );
+    let started = Instant::now();
+    serving.write(&scripted_native(
+        "hang",
+        &manifest,
+        &sha256,
+        &json!({ "sleep_at": 1 }),
+    ));
+    let response = answer(&serving, "hang");
+    assert_eq!(response["error"]["code"], "PLUGIN_LIMIT", "{response}");
+    assert_eq!(response["hostState"], "ready", "{response}");
+    assert!(
+        started.elapsed() >= Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    serving.write(&scripted_native(
+        "ok",
+        &manifest,
+        &sha256,
+        &json!({ "per_delivery": [[{ "output": "levels", "time": 0, "values": [1, 2] }]] }),
+    ));
+    let ok = answer(&serving, "ok");
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
 fn a_native_plugin_in_process_still_runs_when_the_operator_asks() {
     let _gpu = gpu_test_lock();
     let dir = scratch_directory("plugin-in-process");

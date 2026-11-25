@@ -591,7 +591,7 @@ pub fn handle(
             run_plugin(
                 session,
                 &mut supplier,
-                (plugin.is_native(), plugin),
+                (!plugin.calls_are_bounded(), plugin),
                 out,
                 &request_id,
                 &cancel,
