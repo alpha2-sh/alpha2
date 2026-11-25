@@ -2,7 +2,109 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.7.0] - 2026-11-24
+## [0.7.0] - 2026-11-26
+
+### Added
+
+- Resource slots: a plugin can load a model the user already has on disk. A request fills a slot
+  with `plugin.supplied` (host protocol; `supplied` in the Node and Python plugin specs and in the
+  mobile `Plugin.load`); `alpha2-host` takes such files only within `--plugin-resource-root`
+  (`none` by default, `any` or a directory). A directory slot offers its files by relative name,
+  through links, so a Hugging Face snapshot works as it is. Files are read and hashed only when
+  the plugin asks for them, and a native plugin can ask for a path (`resource_path`) for runtimes
+  that open or map a model themselves. The new code `PLUGIN_RESOURCE_INVALID` names the slot and
+  the reason on every surface.
+- `alpha2_host_core::plugins::Isolation::Child` and `plugins::worker::main` let another Rust
+  program run native plugins in a worker process of its own.
+- The Node and Python clients' `plugins` option gains `isolation` and `resourceRoot`
+  (`resource_root`), and their errors gain `details`.
+- A plugin manifest may carry `about` (`name`, `summary`, `author`, `homepage`, `license`) and an
+  output `label` and `description`, plain text for interfaces that the engine ignores; Rust reads
+  them as `PluginManifest::about` and `OutputSpec::label` / `description`, the mobile `Plugin` as
+  `aboutJson()`. A loader before this release refuses a manifest that has them. `pack` writes a
+  plugin crate's `about.json` as the manifest's `about`, and its notices also carry the license
+  files one directory below a dependency's root.
+- `docs/plugin-abi.md` lists the interface annotations a `params_schema` may carry (`title`,
+  `description`, `default`, `x-alpha2-unit`, `x-alpha2-step`, `x-alpha2-display` (`percent`,
+  `seconds`, `db`, and `box` or `point` for object params picked on the picture),
+  `x-alpha2-order`, `x-alpha2-group`, `x-alpha2-advanced`), which every params check ignores.
+- `alpha2.silence` 1.1.1 carries its `about`, an output label and annotated params, and is
+  published with macOS and Windows native artifacts beside the Linux one. Its outputs are
+  unchanged (`descriptor.version` 1).
+- `alpha2-plugin-pack merge <pack-dir>... --out <dir>` joins packs of one plugin made on several
+  machines: the first pack's manifest, wasm artifact, resources and licenses with the native
+  artifacts of the others. It refuses packs of another id, version, descriptor, about, resources
+  or licenses, a target two packs have, and a file that differs from what its manifest pins.
+- `alpha2.scenes` 1.0.0 finds the cuts between shots as instants (`cuts`, `suggest: split_at`)
+  and the stretches of black (`black`, `suggest: remove_ranges`) in a video, each with a `score`.
+  It compares 4x4 grids of luma histograms by earth mover's distance against a threshold that
+  adapts to recent motion and requires a cut to stand out from its neighbors, so fades,
+  dissolves, flashes and camera noise do not cut. Params: `sensitivity`, `min_scene_ms`,
+  `black_level`, `min_black_ms`.
+- `alpha2.beats` 1.0.0 finds the beats and onsets in music as instants (`beats`, `onsets`) with a 0
+  to 1 `score` (`suggest: split_at`), with an onset and loudness `envelope` (`scalars` `onset` and
+  `rms`, normalized over the range, `suggest: bind`): log spectral flux, an autocorrelation tempo
+  within `min_bpm`..`max_bpm` and dynamic-programming beat tracking; `sensitivity` sets the onset
+  threshold.
+- `alpha2.track` 1.0.0 follows a box picked on one frame (`region`) through the frames each pass
+  delivers, forward and backward, from sources or the timeline: its center (`center`, points) and
+  its translation, rotation and scale from the picked frame (`motion`, similarity), both suggested
+  for binding, with frames whose box no longer matches the picked one by `confidence` marked
+  lost.
+- `alpha2.transcribe` 1.0.0 finds the words spoken in audio and their times, from a whisper.cpp
+  ggml model the caller supplies in its `model` slot (none is pinned), run natively on the CPU
+  with whisper.cpp linked in, in any ISO 639-1 language whisper knows or `auto`. It transcribes
+  30 s windows as audio arrives and joins their overlaps without repeating them; it has no wasm
+  artifact.
+- A plugin crate opts out of wasm with `wasm = false` under `[package.metadata.alpha2-plugin]`:
+  `alpha2-plugin-pack` then builds native artifacts only and refuses `--no-native`, and
+  `scripts/pack-plugins.sh --no-native` leaves the crate out.
+- `alpha2/plugins` exports `parsePluginManifest`, which checks a manifest by the engine loaders'
+  rules without fetching anything, the `PluginManifest` types and the manifest limits
+  (`MAX_MANIFEST_BYTES`, `MAX_PLUGIN_*`, `MAX_ABOUT_*`); `LoadedPlugin` gains `about`, and
+  `loadPlugin` takes `onProgress`, called as each pinned file arrives.
+- `bridge.extract` takes a plugin the app loaded with `loadPlugin`, which many runs share, or a
+  `fetch` beside the manifest; its `onProgress` reports the plugin's files (`phase: "load"`).
+- `bridge.extractCapabilities()` says what `bridge.extract` runs (the inputs of each media, the
+  artifacts, whether it fills resource slots), and `pluginProblem(manifest, capabilities)` in
+  `alpha2/plugins` says why a plugin would not run there. A host's `capabilities` result reports
+  its plugin policy as `plugins` (`mode`, `slots`, `isolation`), typed in `@alpha2-sh/node`.
+- `bridge.extract` reads the timeline: it draws the frames an extractor asks for on a CPU renderer
+  of its own at export quality, the bytes every surface reads timeline frames as. Timeline audio
+  is not supplied (`INVALID_INPUT`), as on the native hosts, and a timeline that draws runtime
+  effects is refused, since the CPU renderer cannot draw them.
+- The browser fills a plugin's resource slots: `loadPlugin(manifest, sha256, { supplied })` takes a
+  `File` for a `file` slot and a directory handle or a directory picker's files for a `directory`
+  slot, checked with the native loaders' limits and reasons, and the run records the files it
+  read in `made_by.plugin.supplied`. `bridge.extract` passes `plugin.supplied` on.
+- `bridge.extract` runs a plugin in a worker when `runtimeAssets.extractWorkerFactory` makes one
+  running the new `@alpha2-sh/editor/extract-worker` entry, so a long extraction no longer holds
+  the page's thread; a cancel terminates the worker at once. `transferablePlugin` and
+  `restorePlugin` in `alpha2/plugins` hand a loaded plugin to a worker without fetching or
+  compiling it again.
+- `bindableProperties(project, owner)` in `alpha2/project` lists the properties of a clip, track,
+  transition, composition node or the master bus that data can be bound to, in the path syntax of
+  `dataReferences` and `bake`, with the data kinds each reads.
+- `alpha2_engine::extract`: an extractor may offer memory for the next frame
+  (`Extractor::frame_buffer`, `None` by default), which a supplier fills through
+  `Supplier::frame_into` and `FramePlace` (by default it supplies as `frame` does) and the session
+  through `ExtractSession::supply_placed_video` and `supply_video_into`; `supply_frame` answers a
+  frame need that way, as `drive` does, and `present_for_extraction_into` presents a decoded
+  frame into such memory.
+- The browser bridge imports, relinks and reads image sequence frames from media references,
+  `{ url, name, path? }` whose URL answers `Range` requests, in place of a `File`: every reader of
+  the media (probing, hashing, preview and its workers, proxies, extraction, browser export) reads
+  it by range. `alpha2/mediabunny` inputs and `alpha2/media` container readers also take a
+  `RangeReader` (`size`, `read(start, end)`), and `sha256Blob` anything with `stream()`.
+- A native export reads a referenced file by its `path` instead of uploading it: `nativeAssets`
+  gives `{ path }` for it, and the native client sends such assets in the render request's
+  `paths` (`{ [kind]: { [id]: path } }`) without an upload. `NativeAsset` has either `blob` or
+  `path`.
+- `bridge.putProviderSource` takes `then`: commands, or a function of the new source's ID and
+  opened size returning them, committed in the same undo step as the source, such as the clip that
+  places it.
+- `failureClassOfHttpStatus` in `alpha2/export-failure` classifies an export service's HTTP error
+  status: 413 `RESOURCE_LIMIT`, 429 and 503 `RESOURCE_BUSY`, 507 `STORAGE_QUOTA_EXCEEDED`.
 
 ### Changed
 
@@ -21,13 +123,14 @@ All notable changes to this project are documented in this file.
   release is refused and extracted again) and `supplied`, the slot files the run read by name,
   SHA-256 and length, never by path.
 - **Breaking:** `alpha2_host_core::plugins::load` takes a `LoadRequest` (manifest, its SHA-256,
-  params and the supplied slot paths); `Policy` gains `resource_root` (default `None`: no slot may
-  be filled) and `isolation` (default `InProcess`); `PluginExtractor::made_by` returns the
-  provenance with the files read, complete once the run has ended; `PluginError` and
+  params and the supplied slot paths); `Policy` gains `resource_root` (default `ResourceRoot::None`:
+  no slot may be filled) and `isolation` (default `InProcess`); `PluginExtractor::made_by` returns
+  the provenance with the files read, complete once the run has ended; `PluginError` and
   `ExtractorError` gain `details`. A native artifact's `Fetch::prepare_native` is called for every
   isolated run.
 - **Breaking:** `HostV1` gains `resource_path`, appended under the growth rule; the SDK takes a host
-  table down to `HOST_V1_BASE_BYTES` and its `Context` gains `supplied`. The mobile
+  table down to `HOST_V1_BASE_BYTES` (`ALPHA2_HOST_V1_BASE_SIZE` in the C header, which tests an
+  appended field with `ALPHA2_HOST_HAS`) and its `Context` gains `supplied`. The mobile
   `Plugin.load` takes `supplied`, and `Alpha2Error::Failed` gains `details`.
 - **Breaking:** `GpuSubmissionStats` gains `over_budget` (submissions still predicted over the
   submission budget, which the planner cuts passes to avoid) and `budget_ms`; the host's and the
@@ -42,9 +145,6 @@ All notable changes to this project are documented in this file.
   BT.709 on import, as BT.2020 sources are, instead of being read as BT.709. `ColorPrimaries` gains
   `DisplayP3` (`display_p3` in projects). Under the BT.709 output their pictures are neither
   transcoded nor packet-copied, and the packs refuse a Display P3 output color.
-- **Breaking:** `alpha2-render` no longer exports `SdrOutputTransfer` or `encode_linear_rgb`.
-  Nothing outside tests called them, and the export path never applied either curve: it writes
-  the working space's sRGB-coded values and tags them BT.709.
 - **Breaking:** effect and composite passes round their results to the nearest half float, ties to
   even, before the intermediate stores them, and full edge coverage is computed exactly (one minus
   what the edges cut off). Stored values no longer drift down with every composite, blur, transition
@@ -101,16 +201,14 @@ All notable changes to this project are documented in this file.
 - **Breaking:** `alpha2_host_core::export::export_video` takes the renderer together with
   optional `EncoderTargets`; `VideoEncodeBackend` and `VideoSink` gain `lender`, which lends
   encoder input buffers (`LentBuffer`, `PoolLender`, `SinkLender`).
-- **Breaking:** a native plugin in a worker process gets its video frames through memory its host
-  shares with that worker alone, read-only there, instead of through the worker's pipe; the host
-  presents each delivered frame straight into that memory, so a 1080p RGBA frame is neither
-  copied nor sent through the kernel on its way to the plugin. Where the memory cannot be made
-  or mapped, the run goes on through the pipe and the host writes one diagnostic. A plugin that
-  writes into its input frame, which the ABI never allowed, now fails its run with
-  `PLUGIN_TRAPPED`. On Linux and macOS the worker's standard input and output are one Unix
-  socket. In Rust, `WorkerCommand` gains `frames` (`FramePath::Shared`, or `FramePath::Pipe` to
-  compare), and `alpha2-os` gains `SharedRegion`, `MappedRegion`, `write_with_descriptor` and
-  `DescriptorReader`.
+- A native plugin in a worker process reads its video frames from memory the host shares with that
+  worker alone, read-only there: the host presents each delivered frame straight into that memory,
+  so a 1080p RGBA frame is not copied on its way to the plugin. Where that memory cannot be made
+  or mapped, the run goes through the worker's pipe and the host writes one diagnostic. On the
+  shared path a plugin that writes into its input frame, which the ABI never allowed, fails its
+  run with `PLUGIN_TRAPPED`. In Rust, `WorkerCommand::frames` (`FramePath::Shared` or
+  `FramePath::Pipe`) chooses the path, and `alpha2-os` gains `SharedRegion`, `MappedRegion`,
+  `write_with_descriptor` and `DescriptorReader`.
 - A GPU frame writes its uniforms (each source's conversion, the graph's passes and the YUV or
   NV12 pack) into one buffer with one queue write, where each conversion and the pack had a buffer
   and a write of their own.
@@ -138,95 +236,11 @@ All notable changes to this project are documented in this file.
   instead of reading it back; the report's `framesRenderedInPlace` counts them.
   `VideoFrameMode.cpu` turns both off.
 
-### Added
-
-- Resource slots: a plugin can load a model the user already has on disk. A request fills a slot
-  with `plugin.supplied` (host protocol; `supplied` in the Node and Python plugin specs and in the
-  mobile `Plugin.load`); `alpha2-host` takes such files only within `--plugin-resource-root`
-  (`none` by default, `any` or a directory). A directory slot offers its files by relative name,
-  through links, so a Hugging Face snapshot works as it is. Files are read and hashed only when
-  the plugin asks for them, and a native plugin can ask for a path (`resource_path`) for runtimes
-  that open or map a model themselves. The new code `PLUGIN_RESOURCE_INVALID` names the slot and
-  the reason; the browser refuses a required slot with it.
-- `alpha2_host_core::plugins::Isolation::Child` and `plugins::worker::main` let another Rust
-  program run native plugins in a worker process of its own.
-- The Node and Python clients' `plugins` option gains `isolation` and `resourceRoot`
-  (`resource_root`), and their errors gain `details`.
-- A plugin manifest may carry `about` (`name`, `summary`, `author`, `homepage`, `license`) and an
-  output `label` and `description`, plain text for interfaces that the engine ignores; Rust reads
-  them as `PluginManifest::about` and `OutputSpec::label` / `description`, the mobile `Plugin` as
-  `aboutJson()`. A loader before this release refuses a manifest that has them. `pack` writes a
-  plugin crate's `about.json` as the manifest's `about`.
-- `docs/plugin-abi.md` lists the interface annotations a `params_schema` may carry (`title`,
-  `description`, `default`, `x-alpha2-unit`, `x-alpha2-step`, `x-alpha2-display`,
-  `x-alpha2-order`, `x-alpha2-group`, `x-alpha2-advanced`), which every params check ignores.
-- `alpha2.silence` 1.1.0 carries its `about`, an output label and annotated params. Its outputs
-  are unchanged (`descriptor.version` 1).
-- `alpha2-plugin-pack merge <pack-dir>... --out <dir>` joins packs of one plugin made on several
-  machines: the first pack's manifest, wasm artifact, resources and licences with the native
-  artifacts of the others. It refuses packs of another id, version, descriptor, about, resources
-  or licences, a target two packs have, and a file that differs from what its manifest pins.
-- `alpha2.silence` 1.1.1 is 1.1.0 with no code change, to be published with macOS and Windows
-  native artifacts beside the Linux one.
-- `alpha2.scenes` 1.0.0 finds the cuts between shots as instants (`cuts`, `suggest: split_at`)
-  and the stretches of black (`black`, `suggest: remove_ranges`) in a video, each with a `score`.
-  It compares 4x4 grids of luma histograms by earth mover's distance against a threshold that
-  adapts to recent motion and requires a cut to stand out from its neighbours, so fades,
-  dissolves, flashes and camera noise do not cut. Params: `sensitivity`, `min_scene_ms`,
-  `black_level`, `min_black_ms`.
-- `alpha2.beats` 1.0.0 finds the beats and onsets in music as instants with a 0 to 1 `score`
-  (`suggest: split_at`), with an onset and loudness `envelope` (`scalars` `onset` and `rms`,
-  normalized over the range, `suggest: bind`): log spectral flux, an autocorrelation tempo within
-  `min_bpm`..`max_bpm` and dynamic-programming beat tracking; `sensitivity` sets the onset
-  threshold.
-- `alpha2.track` 1.0.0 follows a box picked on one frame through the frames each pass delivers,
-  forward and backward, from sources or the timeline: its centre (`center`, points) and its
-  translation, rotation and scale from the picked frame (`motion`, similarity), both suggested
-  for binding, with frames whose box no longer matches the picked one by `confidence` marked
-  lost. `docs/plugin-abi.md` adds the `x-alpha2-display` values `box` and `point` for object
-  params picked on the picture.
-- `alpha2.transcribe` 1.0.0 finds the words spoken in audio and their times, from a whisper.cpp
-  ggml model the caller supplies in its `model` slot (none is pinned), run natively on the CPU
-  with whisper.cpp linked in, in any ISO 639-1 language whisper knows or `auto`. It transcribes
-  30 s windows as audio arrives and joins their overlaps without repeating them; it has no wasm
-  artifact.
-- A plugin crate opts out of wasm with `wasm = false` under `[package.metadata.alpha2-plugin]`:
-  `alpha2-plugin-pack` then builds native artifacts only and refuses `--no-native`, and
-  `scripts/pack-plugins.sh --no-native` leaves the crate out.
-- `alpha2/plugins` exports `parsePluginManifest`, which checks a manifest by the engine loaders'
-  rules without fetching anything, the `PluginManifest` types and the manifest limits
-  (`MAX_MANIFEST_BYTES`, `MAX_PLUGIN_*`, `MAX_ABOUT_*`); `LoadedPlugin` gains `about`, and
-  `loadPlugin` takes `onProgress`, called as each pinned file arrives.
-- `bridge.extract` takes a plugin the app loaded with `loadPlugin`, which many runs share, or a
-  `fetch` beside the manifest; its `onProgress` reports the plugin's files (`phase: "load"`).
-- `bridge.extractCapabilities()` says what `bridge.extract` runs (the inputs of each media, the
-  artifacts, whether it fills resource slots), and `pluginProblem(manifest, capabilities)` in
-  `alpha2/plugins` says why a plugin would not run there. A host's `capabilities` result reports
-  its plugin policy as `plugins` (`mode`, `slots`, `isolation`), typed in `@alpha2-sh/node`.
-- `bridge.extract` reads the timeline: it draws the frames an extractor asks for on a CPU renderer
-  of its own at export quality, the bytes every surface reads timeline frames as. Timeline audio
-  is not supplied (`INVALID_INPUT`), as on the native hosts.
-- The browser fills a plugin's resource slots: `loadPlugin(manifest, sha256, { supplied })` takes a
-  `File` for a `file` slot and a directory handle or a directory picker's files for a `directory`
-  slot, checked with the native loaders' limits and reasons, and the run records the files it
-  read in `made_by.plugin.supplied`. `bridge.extract` passes `plugin.supplied` on.
-- `bridge.extract` runs a plugin in a worker when `runtimeAssets.extractWorkerFactory` makes one
-  running the new `@alpha2-sh/editor/extract-worker` entry, so a long extraction no longer holds
-  the page's thread; a cancel terminates the worker at once. `transferablePlugin` and
-  `restorePlugin` in `alpha2/plugins` hand a loaded plugin to a worker without fetching or
-  compiling it again.
-- `bindableProperties(project, owner)` in `alpha2/project` lists the properties of a clip, track,
-  transition, composition node or the master bus that data can be bound to, in the path syntax of
-  `dataReferences` and `bake`, with the data kinds each reads.
-- `alpha2_engine::extract`: an extractor may offer memory for the next frame
-  (`Extractor::frame_buffer`, `None` by default), which a supplier fills through
-  `Supplier::frame_into` and `FramePlace` (by default it supplies as `frame` does) and the session
-  through `ExtractSession::supply_placed_video` and `supply_video_into`; `supply_frame` answers a
-  frame need that way, as `drive` does, and `present_for_extraction_into` presents a decoded
-  frame into such memory.
-
 ### Removed
 
+- **Breaking:** `alpha2-render`'s `SdrOutputTransfer` and `encode_linear_rgb`. Nothing outside
+  tests called them, and the export path never applied either curve: it writes the working
+  space's sRGB-coded values and tags them BT.709.
 - **Breaking:** the motion blur subframe count, which no pass read. Removed from Rust:
   `QualityProfile::motion_blur_subframes` and `MAX_MOTION_BLUR_SUBFRAMES`,
   `RenderQualityControls::motion_blur_subframes`, `RenderPlan::temporal_offsets`, and the
@@ -310,23 +324,15 @@ All notable changes to this project are documented in this file.
 - The CPU renderer's frame buffer pool follows the same rule: per buffer length it keeps as many
   buffers as the last frames took at once, so a 7680x4320 export no longer frees and allocates a
   frame buffer every frame.
+- A GPU watchdog under 8 ms (`ALPHA2_GPU_WATCHDOG_MS`) no longer rounds the submission budget down
+  to 0 ms, which cut every planned pass into its most pieces; `alpha2_gpu::submission_budget_ms`
+  returns an `f64`.
+- The `directional` transition no longer blends frame-edge pixels on the axis it does not move
+  along with the opposite edge on devices whose interpolation rounds inward: it finds its seam by
+  distance, as `directional-easing` and `directional-scaled` do.
 - The Python client's params check words an `enum` or `const` refusal as `schemaProblem` does.
 - macOS: the Metal interop helpers drain an autorelease pool, so the Objective-C objects they
   autoreleased no longer leak on the host's long-lived worker threads.
-- The browser bridge imports, relinks and reads image sequence frames from media references,
-  `{ url, name, path? }` whose URL answers `Range` requests, in place of a `File`: every reader of
-  the media (probing, hashing, preview and its workers, proxies, extraction, browser export) reads
-  it by range. `alpha2/mediabunny` inputs and `alpha2/media` container readers take a
-  `RangeReader` (`size`, `read(start, end)`), and `sha256Blob` anything with `stream()`.
-- A native export reads a referenced file by its `path` instead of uploading it: `nativeAssets`
-  gives `{ path }` for it, and the native client sends such assets in the render request's
-  `paths` (`{ [kind]: { [id]: path } }`) without an upload. `NativeAsset` has either `blob` or
-  `path`.
-- `bridge.putProviderSource` takes `then`: commands, or a function of the new source's ID and
-  opened size returning them, committed in the same undo step as the source, such as the clip that
-  places it.
-- `failureClassOfHttpStatus` in `alpha2/export-failure` classifies an export service's HTTP error
-  status: 413 `RESOURCE_LIMIT`, 429 and 503 `RESOURCE_BUSY`, 507 `STORAGE_QUOTA_EXCEEDED`.
 - The native client treats a 404 to an asset upload or a render request as a job the service lost,
   so the next attempt allocates and uploads it again instead of failing three times, and no longer
   retries an upload or a project the service refuses as too large (413): the export fails at once
@@ -335,6 +341,30 @@ All notable changes to this project are documented in this file.
 - `bake` of a linear source-anchored data set read through a clip no longer stops the motion at
   the clip's last sample: the baked keys follow the live value toward the next sample up to the
   clip's end, at loop pass boundaries, and over the frames a reversed pass holds.
+
+## [0.6.2] - 2026-11-20
+
+### Fixed
+
+- The GPU planner learns its device rate only from frames it measured: a frame counts when its
+  start is known (the queue was idle at its first submit, or the submission before it completed
+  inside a wait), so frames whose completions arrived together no longer measure zero and lower
+  the rate. Effects with scattered reads ran 4 to 190 times past their prediction and
+  past the GPU watchdog on several device classes; the first planned frame that draws an effect
+  pass heavy enough to be planned alone now draws one band of it first and plans the pass at the
+  rate it measured when that is slower than the device rate.
+- A pilot draws the rows predicted at 4 ms at the device rate, at least a sixty-fourth and at most
+  a quarter of the frame, so a pilot of a small pass on a phone GPU no longer measures mostly
+  submit latency and cuts the pass in two, and a pilot of a pass predicted at seconds no longer
+  reaches the watchdog itself. A failed pilot is not drawn again on every planned frame.
+- Calibration keeps the fastest of three waited draws, and a draw that confirms the old
+  calibration keeps the rate learned since, so a 4K export of built-in effects is no longer cut
+  into twice the submissions it needs.
+- A browser keeps its pilot and calibration draws in the submission clock (256 entries instead of
+  32), so a frame cut into many submissions no longer pushes them out before they are read.
+- The Python client's error for a host that did not start in time keeps what the host wrote to
+  standard output before it failed.
+- `wasmtime` 50.0.3 for RUSTSEC-2026-0566 to RUSTSEC-2026-0572.
 
 ## [0.6.1] - 2026-11-18
 
@@ -1118,6 +1148,8 @@ All notable changes to this project are documented in this file.
 - `alpha2` Rust crate (facade over the engine crates) for programs that supply decoded frames and
   take rendered frames or YUV planes; Rust 1.88 or later.
 
+[0.7.0]: https://github.com/alpha2-sh/alpha2/compare/v0.6.2...v0.7.0
+[0.6.2]: https://github.com/alpha2-sh/alpha2/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/alpha2-sh/alpha2/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/alpha2-sh/alpha2/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/alpha2-sh/alpha2/compare/v0.5.2...v0.5.3
