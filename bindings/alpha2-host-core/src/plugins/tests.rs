@@ -13,7 +13,6 @@ use serde_json::{Value, json};
 
 use super::*;
 
-/// The manifest hash test loads record.
 pub(super) const MANIFEST_SHA256: &str =
     "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 

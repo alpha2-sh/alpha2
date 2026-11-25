@@ -16,7 +16,6 @@ pub const WIRE_VERSION: u32 = 2;
 pub const MAX_PREAMBLE_BYTES: usize = 4096;
 /// The longest frame a worker writes.
 pub const MAX_CHILD_FRAME_BYTES: usize = 4 << 20;
-/// Bytes of a frame's fields before a video or audio payload, rounded up.
 const MAX_HEADER_BYTES: usize = 4096;
 /// The longest frame a host writes: a delivered RGBA frame of the largest size, and its fields.
 #[expect(

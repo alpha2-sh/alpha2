@@ -13,15 +13,13 @@ use super::tests::{
 use super::wire::{self, child, host};
 use super::*;
 
-/// Set in the environment of the test binary when it runs as a plugin worker.
-const WORKER: &str = "ALPHA2_TEST_PLUGIN_WORKER";
-/// Set to a mode of [`lying_worker`] when the test binary runs as one.
-const LYING_WORKER: &str = "ALPHA2_TEST_LYING_WORKER";
+const WORKER_ENV: &str = "ALPHA2_TEST_PLUGIN_WORKER";
+const LYING_WORKER_MODE_ENV: &str = "ALPHA2_TEST_LYING_WORKER";
 
 #[test]
 #[ignore = "the plugin worker the isolation tests start"]
 fn run_as_worker() {
-    if std::env::var_os(WORKER).is_some() {
+    if std::env::var_os(WORKER_ENV).is_some() {
         worker::main();
     }
 }
@@ -29,7 +27,7 @@ fn run_as_worker() {
 #[test]
 #[ignore = "a plugin worker that breaks the wire, which the isolation tests start"]
 fn run_as_lying_worker() {
-    if let Some(mode) = std::env::var_os(LYING_WORKER) {
+    if let Some(mode) = std::env::var_os(LYING_WORKER_MODE_ENV) {
         lying_worker(&mode.to_string_lossy());
     }
 }
@@ -56,7 +54,7 @@ fn worker_command(test: &str, envs: &[(&str, &str)]) -> WorkerCommand {
 
 pub(super) fn isolated() -> Policy {
     Policy {
-        isolation: Isolation::Child(worker_command("run_as_worker", &[(WORKER, "1")])),
+        isolation: Isolation::Child(worker_command("run_as_worker", &[(WORKER_ENV, "1")])),
         ..native_allowed()
     }
 }
@@ -612,7 +610,7 @@ fn lying(mode: &str) -> Policy {
     Policy {
         isolation: Isolation::Child(worker_command(
             "run_as_lying_worker",
-            &[(LYING_WORKER, mode)],
+            &[(LYING_WORKER_MODE_ENV, mode)],
         )),
         ..with_deadline(native_allowed(), Duration::from_secs(60))
     }
@@ -771,7 +769,7 @@ fn ms_per_frame(
 }
 
 fn isolated_through(frames: FramePath) -> Policy {
-    let mut command = worker_command("run_as_worker", &[(WORKER, "1")]);
+    let mut command = worker_command("run_as_worker", &[(WORKER_ENV, "1")]);
     command.frames = frames;
     Policy {
         isolation: Isolation::Child(command),
@@ -819,7 +817,7 @@ fn median_and_max(mut milliseconds: Vec<f64>) -> (f64, f64) {
 #[test]
 #[ignore = "a measurement, run in release with --nocapture"]
 fn time_worker_starts() {
-    let command = worker_command("run_as_worker", &[(WORKER, "1")]);
+    let command = worker_command("run_as_worker", &[(WORKER_ENV, "1")]);
     let scripted = manifest(1, false, true);
     let mut spawned = Vec::with_capacity(TIMED_STARTS);
     let mut loads = Vec::with_capacity(TIMED_STARTS);
@@ -875,7 +873,7 @@ fn digest_load() -> (wire::Load, Vec<OutputCap>) {
 }
 
 fn digest_worker(frames: FramePath) -> process::ProcessTransport {
-    let mut command = worker_command("run_as_worker", &[(WORKER, "1")]);
+    let mut command = worker_command("run_as_worker", &[(WORKER_ENV, "1")]);
     command.frames = frames;
     let mut worker = process::ProcessTransport::spawn(
         &command,
@@ -1008,7 +1006,7 @@ impl RawWorker {
         let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
         command
             .args(worker_command("run_as_worker", &[]).args)
-            .env(WORKER, "1")
+            .env(WORKER_ENV, "1")
             .stderr(std::process::Stdio::null());
         #[cfg(unix)]
         let (child, input, output) = {

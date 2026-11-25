@@ -16,9 +16,7 @@ use super::{
     PluginError, Transport, WorkerCommand, bounded_text, codes,
 };
 
-/// How often the watcher looks at the cancel and the deadline.
 const WATCH_INTERVAL: Duration = Duration::from_millis(50);
-/// How long a worker may take to end after it was asked to, before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 #[cfg(unix)]
@@ -30,7 +28,6 @@ type WorkerInput = std::process::ChildStdin;
 #[cfg(not(unix))]
 type WorkerOutput = std::process::ChildStdout;
 
-/// Why the host killed a worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Killed {
     Cancelled,

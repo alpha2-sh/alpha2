@@ -98,6 +98,15 @@ unsafe fn borrowed<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct AudioBlock {
+    pub(super) start: i64,
+    pub(super) start_sample: i64,
+    pub(super) frames: u32,
+    pub(super) rate: u32,
+    pub(super) channels: u32,
+}
+
 /// # Safety
 /// `context` is the `RefCell<State>` [`NativeInstance::new`] put in the host table.
 unsafe fn state<'a>(context: *mut c_void) -> &'a RefCell<State> {
@@ -367,9 +376,14 @@ impl NativeInstance {
         }
     }
 
-    /// `block` is `(start, start_sample, frames, rate, channels)`.
-    pub(super) fn audio(&mut self, block: (i64, i64, u32, u32, u32), samples: &[f32]) -> i32 {
-        let (start, start_sample, frames, rate, channels) = block;
+    pub(super) fn audio(&mut self, block: &AudioBlock, samples: &[f32]) -> i32 {
+        let AudioBlock {
+            start,
+            start_sample,
+            frames,
+            rate,
+            channels,
+        } = *block;
         self.start_call();
         // SAFETY: a live instance; the samples are borrowed for the call.
         unsafe {
@@ -432,13 +446,13 @@ impl Transport for NativeTransport {
 
     fn audio(&mut self, block: &AudioInput) -> Call {
         let status = self.0.audio(
-            (
-                block.start.ticks(),
-                block.start_sample,
-                block.frames,
-                block.rate,
-                block.channels,
-            ),
+            &AudioBlock {
+                start: block.start.ticks(),
+                start_sample: block.start_sample,
+                frames: block.frames,
+                rate: block.rate,
+                channels: block.channels,
+            },
             &block.samples,
         );
         self.outcome(status)
