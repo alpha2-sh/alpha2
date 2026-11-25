@@ -28,3 +28,39 @@ test("the manifest schema rejects missing hashes, unknown ABIs and the other sha
   for (const { name, manifest } of rejected)
     assert.equal(validate(manifest), false, name);
 });
+
+test("parsePluginManifest reads every corpus manifest as the engine's loaders do", async () => {
+  const { parsePluginManifest } = await import("../dist/plugins.js");
+  for (const { name, valid, error, manifest } of corpus) {
+    const text = JSON.stringify(manifest);
+    if (valid) {
+      assert.deepEqual(parsePluginManifest(text), manifest, name);
+      continue;
+    }
+    assert.throws(
+      () => parsePluginManifest(text),
+      {
+        name: "PluginError",
+        code: error === "abi" ? "PLUGIN_ABI_UNSUPPORTED" : "PLUGIN_LOAD_FAILED",
+      },
+      name,
+    );
+  }
+});
+
+test("parsePluginManifest refuses text past the manifest limit and text that is not JSON", async () => {
+  const { MAX_MANIFEST_BYTES, parsePluginManifest } =
+    await import("../dist/plugins.js");
+  const complete = corpus.find((entry) => entry.name === "complete").manifest;
+  const padded = JSON.stringify(complete).replace(
+    "{",
+    `{"x":"${"é".repeat(MAX_MANIFEST_BYTES / 2)}",`,
+  );
+  assert.throws(() => parsePluginManifest(padded), {
+    code: "PLUGIN_LOAD_FAILED",
+    message: /longer than 1048576 bytes/,
+  });
+  assert.throws(() => parsePluginManifest("{"), {
+    code: "PLUGIN_LOAD_FAILED",
+  });
+});

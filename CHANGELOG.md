@@ -17,6 +17,21 @@ All notable changes to this project are documented in this file.
 - `alpha2.silence` 1.1.0 carries its `about`, an output label and annotated params. Its outputs
   are unchanged (`descriptor.version` 1).
 
+- `alpha2/plugins` exports `parsePluginManifest`, which checks a manifest by the engine loaders'
+  rules without fetching anything, the `PluginManifest` types and the manifest limits
+  (`MAX_MANIFEST_BYTES`, `MAX_PLUGIN_*`, `MAX_ABOUT_*`); `LoadedPlugin` gains `about`, and
+  `loadPlugin` takes `onProgress`, called as each pinned file arrives.
+- `bridge.extract` takes a plugin the app loaded with `loadPlugin`, which many runs share, or a
+  `fetch` beside the manifest; its `onProgress` reports the plugin's files (`phase: "load"`).
+
+### Changed
+
+- **Breaking:** the browser's `loadPlugin` checks the whole manifest as the native loaders do
+  (unknown fields, URLs, limits, the descriptor's rules) before it fetches a file, and refuses a
+  file as soon as more bytes arrive than the manifest pins. `LoadedPlugin.descriptor` is the
+  descriptor as the engine reads it, with `max_size`, `block_frames` and `params_schema` filled
+  in.
+
 ### Fixed
 
 - The Python client's params check words an `enum` or `const` refusal as `schemaProblem` does.

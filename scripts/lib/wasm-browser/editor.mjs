@@ -34,8 +34,9 @@ const importVideo = async (bridge, bytes) => {
 };
 `;
 
-// A plugin run through bridge.extract and applyExtraction gives the pinned data; a cancelled run
-// and a run whose source goes away meanwhile leave the document alone.
+// A plugin run through bridge.extract and applyExtraction gives the pinned data, loaded by the
+// bridge, through the app's fetch or loaded once by the app for several runs; a cancelled run and
+// a run whose source goes away meanwhile leave the document alone.
 export function pluginEditorExtract() {
   return `${prelude}
 const { dataHash } = await import("/scripts/lib/surface-conformance.mjs");
@@ -62,6 +63,20 @@ const found = applied.ok === true ? await dataHash(editor.document.project.data)
 const set = editor.document.project.data?.[0];
 const madeFrom = set?.made_from?.content_sha256 === editor.document.assets[id].fingerprint?.content_sha256;
 
+const { loadPlugin } = await import("alpha2/plugins");
+const loaded = await loadPlugin(manifest, plugin.sha256);
+const shared = await Promise.all([1, 2].map(async () =>
+  dataHash((await bridge.extract(run, { plugin: loaded })).result.dataSets)));
+const fetched = [];
+const phases = new Set();
+const fetching = await bridge.extract(run, {
+  plugin: { ...plugin, fetch: (url, init) => (fetched.push(String(url)), fetch(url, init)) },
+  onProgress: (progress) => phases.add(progress.phase),
+});
+const viaFetch = await dataHash(fetching.result.dataSets);
+const sharedOk = shared.every((hash) => hash === found) && viaFetch === found
+  && fetched.length >= 2 && phases.has("load") && phases.has("extract");
+
 const before = editor.document;
 const controller = new AbortController();
 const cancelling = bridge.extract(run, { plugin, signal: controller.signal });
@@ -69,9 +84,9 @@ controller.abort();
 const cancelled = await codeOf(cancelling);
 
 report({
-  ok: refused === "missing_asset" && found === fixture.sha256 && madeFrom
+  ok: refused === "missing_asset" && found === fixture.sha256 && madeFrom && sharedOk
     && cancelled === "cancelled" && editor.document === before,
-  refused, found, madeFrom, cancelled,
+  refused, found, madeFrom, shared, viaFetch, fetched, phases: [...phases], cancelled,
 });
 await bridge.dispose();
 `;

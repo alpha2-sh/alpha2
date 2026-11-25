@@ -9,9 +9,45 @@ import type {
   Extractor,
   ExtractorDescriptor,
 } from "./extract.js";
+import {
+  MAX_MANIFEST_BYTES,
+  PluginError,
+  type PluginAbout,
+  parsePluginManifest,
+  readPluginDescriptor,
+} from "./plugin-manifest.js";
 
-/** The ABI this loader implements. */
-export const PLUGIN_ABI = "alpha2-plugin/1";
+export {
+  MAX_ABOUT_AUTHOR_CHARS,
+  MAX_ABOUT_HOMEPAGE_CHARS,
+  MAX_ABOUT_LICENSE_CHARS,
+  MAX_ABOUT_NAME_CHARS,
+  MAX_ABOUT_SUMMARY_CHARS,
+  MAX_EXTRACTOR_OUTPUTS,
+  MAX_MANIFEST_BYTES,
+  MAX_OUTPUT_DESCRIPTION_CHARS,
+  MAX_OUTPUT_LABEL_CHARS,
+  MAX_PLUGIN_ARTIFACT_BYTES,
+  MAX_PLUGIN_ARTIFACTS,
+  MAX_PLUGIN_RESOURCE_BYTES,
+  MAX_PLUGIN_RESOURCES,
+  MAX_PLUGIN_RESOURCES_TOTAL_BYTES,
+  MAX_PLUGIN_SLOTS,
+  MAX_SLOT_ACCEPT,
+  MAX_SLOT_ACCEPT_BYTES,
+  MAX_SLOT_NAME_BYTES,
+  PLUGIN_ABI,
+  PluginError,
+  parsePluginManifest,
+} from "./plugin-manifest.js";
+export type {
+  PinnedPluginResource,
+  PluginAbout,
+  PluginArtifact,
+  PluginManifest,
+  PluginResource,
+  SuppliedPluginResource,
+} from "./plugin-manifest.js";
 
 /** Linear memory a plugin may grow to when the caller sets no cap. */
 export const DEFAULT_PLUGIN_MEMORY_BYTES = 1024 * 1024 * 1024;
@@ -19,56 +55,16 @@ export const DEFAULT_PLUGIN_MEMORY_BYTES = 1024 * 1024 * 1024;
 /** The memory a module's `i32` offsets address; a larger cap is taken as this. */
 const MAX_PLUGIN_MEMORY_BYTES = 2 ** 31;
 
-/**
- * A plugin that was refused, did not load or failed, with the code every surface uses.
- * `details` is what a caller reads besides the code: `{ slot, reason }` for
- * `PLUGIN_RESOURCE_INVALID`.
- */
-export class PluginError extends Error {
-  readonly code: string;
-  readonly details?: Readonly<Record<string, unknown>>;
-
-  constructor(
-    code: string,
-    message: string,
-    options?: ErrorOptions & {
-      readonly details?: Readonly<Record<string, unknown>>;
-    },
-  ) {
-    super(message, options);
-    this.name = "PluginError";
-    this.code = code;
-    if (options?.details !== undefined) this.details = options.details;
-  }
+/** How far {@link loadPlugin} has read one of the files the manifest pins. */
+export interface PluginLoadProgress {
+  readonly phase: "load";
+  /** The file's `url` as the manifest writes it. */
+  readonly file: string;
+  /** Bytes read so far. */
+  readonly loaded: number;
+  /** The length the manifest pins. */
+  readonly total: number;
 }
-
-/** A manifest's file entry. */
-interface PinnedFile {
-  readonly url: string;
-  readonly sha256: string;
-  readonly bytes: number;
-}
-
-interface Manifest {
-  readonly id: string;
-  readonly version: string;
-  readonly abi: string;
-  readonly kind: string;
-  readonly artifacts: readonly (PinnedFile & {
-    readonly target: string;
-    readonly type: string;
-  })[];
-  readonly resources?: readonly ManifestResource[];
-  readonly descriptor: ExtractorDescriptor;
-}
-
-/** A pinned resource, or a slot the caller fills, which this loader cannot. */
-type ManifestResource =
-  | (PinnedFile & { readonly name: string; readonly supplied?: undefined })
-  | {
-      readonly name: string;
-      readonly supplied: { readonly required?: boolean };
-    };
 
 /** Where {@link loadPlugin} reads a plugin from. */
 export interface LoadPluginOptions {
@@ -77,6 +73,8 @@ export interface LoadPluginOptions {
   /** Fetches the manifest's files; `globalThis.fetch` when left out. */
   readonly fetch?: typeof fetch;
   readonly signal?: AbortSignal;
+  /** Called as each artifact and resource arrives, after each chunk of its body. */
+  readonly onProgress?: (progress: PluginLoadProgress) => void;
 }
 
 /** A loaded plugin: its manifest's identity and an extractor per run. */
@@ -87,6 +85,8 @@ export interface LoadedPlugin {
   readonly artifactSha256: string;
   /** SHA-256 of the manifest's bytes in lowercase, as `made_by.plugin` records it. */
   readonly manifestSha256: string;
+  /** What the manifest's `about` says for an interface, when it has one. */
+  readonly about?: PluginAbout;
   readonly descriptor: ExtractorDescriptor;
   /** An extractor that runs the module with `params`; each run instantiates it anew. */
   extractor(params?: Readonly<Record<string, unknown>>): Extractor;
@@ -97,39 +97,101 @@ async function sha256Hex(bytes: BufferSource): Promise<string> {
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * The body at `url`, read in chunks so that one longer than `limit` is refused as it arrives,
+ * with `refuse` the error for that.
+ */
 async function fetchBytes(
   fetcher: typeof fetch,
   url: URL,
+  limit: number,
+  refuse: (length: number) => PluginError,
   signal?: AbortSignal,
+  onChunk?: (loaded: number) => void,
 ): Promise<Uint8Array<ArrayBuffer>> {
+  const failed = (cause: unknown) =>
+    new PluginError("PLUGIN_FETCH_FAILED", `${url.href}: ${String(cause)}`, {
+      cause,
+    });
   let response: Response;
   try {
     response = await fetcher(url, { signal });
   } catch (cause) {
-    throw new PluginError(
-      "PLUGIN_FETCH_FAILED",
-      `${url.href}: ${String(cause)}`,
-      {
-        cause,
-      },
-    );
+    throw failed(cause);
   }
   if (!response.ok)
     throw new PluginError(
       "PLUGIN_FETCH_FAILED",
       `${url.href}: HTTP ${response.status}`,
     );
-  return new Uint8Array(await response.arrayBuffer());
+  const reader = response.body?.getReader();
+  if (reader === undefined) {
+    const whole = new Uint8Array(await response.arrayBuffer());
+    if (whole.byteLength > limit) throw refuse(whole.byteLength);
+    onChunk?.(whole.byteLength);
+    return whole;
+  }
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  for (;;) {
+    let read: ReadableStreamReadResult<Uint8Array>;
+    try {
+      read = await reader.read();
+    } catch (cause) {
+      throw failed(cause);
+    }
+    if (read.done) break;
+    loaded += read.value.byteLength;
+    if (loaded > limit) {
+      await reader.cancel().catch(() => {});
+      throw refuse(loaded);
+    }
+    chunks.push(read.value);
+    onChunk?.(loaded);
+  }
+  const bytes = new Uint8Array(loaded);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return bytes;
+}
+
+interface PinnedFile {
+  readonly url: string;
+  readonly sha256: string;
+  readonly bytes: number;
 }
 
 async function verified(
   fetcher: typeof fetch,
   base: URL,
   file: PinnedFile,
-  signal?: AbortSignal,
+  options: LoadPluginOptions,
 ): Promise<Uint8Array<ArrayBuffer>> {
   const url = new URL(file.url, base);
-  const bytes = await fetchBytes(fetcher, url, signal);
+  const longer = (length: number) =>
+    new PluginError(
+      "PLUGIN_HASH_MISMATCH",
+      `${file.url} is ${length} bytes or more; the manifest pins ${file.bytes}`,
+    );
+  const { onProgress } = options;
+  const bytes = await fetchBytes(
+    fetcher,
+    url,
+    file.bytes,
+    longer,
+    options.signal,
+    onProgress &&
+      ((loaded) =>
+        onProgress({
+          phase: "load",
+          file: file.url,
+          loaded,
+          total: file.bytes,
+        })),
+  );
   if (bytes.byteLength !== file.bytes)
     throw new PluginError(
       "PLUGIN_HASH_MISMATCH",
@@ -643,6 +705,10 @@ function abiContext(
  * A resource slot the caller fills elsewhere is left empty here when it is optional; a required
  * one is refused, since the browser fills no slots.
  *
+ * The manifest is checked as {@link parsePluginManifest} checks it before any other file is
+ * fetched; a file is refused as soon as more bytes arrive than the manifest pins. `onProgress`
+ * reports each pinned file as it arrives.
+ *
  * Rejects with a {@link PluginError} whose code is `PLUGIN_FETCH_FAILED`, `PLUGIN_HASH_MISMATCH`,
  * `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (no wasm artifact), `PLUGIN_UNSUPPORTED_FEATURE`,
  * `PLUGIN_LOAD_FAILED`, `PLUGIN_DESCRIPTOR_MISMATCH` or `PLUGIN_RESOURCE_INVALID` (a required
@@ -655,31 +721,35 @@ export async function loadPlugin(
 ): Promise<LoadedPlugin> {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
   const base = new URL(manifest, globalThis.location?.href);
-  const text = await fetchBytes(fetcher, base, options.signal);
+  const text = await fetchBytes(
+    fetcher,
+    base,
+    MAX_MANIFEST_BYTES,
+    () =>
+      new PluginError(
+        "PLUGIN_LOAD_FAILED",
+        `invalid plugin manifest: longer than ${MAX_MANIFEST_BYTES} bytes`,
+      ),
+    options.signal,
+  );
   const found = await sha256Hex(text);
   if (found !== sha256.toLowerCase())
     throw new PluginError(
       "PLUGIN_HASH_MISMATCH",
       `the manifest has SHA-256 ${found}; the caller pins ${sha256}`,
     );
-  let parsed: Manifest;
+  let decoded: string;
   try {
-    parsed = JSON.parse(new TextDecoder().decode(text)) as Manifest;
+    // WHATWG Encoding: `ignoreBOM` keeps a byte order mark, which `JSON.parse` refuses.
+    decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      text,
+    );
   } catch (cause) {
-    throw new PluginError("PLUGIN_LOAD_FAILED", "the manifest is not JSON", {
+    throw new PluginError("PLUGIN_LOAD_FAILED", "the manifest is not UTF-8", {
       cause,
     });
   }
-  if (parsed.abi !== PLUGIN_ABI)
-    throw new PluginError(
-      "PLUGIN_ABI_UNSUPPORTED",
-      `the plugin needs ABI ${String(parsed.abi)}; this build implements ${PLUGIN_ABI}`,
-    );
-  if (parsed.kind !== "extractor" || parsed.id !== parsed.descriptor?.id)
-    throw new PluginError(
-      "PLUGIN_LOAD_FAILED",
-      "the manifest is not an extractor whose id is its descriptor's",
-    );
+  const parsed = parsePluginManifest(decoded);
   const artifact = parsed.artifacts.find(
     (entry) => entry.target === "wasm32" && entry.type === "wasm",
   );
@@ -698,13 +768,13 @@ export async function loadPlugin(
       `${parsed.id} needs a file for its resource slot ${required.name}, which the browser does not fill`,
       { details: { slot: required.name, reason: "unsupported" } },
     );
-  const bytes = await verified(fetcher, base, artifact, options.signal);
+  const bytes = await verified(fetcher, base, artifact, options);
   const resources = new Map<string, Uint8Array<ArrayBuffer>>();
   for (const resource of parsed.resources ?? [])
     if (resource.supplied === undefined)
       resources.set(
         resource.name,
-        await verified(fetcher, base, resource, options.signal),
+        await verified(fetcher, base, resource, options),
       );
   let module: WebAssembly.Module;
   try {
@@ -724,7 +794,17 @@ export async function loadPlugin(
   const described = (
     await Run.start(module, parsed.descriptor, resources, memoryBytes)
   ).describe();
-  if (!sameJson(JSON.parse(described), parsed.descriptor))
+  let own: unknown;
+  try {
+    own = readPluginDescriptor(JSON.parse(described));
+  } catch (cause) {
+    throw new PluginError(
+      "PLUGIN_DESCRIPTOR_MISMATCH",
+      `the artifact ${artifact.url} describes no extractor: ${String(cause)}`,
+      { cause },
+    );
+  }
+  if (!sameJson(own, parsed.descriptor))
     throw new PluginError(
       "PLUGIN_DESCRIPTOR_MISMATCH",
       `the artifact ${artifact.url} describes another extractor than the manifest`,
@@ -735,6 +815,7 @@ export async function loadPlugin(
     version: parsed.version,
     artifactSha256: artifact.sha256,
     manifestSha256: found,
+    ...(parsed.about === undefined ? {} : { about: parsed.about }),
     descriptor,
     extractor(params = {}) {
       let run: Run | undefined;

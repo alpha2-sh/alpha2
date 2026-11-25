@@ -3018,14 +3018,19 @@ export function createBrowserBridge(options) {
       const job = new ExtractionJob(
         async (aborted) => {
           const binding = await loadWasm();
-          const loaded = plugin
-            ? await loadPlugin(plugin.manifest, plugin.sha256, {
-                ...(plugin.memoryBytes === undefined
-                  ? {}
-                  : { memoryBytes: plugin.memoryBytes }),
-                signal: aborted,
-              })
-            : undefined;
+          const loaded =
+            plugin === undefined || typeof plugin.extractor === "function"
+              ? plugin
+              : await loadPlugin(plugin.manifest, plugin.sha256, {
+                  ...(plugin.memoryBytes === undefined
+                    ? {}
+                    : { memoryBytes: plugin.memoryBytes }),
+                  ...(plugin.fetch === undefined
+                    ? {}
+                    : { fetch: plugin.fetch }),
+                  ...(onProgress ? { onProgress } : {}),
+                  signal: aborted,
+                });
           const result = await runExtractor(
             {
               binding,

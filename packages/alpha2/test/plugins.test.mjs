@@ -96,6 +96,9 @@ async function hostedPlugin({
   alloc = "i32.const 65536",
   describe = null,
   resources = undefined,
+  about = undefined,
+  serve = (body) => new Response(body),
+  options = {},
 } = {}) {
   const binaryen = (await import("binaryen")).default;
   const json = JSON.stringify(DESCRIPTOR);
@@ -135,16 +138,21 @@ async function hostedPlugin({
         },
       ],
       resources,
+      about,
       descriptor: DESCRIPTOR,
     }),
   );
   const files = { "manifest.json": manifest, "m.wasm": wasm };
-  const fetch = async (url) =>
-    new Response(files[new URL(url).pathname.slice(1)]);
+  const fetch = async (url) => {
+    const name = new URL(url).pathname.slice(1);
+    return name === "manifest.json"
+      ? new Response(files[name])
+      : serve(files[name]);
+  };
   const loaded = await loadPlugin(
     "https://plugins.test/manifest.json",
     await hex(manifest),
-    { fetch },
+    { fetch, ...options },
   );
   assert.equal(loaded.manifestSha256, await hex(manifest));
   return loaded;
@@ -270,4 +278,71 @@ test("the browser refuses a required resource slot and leaves an optional one em
     assert.deepEqual(JSON.parse(error.message).supplied, {});
     return true;
   });
+});
+
+test("loadPlugin reports each pinned file as it arrives and gives the manifest's about", async () => {
+  const progress = [];
+  const chunked = (body) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          for (let at = 0; at < body.byteLength; at += 64)
+            controller.enqueue(body.slice(at, at + 64));
+          controller.close();
+        },
+      }),
+    );
+  const plugin = await hostedPlugin({
+    about: { name: "Bounds", license: "MIT" },
+    serve: chunked,
+    options: { onProgress: (report) => progress.push(report) },
+  });
+  assert.deepEqual(plugin.about, { name: "Bounds", license: "MIT" });
+  assert.ok(progress.length > 1, `${progress.length} reports`);
+  assert.ok(
+    progress.every(
+      (report) => report.phase === "load" && report.file === "m.wasm",
+    ),
+  );
+  const last = progress.at(-1);
+  assert.equal(last.loaded, last.total);
+  assert.ok(
+    progress.every(
+      (report, index) =>
+        index === 0 || report.loaded > progress[index - 1].loaded,
+    ),
+  );
+});
+
+test("loadPlugin refuses a file once more bytes arrive than the manifest pins", async () => {
+  let sent = 0;
+  const endless = () =>
+    new Response(
+      new ReadableStream({
+        pull(controller) {
+          sent += 1024;
+          controller.enqueue(new Uint8Array(1024));
+        },
+      }),
+    );
+  await assert.rejects(hostedPlugin({ serve: endless }), {
+    code: "PLUGIN_HASH_MISMATCH",
+    message: /m\.wasm is \d+ bytes or more/,
+  });
+  assert.ok(sent < 1024 * 1024, `${sent} bytes sent`);
+});
+
+test("loadPlugin checks the manifest before it fetches a file", async () => {
+  let fetched = 0;
+  await assert.rejects(
+    hostedPlugin({
+      about: { name: "Bounds\u0007" },
+      serve: (body) => {
+        fetched += 1;
+        return new Response(body);
+      },
+    }),
+    { code: "PLUGIN_LOAD_FAILED", message: /about\.name/ },
+  );
+  assert.equal(fetched, 0);
 });

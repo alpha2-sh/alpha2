@@ -643,9 +643,12 @@ export interface BrowserBridge {
   }>;
   /**
    * Runs an extractor over a source's original media on this page (`runExtractor` from
-   * `alpha2/extract`), with an app's `extractor` or a `plugin` it loads (`loadPlugin` from
-   * `alpha2/plugins`, manifest and SHA-256 pinned). Resolves with the result and the read taken
-   * when the run started; commit them with `EditorSession.applyExtraction(result, { read })`.
+   * `alpha2/extract`), with an app's `extractor` or a `plugin`: one the app loaded with
+   * `loadPlugin` from `alpha2/plugins`, which many runs share (its module compiles once), or a
+   * manifest and its SHA-256 for the bridge to load for this run, with `fetch` when the app
+   * fetches the plugin's files itself (a cache, a proxy). `onProgress` reports the plugin's files
+   * as they arrive (`phase: "load"`), then the extraction. Resolves with the result and the read
+   * taken when the run started; commit them with `EditorSession.applyExtraction(result, { read })`.
    *
    * Rejects without exactly one of `plugin` and `extractor` (`invalid_command`), for a timeline
    * input (`unsupported_media`), without the source's original in this session (`missing_asset`),
@@ -656,16 +659,22 @@ export interface BrowserBridge {
   extract(
     run: import("alpha2/extractor").ExtractRun,
     options: {
-      readonly plugin?: {
-        readonly manifest: string | URL;
-        readonly sha256: string;
-        /** The most linear memory the module may have; the loader's default when left out. */
-        readonly memoryBytes?: number;
-      };
+      readonly plugin?:
+        | {
+            readonly manifest: string | URL;
+            readonly sha256: string;
+            /** The most linear memory the module may have; the loader's default when left out. */
+            readonly memoryBytes?: number;
+            /** Fetches the plugin's files; `globalThis.fetch` when left out. */
+            readonly fetch?: typeof fetch;
+          }
+        | import("alpha2/plugins").LoadedPlugin;
       readonly extractor?: import("alpha2/extractor").Extractor;
       readonly signal?: AbortSignal;
       readonly onProgress?: (
-        progress: import("alpha2/extractor").ExtractProgress,
+        progress:
+          | import("alpha2/plugins").PluginLoadProgress
+          | import("alpha2/extractor").ExtractProgress,
       ) => void;
     },
   ): Promise<{

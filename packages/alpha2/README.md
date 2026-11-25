@@ -109,7 +109,7 @@ const { dataSets } = await runExtractor(
 );
 ```
 
-A timeline input needs `timelineFrame(time, width, height)`, such as the CPU renderer's `readRgbaAt`, and an audio input `audioBinding: wasm`. `loadPlugin(manifest, sha256)` in `alpha2/plugins` loads an [extractor plugin](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md)'s wasm artifact, checked against its pinned hashes; pass it as `plugin` with `plugin.extractor(params)`. `applyEdit` in `alpha2/apply-edit` then applies data to the project, such as `remove_ranges` over silences.
+A timeline input needs `timelineFrame(time, width, height)`, such as the CPU renderer's `readRgbaAt`, and an audio input `audioBinding: wasm`. `loadPlugin(manifest, sha256)` in `alpha2/plugins` loads an [extractor plugin](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md)'s wasm artifact, checked against its pinned hashes, with `onProgress` as its files arrive; pass it as `plugin` with `plugin.extractor(params)`. `parsePluginManifest(text)` checks a manifest by the same rules without fetching anything, for an interface that shows a plugin before it is installed, with `about` and the outputs' `label`s. `applyEdit` in `alpha2/apply-edit` then applies data to the project, such as `remove_ranges` over silences.
 
 ## Compose
 
@@ -146,7 +146,7 @@ const { project, assets, loudness, warnings } = compileCompose(compose, spec, { 
 | `alpha2/builder` | `ProjectBuilder`: documents from seconds, with generated ids. |
 | `alpha2/edit` | Editing operations on a project: split, trim, ripple, roll, slip, slide, retime, insert, overwrite, append, move. |
 | `alpha2/apply-edit` | `applyEdit`: the engine's edit operations that apply data to a project (`remove_ranges`, `split_at`, `bake`), the same canonical result on every surface. |
-| `alpha2/extract`, `alpha2/plugins` | `runExtractor`: extractors of your own over a source or the timeline, decoded in the browser; `loadPlugin`: [extractor plugins](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md) run sandboxed. |
+| `alpha2/extract`, `alpha2/plugins` | `runExtractor`: extractors of your own over a source or the timeline, decoded in the browser; `loadPlugin`: [extractor plugins](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md) run sandboxed; `parsePluginManifest` and the `MAX_PLUGIN_*` limits. |
 | `alpha2/extractor` | The extractor contract every surface shares (`Extractor`, `ExtractorDescriptor`, `ExtractRun`, `ExtractResult`), types only, without a media library. |
 | `alpha2/compose`, `alpha2/compose-wasm` | Compose specs and templates (`loadCompose`, `composeRequirements`, `compileCompose`, `bindTemplate`, `templateDataSchema`, `lintTemplate`, `builtinTemplates`), and the wasm module they load. See [Compose](#compose). |
 | `alpha2/captions` | SRT and WebVTT import into caption tracks. |
