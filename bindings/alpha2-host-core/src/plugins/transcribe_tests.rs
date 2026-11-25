@@ -1,6 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
 
 use alpha2_engine::extract::{
     ExtractRequest, ExtractSession, Need, SuppliedAudio, SuppliedFrame, Supplier, drive,
@@ -9,13 +7,11 @@ use alpha2_model::{DataSet, DataValues, Project};
 use serde_json::{Value, json};
 
 use super::process_tests::isolated;
-use super::tests::{MANIFEST_SHA256, native_allowed};
+use super::tests::{MANIFEST_SHA256, Packed, native_allowed, packed};
 use super::*;
 
 const RATE: i64 = 16_000;
-/// Silences put before, between and after the fixture's phrases, in milliseconds.
-const GAPS: [i64; 7] = [500, 300, 450, 600, 900, 1500, 700];
-/// What the reader says in the fixture's phrases.
+const GAPS_MS: [i64; 7] = [500, 300, 450, 600, 900, 1500, 700];
 const SPOKEN: &str = "so too it is better to recapture an army and hence to fight and conquer in \
     all your battles is to prevent the junction of the enemy's forces policy of all is to besiege \
     walled the preparation of mantlets movable shelters will launch his men to the assault like \
@@ -26,7 +22,6 @@ fn ticks(sample: i64) -> i64 {
     sample * 120_000 / RATE
 }
 
-/// The model `ALPHA2_TEST_WHISPER_MODEL` names (`ggml-tiny.en.bin`), or a printed note.
 fn model() -> Option<PathBuf> {
     let path = std::env::var_os("ALPHA2_TEST_WHISPER_MODEL").map(PathBuf::from);
     if path.is_none() {
@@ -35,47 +30,13 @@ fn model() -> Option<PathBuf> {
     path
 }
 
-/// The packed plugin's directory, packed once per test process and shared by its tests.
-fn packed() -> &'static Path {
-    static PACKED: OnceLock<PathBuf> = OnceLock::new();
-    PACKED.get_or_init(|| {
-        let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-        let out = plugins.join("target/tmp/transcribe-packed");
-        let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .args(["run", "--manifest-path"])
-            .arg(plugins.join("Cargo.toml"))
-            .arg("--target-dir")
-            .arg(plugins.join("target"))
-            .args(["-p", "alpha2-plugin-pack", "--"])
-            .arg(plugins.join("first-party/transcribe"))
-            .arg("--out")
-            .arg(&out)
-            .env_remove("CARGO_TARGET_DIR")
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "plugins/first-party/transcribe packs");
-        out
-    })
-}
-
-/// Fetches files relative to the packed directory.
-struct Packed;
-
-impl Fetch for Packed {
-    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
-        Ok(Fetched {
-            path: packed().join(url),
-            local: true,
-        })
-    }
-}
-
 fn packed_manifest() -> PluginManifest {
-    parse_manifest(&std::fs::read_to_string(packed().join("manifest.json")).expect("manifest"))
-        .expect("manifest")
+    parse_manifest(
+        &std::fs::read_to_string(packed("transcribe").join("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest")
 }
 
-/// The fixture's samples and, in ticks, where each phrase lies.
 fn fixture() -> (Vec<f32>, Vec<(i64, i64)>) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../plugins/first-party/silence/tests/fixtures");
@@ -93,7 +54,7 @@ fn fixture() -> (Vec<f32>, Vec<(i64, i64)>) {
     let length = |samples: &Vec<f32>| i64::try_from(samples.len()).expect("small");
     let mut samples = Vec::new();
     let mut spans = Vec::new();
-    for (index, gap) in GAPS.iter().enumerate() {
+    for (index, gap) in GAPS_MS.iter().enumerate() {
         samples.resize(
             samples.len() + usize::try_from(gap * RATE / 1000).expect("gap"),
             0.0,
@@ -109,7 +70,6 @@ fn fixture() -> (Vec<f32>, Vec<(i64, i64)>) {
     (samples, spans)
 }
 
-/// Source audio from the fixture, silence past its end.
 struct Audio<'a>(&'a [f32]);
 
 impl Supplier for Audio<'_> {
@@ -164,7 +124,6 @@ fn normalized(text: &str) -> String {
         .collect()
 }
 
-/// One less the word error rate of `heard` against `spoken`.
 fn accuracy(heard: &[&str], spoken: &[&str]) -> f64 {
     let heard: Vec<String> = heard.iter().map(|word| normalized(word)).collect();
     let spoken: Vec<String> = spoken.iter().map(|word| normalized(word)).collect();
@@ -183,7 +142,6 @@ fn accuracy(heard: &[&str], spoken: &[&str]) -> f64 {
     1.0 - f64::from(errors) / f64::from(words)
 }
 
-/// The words the plugin writes for the fixture under `policy`, and the slot files it read.
 fn transcribe(
     model: &Path,
     samples: &[f32],
@@ -199,7 +157,7 @@ fn transcribe(
             supplied: &supplied,
         },
         policy,
-        &mut Packed,
+        &mut Packed("transcribe"),
         &CancelToken::default(),
     )
     .expect("plugin loads");
@@ -288,7 +246,7 @@ fn the_packed_manifest_offers_native_artifacts_only_which_need_native_code_allow
             supplied: &BTreeMap::new(),
         },
         &Policy::default(),
-        &mut Packed,
+        &mut Packed("transcribe"),
         &CancelToken::default(),
     )
     .expect_err("refused");

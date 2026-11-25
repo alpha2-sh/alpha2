@@ -16,9 +16,7 @@ use super::{
     PluginError, Transport, WorkerCommand, bounded_text, codes,
 };
 
-/// How often the watcher looks at the cancel and the deadline.
 const WATCH_INTERVAL: Duration = Duration::from_millis(50);
-/// How long a worker may take to end after it was asked to, before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 #[cfg(unix)]
@@ -30,7 +28,6 @@ type WorkerInput = std::process::ChildStdin;
 #[cfg(not(unix))]
 type WorkerOutput = std::process::ChildStdout;
 
-/// Why the host killed a worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Killed {
     Cancelled,
@@ -72,6 +69,19 @@ impl Watch {
         }
         self.job = None;
     }
+}
+
+fn join_job(child: &mut Child) -> Result<alpha2_os::KillOnCloseJob, PluginError> {
+    alpha2_os::KillOnCloseJob::new()
+        .and_then(|job| job.assign(child).map(|()| job))
+        .map_err(|error| {
+            let _ = alpha2_os::kill_process_tree(child);
+            let _ = child.wait();
+            PluginError::new(
+                codes::LOAD_FAILED,
+                format!("the plugin worker could not join its kill-on-close job: {error}"),
+            )
+        })
 }
 
 struct Shared {
@@ -292,10 +302,7 @@ impl ProcessTransport {
                 command.program.display()
             ))
         })?;
-        let job = alpha2_os::KillOnCloseJob::new().ok();
-        if let Some(job) = &job {
-            let _ = job.assign(&child);
-        }
+        let job = join_job(&mut child)?;
         let (Some((input, output)), Some(errors)) =
             (channel_ends(channel, &mut child), child.stderr.take())
         else {
@@ -306,7 +313,7 @@ impl ProcessTransport {
         let shared = Arc::new(Shared {
             watch: Mutex::new(Watch {
                 child: Some(child),
-                job,
+                job: Some(job),
                 ends: None,
                 killed: None,
                 done: false,

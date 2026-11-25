@@ -73,8 +73,9 @@ impl Plugin {
     /// path of a file or directory the app may read; they are checked when the plugin runs.
     ///
     /// # Errors
-    /// `PLUGIN_FETCH_FAILED` for an unreadable manifest, `PLUGIN_HASH_MISMATCH`,
-    /// `PLUGIN_ABI_UNSUPPORTED` or `PLUGIN_LOAD_FAILED` for a manifest that is not one.
+    /// `INVALID_REQUEST` for a relative `supplied` path, `PLUGIN_FETCH_FAILED` for an unreadable
+    /// manifest, `PLUGIN_HASH_MISMATCH`, `PLUGIN_ABI_UNSUPPORTED` or `PLUGIN_LOAD_FAILED` for a
+    /// manifest that is not one.
     #[uniffi::constructor]
     pub fn load(
         manifest_path: String,
@@ -82,6 +83,21 @@ impl Plugin {
         allow_native: bool,
         supplied: HashMap<String, String>,
     ) -> Result<Arc<Self>, Alpha2Error> {
+        let mut slots = BTreeMap::new();
+        for (slot, path) in supplied {
+            let path = PathBuf::from(path);
+            if !path.is_absolute() {
+                return Err(Alpha2Error::Failed {
+                    code: "INVALID_REQUEST".into(),
+                    reason: format!(
+                        "supplied.{slot} is not an absolute path: {}",
+                        path.display()
+                    ),
+                    details: None,
+                });
+            }
+            slots.insert(slot, path);
+        }
         let path = PathBuf::from(&manifest_path);
         let bytes = std::fs::read(&path).map_err(|error| {
             plugin_error(PluginError::new(
@@ -107,10 +123,7 @@ impl Plugin {
             manifest,
             manifest_sha256: found,
             directory: path.parent().map(Path::to_path_buf).unwrap_or_default(),
-            supplied: supplied
-                .into_iter()
-                .map(|(slot, path)| (slot, PathBuf::from(path)))
-                .collect(),
+            supplied: slots,
             policy: Policy {
                 allow_native,
                 resource_root: ResourceRoot::Any,
@@ -218,6 +231,23 @@ mod tests {
             serde_json::from_str(&labelled.descriptor_json()).expect("json");
         assert_eq!(descriptor["outputs"][0]["label"], "Silences");
         assert_eq!(plain.about_json(), None);
+    }
+
+    #[test]
+    fn a_relative_supplied_path_is_refused() {
+        let refused = Plugin::load(
+            "/nowhere/manifest.json".to_owned(),
+            String::new(),
+            false,
+            HashMap::from([("model".to_owned(), "models/a.bin".to_owned())]),
+        )
+        .err()
+        .expect("refused");
+        assert_eq!(refused.code(), "INVALID_REQUEST");
+        assert_eq!(
+            refused.to_string(),
+            "supplied.model is not an absolute path: models/a.bin"
+        );
     }
 
     #[test]

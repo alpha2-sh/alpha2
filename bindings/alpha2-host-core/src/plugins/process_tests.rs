@@ -13,15 +13,13 @@ use super::tests::{
 use super::wire::{self, child, host};
 use super::*;
 
-/// Set in the environment of the test binary when it runs as a plugin worker.
-const WORKER: &str = "ALPHA2_TEST_PLUGIN_WORKER";
-/// Set to a mode of [`lying_worker`] when the test binary runs as one.
-const LYING_WORKER: &str = "ALPHA2_TEST_LYING_WORKER";
+const WORKER_ENV: &str = "ALPHA2_TEST_PLUGIN_WORKER";
+const LYING_WORKER_MODE_ENV: &str = "ALPHA2_TEST_LYING_WORKER";
 
 #[test]
 #[ignore = "the plugin worker the isolation tests start"]
 fn run_as_worker() {
-    if std::env::var_os(WORKER).is_some() {
+    if std::env::var_os(WORKER_ENV).is_some() {
         worker::main();
     }
 }
@@ -29,7 +27,7 @@ fn run_as_worker() {
 #[test]
 #[ignore = "a plugin worker that breaks the wire, which the isolation tests start"]
 fn run_as_lying_worker() {
-    if let Some(mode) = std::env::var_os(LYING_WORKER) {
+    if let Some(mode) = std::env::var_os(LYING_WORKER_MODE_ENV) {
         lying_worker(&mode.to_string_lossy());
     }
 }
@@ -56,7 +54,7 @@ fn worker_command(test: &str, envs: &[(&str, &str)]) -> WorkerCommand {
 
 pub(super) fn isolated() -> Policy {
     Policy {
-        isolation: Isolation::Child(worker_command("run_as_worker", &[(WORKER, "1")])),
+        isolation: Isolation::Child(worker_command("run_as_worker", &[(WORKER_ENV, "1")])),
         ..native_allowed()
     }
 }
@@ -263,7 +261,27 @@ fn alive(pid: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "asks Windows for a process's exit code")]
+fn alive(pid: &str) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let pid = pid.trim().parse::<u32>().expect("a process id");
+    // SAFETY: `OpenProcess` takes plain values and returns a new handle or null.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let mut code = 0_u32;
+    // SAFETY: `handle` is open and `code` outlives the call, which writes only it.
+    let queried = unsafe { GetExitCodeProcess(handle, &raw mut code) };
+    // SAFETY: `handle` is open and closed once here.
+    unsafe { CloseHandle(handle) };
+    queried != 0 && code == STILL_ACTIVE.cast_unsigned()
+}
+
 fn gone_within(pid: &str, wait: Duration) -> bool {
     let started = Instant::now();
     while started.elapsed() < wait {
@@ -275,7 +293,6 @@ fn gone_within(pid: &str, wait: Duration) -> bool {
     false
 }
 
-#[cfg(unix)]
 #[test]
 fn nothing_the_plugin_started_survives_the_kill_at_the_deadline() {
     let pid_file = scratch("isolated-spawn").join("pid");
@@ -291,7 +308,6 @@ fn nothing_the_plugin_started_survives_the_kill_at_the_deadline() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn nothing_the_plugin_started_survives_its_worker_crashing_or_ending() {
     for then in ["abort", "return"] {
@@ -323,7 +339,6 @@ fn run_a_host_whose_worker_sleeps() {
     let _ = run(&mut plugin, &params);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_worker_whose_host_was_killed_ends() {
     let report = scratch("isolated-orphan").join("report");
@@ -360,6 +375,47 @@ fn a_worker_whose_host_was_killed_ends() {
         gone_within(&pid, Duration::from_secs(5)),
         "worker {pid} outlived its host"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_file_the_host_held_open_while_its_worker_started_can_be_renamed_while_the_worker_lives() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    let dir = scratch("isolated-rename");
+    let held = dir.join("model.bin");
+    std::fs::write(&held, b"weights").expect("file");
+    let open = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&held)
+        .expect("open");
+    let report = dir.join("report");
+    let params = json!({ "report": report, "sleep_at": 0 });
+    let mut plugin = loaded(
+        &manifest(1, false, true),
+        &params,
+        &with_deadline(isolated(), Duration::from_secs(10)),
+    )
+    .expect("loads");
+    let renamed = std::thread::scope(|scope| {
+        let renaming = scope.spawn(|| {
+            let started = Instant::now();
+            while !report.exists() {
+                assert!(
+                    started.elapsed() < Duration::from_secs(60),
+                    "the worker never reported"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            drop(open);
+            std::fs::rename(&held, dir.join("renamed.bin"))
+        });
+        let error = failure(run(&mut plugin, &params));
+        assert_eq!(error.code, Some(codes::LIMIT), "{error:?}");
+        renaming.join().expect("the renaming thread")
+    });
+    renamed.expect("the worker holds no handle to the file");
 }
 
 /// The descriptors an isolated scripted run's worker holds at `begin`.
@@ -554,7 +610,7 @@ fn lying(mode: &str) -> Policy {
     Policy {
         isolation: Isolation::Child(worker_command(
             "run_as_lying_worker",
-            &[(LYING_WORKER, mode)],
+            &[(LYING_WORKER_MODE_ENV, mode)],
         )),
         ..with_deadline(native_allowed(), Duration::from_secs(60))
     }
@@ -713,7 +769,7 @@ fn ms_per_frame(
 }
 
 fn isolated_through(frames: FramePath) -> Policy {
-    let mut command = worker_command("run_as_worker", &[(WORKER, "1")]);
+    let mut command = worker_command("run_as_worker", &[(WORKER_ENV, "1")]);
     command.frames = frames;
     Policy {
         isolation: Isolation::Child(command),
@@ -748,6 +804,47 @@ fn time_video_frames_in_process_and_through_a_worker() {
     }
 }
 
+const TIMED_STARTS: usize = 20;
+
+fn median_and_max(mut milliseconds: Vec<f64>) -> (f64, f64) {
+    milliseconds.sort_by(f64::total_cmp);
+    (
+        milliseconds[milliseconds.len() / 2],
+        milliseconds[milliseconds.len() - 1],
+    )
+}
+
+#[test]
+#[ignore = "a measurement, run in release with --nocapture"]
+fn time_worker_starts() {
+    let command = worker_command("run_as_worker", &[(WORKER_ENV, "1")]);
+    let scripted = manifest(1, false, true);
+    let mut spawned = Vec::with_capacity(TIMED_STARTS);
+    let mut loads = Vec::with_capacity(TIMED_STARTS);
+    for _ in 0..TIMED_STARTS {
+        let started = Instant::now();
+        let worker = process::ProcessTransport::spawn(
+            &command,
+            &CancelToken::default(),
+            Duration::from_secs(60),
+        )
+        .expect("spawn");
+        spawned.push(started.elapsed().as_secs_f64() * 1000.0);
+        drop(worker);
+        let started = Instant::now();
+        let plugin = loaded(&scripted, &json!({}), &isolated()).expect("loads");
+        loads.push(started.elapsed().as_secs_f64() * 1000.0);
+        drop(plugin);
+    }
+    let (spawn_median, spawn_max) = median_and_max(spawned);
+    let (load_median, load_max) = median_and_max(loads);
+    println!(
+        "worker starts over {TIMED_STARTS} runs: spawn and hello median {spawn_median:.1} ms, \
+         max {spawn_max:.1}; spawn, hello, load and describe of the scripted plugin median \
+         {load_median:.1} ms, max {load_max:.1}"
+    );
+}
+
 fn video_context(frames: i64, size: u32, format: &str) -> Value {
     json!({
         "range": { "start": 0, "end": (frames + 1) * 4000 },
@@ -776,7 +873,7 @@ fn digest_load() -> (wire::Load, Vec<OutputCap>) {
 }
 
 fn digest_worker(frames: FramePath) -> process::ProcessTransport {
-    let mut command = worker_command("run_as_worker", &[(WORKER, "1")]);
+    let mut command = worker_command("run_as_worker", &[(WORKER_ENV, "1")]);
     command.frames = frames;
     let mut worker = process::ProcessTransport::spawn(
         &command,
@@ -909,7 +1006,7 @@ impl RawWorker {
         let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
         command
             .args(worker_command("run_as_worker", &[]).args)
-            .env(WORKER, "1")
+            .env(WORKER_ENV, "1")
             .stderr(std::process::Stdio::null());
         #[cfg(unix)]
         let (child, input, output) = {

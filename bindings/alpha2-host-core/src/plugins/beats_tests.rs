@@ -1,7 +1,3 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
-
 use alpha2_engine::extract::{
     ExtractRequest, ExtractSession, Need, SuppliedAudio, SuppliedFrame, Supplier, drive,
 };
@@ -9,7 +5,7 @@ use alpha2_eval::edit::{DataRef, EditRequest, Target, Times, apply};
 use alpha2_model::{DataSet, DataValues, Project};
 use serde_json::json;
 
-use super::tests::MANIFEST_SHA256;
+use super::tests::{MANIFEST_SHA256, Packed, packed};
 use super::*;
 
 const RATE: i64 = 22_050;
@@ -23,39 +19,6 @@ const HALF_PROJECT_FRAME_TICKS: i64 = 2_000;
 
 fn ticks(sample: i64) -> i64 {
     (sample * 120_000).div_euclid(RATE)
-}
-
-fn packed() -> &'static Path {
-    static PACKED: OnceLock<PathBuf> = OnceLock::new();
-    PACKED.get_or_init(|| {
-        let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-        let out = plugins.join("target/tmp/beats-packed");
-        let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .args(["run", "--manifest-path"])
-            .arg(plugins.join("Cargo.toml"))
-            .arg("--target-dir")
-            .arg(plugins.join("target"))
-            .args(["-p", "alpha2-plugin-pack", "--"])
-            .arg(plugins.join("first-party/beats"))
-            .arg("--out")
-            .arg(&out)
-            .env_remove("CARGO_TARGET_DIR")
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "plugins/first-party/beats packs");
-        out
-    })
-}
-
-struct Packed;
-
-impl Fetch for Packed {
-    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
-        Ok(Fetched {
-            path: packed().join(url),
-            local: true,
-        })
-    }
 }
 
 fn click_track() -> (Vec<i64>, Vec<f32>) {
@@ -135,7 +98,7 @@ fn project(duration: i64, data: &[DataSet]) -> Project {
 }
 
 fn run(samples: &[f32], policy: &Policy) -> [DataSet; 3] {
-    let text = std::fs::read_to_string(packed().join("manifest.json")).expect("manifest");
+    let text = std::fs::read_to_string(packed("beats").join("manifest.json")).expect("manifest");
     let manifest = parse_manifest(&text).expect("manifest");
     let mut plugin = load(
         LoadRequest {
@@ -145,7 +108,7 @@ fn run(samples: &[f32], policy: &Policy) -> [DataSet; 3] {
             supplied: &BTreeMap::new(),
         },
         policy,
-        &mut Packed,
+        &mut Packed("beats"),
         &CancelToken::default(),
     )
     .expect("plugin loads");

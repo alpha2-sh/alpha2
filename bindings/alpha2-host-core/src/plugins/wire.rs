@@ -16,7 +16,6 @@ pub const WIRE_VERSION: u32 = 2;
 pub const MAX_PREAMBLE_BYTES: usize = 4096;
 /// The longest frame a worker writes.
 pub const MAX_CHILD_FRAME_BYTES: usize = 4 << 20;
-/// Bytes of a frame's fields before a video or audio payload, rounded up.
 const MAX_HEADER_BYTES: usize = 4096;
 /// The longest frame a host writes: a delivered RGBA frame of the largest size, and its fields.
 #[expect(
@@ -344,7 +343,7 @@ fn json<T: for<'de> Deserialize<'de>>(payload: &[u8], what: &str) -> Result<T, W
     serde_json::from_slice(payload).map_err(|_| malformed(what))
 }
 
-fn sha256_hex(text: &str) -> bool {
+fn is_sha256_hex(text: &str) -> bool {
     text.len() == 64
         && text
             .bytes()
@@ -365,7 +364,7 @@ pub fn parse_child(frame: Frame) -> Result<ChildMessage, WireError> {
         }
         child::RESOURCE_READ => {
             let file: SuppliedFile = json(&payload, "resource_read")?;
-            if !sha256_hex(&file.sha256) || file.name.is_empty() {
+            if !is_sha256_hex(&file.sha256) || file.name.is_empty() {
                 return Err(malformed("resource_read"));
             }
             ChildMessage::ResourceRead(file)

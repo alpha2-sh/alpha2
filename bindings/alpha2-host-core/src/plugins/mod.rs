@@ -26,7 +26,10 @@ mod track_tests;
 #[cfg(test)]
 mod transcribe_tests;
 mod wasm;
+#[cfg(feature = "wire-fuzz")]
 pub mod wire;
+#[cfg(not(feature = "wire-fuzz"))]
+mod wire;
 pub mod worker;
 
 use std::collections::BTreeMap;
@@ -163,8 +166,6 @@ pub mod slot_reasons {
     pub const NAME_TOO_LONG: &str = "name_too_long";
     /// A file whose name is not UTF-8.
     pub const NOT_UTF8: &str = "not_utf8";
-    /// This loader fills no slots.
-    pub const UNSUPPORTED: &str = "unsupported";
 }
 
 impl fmt::Display for PluginError {
@@ -409,26 +410,12 @@ fn check_pinned(
     sha256: &str,
     size: u64,
 ) -> Result<resources::PinnedFile, PluginError> {
-    use std::io::Read;
     let Fetched { path, local } = fetch.fetch(url, sha256, size)?;
-    let failed = |error: std::io::Error| {
-        PluginError::new(codes::FETCH_FAILED, format!("{}: {error}", path.display()))
-    };
-    let mut file = std::fs::File::open(&path)
-        .map_err(failed)?
-        .take(size.saturating_add(1));
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0; 1 << 20];
-    let mut total = 0_u64;
-    loop {
-        let read = file.read(&mut buffer).map_err(failed)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        total += read as u64;
-    }
-    let found = hex(&hasher.finalize());
+    let resources::Hashed {
+        sha256: found,
+        bytes: total,
+        ..
+    } = resources::hash_file(&path, size.saturating_add(1), || Ok(()), |_, _| true)?;
     if total != size || found != sha256 {
         let message = if !local {
             format!("{url} does not match the length and SHA-256 the manifest pins")
@@ -701,9 +688,9 @@ pub struct LoadRequest<'a> {
 
 /// Loads the artifact `policy` picks from the request's manifest, fetching it and every pinned
 /// resource through `fetch`. Slots are resolved before any download; their files are read only
-/// when the plugin asks for them. Once `cancel` is
-/// set, the load stops before the next file, and a wasm call of the plugin it returns stops within
-/// about 50 ms; a module compile and a native call run to their end.
+/// when the plugin asks for them. Once `cancel` is set, the load stops before the next file, and
+/// a wasm call of the plugin it returns or its [`Isolation::Child`] worker stops within about
+/// 50 ms; a module compile and a native call in this process run to their end.
 ///
 /// # Errors
 /// A [`PluginError`] for the first check that fails, [`CANCELLED`] once `cancel` is set.
@@ -855,12 +842,6 @@ fn transport(
 }
 
 impl PluginExtractor {
-    /// Whether the plugin is a native library.
-    #[must_use]
-    pub const fn is_native(&self) -> bool {
-        self.native
-    }
-
     /// Whether its calls end at the policy's call deadline: a wasm module's, and an isolated
     /// native library's; a native call in this process runs to its end.
     #[must_use]
