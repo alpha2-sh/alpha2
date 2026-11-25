@@ -1003,7 +1003,6 @@ function acceptsSlot(slot: Slot): BindableProperty["accepts"] | undefined {
 
 const SHAPE_DEFS = (PROJECT_SHAPE as { $defs: Record<string, Json> }).$defs;
 
-/** The animated fields of a mask shape of `type`, by the slot `maskBindings` gives each. */
 function maskShapeFields(type: unknown): [string, Slot][] {
   const variants = (SHAPE_DEFS.ShapeGeometry?.oneOf ?? []) as Json[];
   const variant = variants.find(

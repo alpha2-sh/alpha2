@@ -919,15 +919,7 @@ impl RecycleToken {
 }
 
 impl TexturePool {
-    /// Returns a texture to the idle pool.
-    ///
-    /// Per descriptor, the pool keeps as many textures as any of the last
-    /// [`crate::recent_use::RECENT_FRAMES`] submitted frames had in use at once, whatever the
-    /// budget; the budget bounds only the idle textures beyond that. Those are evicted
-    /// second-chance (CLOCK), oldest release first, so a stale descriptor leaves on the next scan
-    /// while two alternating working sets do not evict each other on every release. If nothing can
-    /// be evicted the incoming texture is dropped. Dropped textures are destroyed via
-    /// [`crate::retire`] after any frame still encoding them is submitted.
+    /// Returns a texture to the idle pool, evicting idle textures past the budget second-chance.
     fn release(
         &self,
         key: TextureKey,

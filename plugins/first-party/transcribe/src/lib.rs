@@ -15,7 +15,10 @@ mod seam;
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void};
 
-use alpha2_plugin_sdk::{Audio, Context, Direction, Emitter, Error, Extractor, Host, SlotShape};
+use alpha2_plugin_sdk::{
+    Audio, Context, Direction, Emitter, Error, Extractor, Host, MAX_DATA_LABEL_BYTES,
+    MAX_DATA_WORDS, SlotShape, TICKS_PER_SECOND,
+};
 use seam::Word;
 use whisper_rs::whisper_rs_sys::ggml_log_level;
 use whisper_rs::{
@@ -34,12 +37,7 @@ const SAMPLES_PER_TIMESTAMP: i64 = RATE / 100;
 const VOICE_FRAME: usize = 320;
 const VOICE_FLOOR_DB: f32 = -30.0;
 const SILENT_RMS: f32 = 1e-4;
-/// alpha2's clock.
-const TICKS_PER_SECOND: i64 = 120_000;
 const SHORTEST_WORD_TICKS: i64 = TICKS_PER_SECOND / 50;
-/// The most words one data set holds and the longest text a word may have, per the plugin ABI.
-const MAX_WORDS: usize = 200_000;
-const MAX_TEXT_BYTES: usize = 256;
 const MAX_THREADS: usize = 8;
 const MODEL: &str = "model";
 const OUTPUT: &str = "words";
@@ -80,6 +78,43 @@ fn language(context: &Context) -> Result<Option<&'static str>, Error> {
                 ))
             }),
     }
+}
+
+/// What ggml's build enables on x86-64 with `GGML_NATIVE` off, and whether this CPU has each.
+#[cfg(target_arch = "x86_64")]
+fn ggml_instructions() -> Vec<(&'static str, bool)> {
+    vec![
+        ("SSE4.2", is_x86_feature_detected!("sse4.2")),
+        ("AVX", is_x86_feature_detected!("avx")),
+        ("AVX2", is_x86_feature_detected!("avx2")),
+        ("BMI2", is_x86_feature_detected!("bmi2")),
+        ("FMA", is_x86_feature_detected!("fma")),
+        ("F16C", is_x86_feature_detected!("f16c")),
+    ]
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn ggml_instructions() -> Vec<(&'static str, bool)> {
+    Vec::new()
+}
+
+fn check_cpu(instructions: &[(&str, bool)]) -> Result<(), Error> {
+    let named = |missing_only: bool| {
+        instructions
+            .iter()
+            .filter(|(_, present)| !(missing_only && *present))
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let missing = named(true);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(Error(format!(
+        "alpha2.transcribe needs a CPU with {}; this one lacks {missing}",
+        named(false)
+    )))
 }
 
 fn to_sample_ceil(ticks: i64) -> i64 {
@@ -219,7 +254,7 @@ fn trimmed(start: i64, end: i64, window_start: i64, voiced: &[bool]) -> (i64, i6
 }
 
 fn truncated(text: &str) -> &str {
-    let mut end = text.len().min(MAX_TEXT_BYTES);
+    let mut end = text.len().min(MAX_DATA_LABEL_BYTES);
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -316,9 +351,9 @@ impl Transcribe {
     fn emit(&mut self, out: &mut Emitter) -> Result<(), Error> {
         let (range_start, range_end) = self.range;
         for word in std::mem::take(&mut self.unemitted) {
-            if self.emitted == MAX_WORDS {
+            if self.emitted == MAX_DATA_WORDS {
                 return Err(Error(format!(
-                    "the range holds more than {MAX_WORDS} words, the most one data set holds"
+                    "the range holds more than {MAX_DATA_WORDS} words, the most one data set holds"
                 )));
             }
             let start = to_ticks(word.start).max(range_start).max(self.emitted_end);
@@ -340,6 +375,7 @@ impl Extractor for Transcribe {
     const DESCRIPTOR: &'static str = include_str!("../descriptor.json");
 
     fn begin(context: &Context, host: &Host) -> Result<Self, Error> {
+        check_cpu(&ggml_instructions())?;
         let language = language(context)?;
         let whisper = load(context, host, language)?;
         let detect = language.is_none() && whisper.is_multilingual();
@@ -507,10 +543,23 @@ mod tests {
     }
 
     #[test]
+    fn a_cpu_without_an_instruction_set_ggml_uses_is_refused_naming_it() {
+        assert_eq!(check_cpu(&[("AVX", true), ("FMA", true)]), Ok(()));
+        assert_eq!(check_cpu(&[]), Ok(()));
+        let refused = check_cpu(&[("AVX", true), ("AVX2", false), ("FMA", false)])
+            .expect_err("refused")
+            .0;
+        assert!(
+            refused.ends_with("needs a CPU with AVX, AVX2, FMA; this one lacks AVX2, FMA"),
+            "{refused}"
+        );
+    }
+
+    #[test]
     fn a_long_text_is_cut_at_a_character_boundary() {
         let text = "\u{e9}".repeat(200);
-        assert_eq!(truncated(&text).len(), MAX_TEXT_BYTES);
+        assert_eq!(truncated(&text).len(), MAX_DATA_LABEL_BYTES);
         let text = format!("a{}", "\u{e9}".repeat(200));
-        assert_eq!(truncated(&text).len(), MAX_TEXT_BYTES - 1);
+        assert_eq!(truncated(&text).len(), MAX_DATA_LABEL_BYTES - 1);
     }
 }

@@ -37,6 +37,8 @@ requests = [
 ]
 # Decode budget and delay overrides for dependents' tests. Never enable in a product build.
 test-hooks = []
+# Makes `plugins::wire` public for the fuzz targets. Never enable in a product build.
+wire-fuzz = ["plugins"]
 
 [dependencies]
 alpha2-assets = { workspace = true, optional = true }
@@ -76,6 +78,9 @@ pollster.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2.189"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 
 # The workspace's lints, with unsafe code denied rather than forbidden, because the plugin loader
 # calls into native plugins and allows it there alone.

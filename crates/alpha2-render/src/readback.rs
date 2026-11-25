@@ -789,10 +789,7 @@ impl Renderer {
             .uniform_buffers
             .acquire(self.gpu.device(), YUV_PACK_UNIFORM_BYTES);
         self.encode_nv12_pack_into(target, planes, encoding, encoder, &mut uniforms)?;
-        // `write` fills only the host copy; the shader reads stale data without the flush.
         uniforms.flush(self.gpu.queue());
-        // Keep the uniforms until the caller submits `encoder`, or the next call could overwrite
-        // them.
         Ok(EncodedNv12Pack {
             uniforms: Some(uniforms),
             _encode: encode,

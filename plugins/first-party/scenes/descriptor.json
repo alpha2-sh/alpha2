@@ -26,7 +26,7 @@
         "minimum": 0,
         "maximum": 60000,
         "title": "Shortest shot",
-        "description": "A cut closer than this to the previous one is not reported.",
+        "description": "A cut closer than this to one already reported is not reported.",
         "default": 500,
         "x-alpha2-unit": "ms",
         "x-alpha2-step": 100,

@@ -10,13 +10,12 @@ use alpha2_media::CancelToken;
 use alpha2_os::MappedRegion;
 use alpha2_plugin_abi::video_format;
 
-use super::native::{Forward, NativeInstance};
+use super::native::{AudioBlock, Forward, NativeInstance};
 use super::resources::ResourceReader;
 use super::wire::{self, Failure, Hello, Load, child, host};
 use super::{OutputCap, PluginError, codes, sha256_hex};
 
-/// The exit status of a worker whose host broke the wire or went away.
-const BROKEN: u8 = 3;
+const BROKEN_WIRE_EXIT: u8 = 3;
 const VIDEO_SHARED_BYTES: usize = 36;
 
 type Writer = Rc<RefCell<BufWriter<File>>>;
@@ -29,7 +28,7 @@ type Input = File;
 /// Writes a frame, or ends the process when the host is gone.
 fn send(writer: &Writer, tag: u8, parts: &[&[u8]]) {
     if wire::write_frame(&mut *writer.borrow_mut(), tag, parts).is_err() {
-        alpha2_os::exit_without_handlers(BROKEN);
+        alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT);
     }
 }
 
@@ -60,7 +59,7 @@ pub fn main() -> ! {
         (Ok(input), Ok(output)) => (input, output),
         (Err(error), _) | (_, Err(error)) => {
             alpha2_os::diagnostic!("plugin worker: its standard streams: {error}");
-            alpha2_os::exit_without_handlers(BROKEN);
+            alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT);
         }
     };
     alpha2_os::close_descriptors_except(&[&input, &output]);
@@ -83,7 +82,7 @@ pub fn main() -> ! {
         if out.write_all(&wire::MAGIC).is_err()
             || wire::write_frame(&mut *out, child::HELLO, &[&hello]).is_err()
         {
-            alpha2_os::exit_without_handlers(BROKEN);
+            alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT);
         }
     }
     serve(&mut BufReader::new(input), &writer)
@@ -102,11 +101,11 @@ fn serve(input: &mut BufReader<Input>, writer: &Writer) -> ! {
                 drop(instance.take());
                 alpha2_os::exit_without_handlers(0);
             }
-            Err(_) => alpha2_os::exit_without_handlers(BROKEN),
+            Err(_) => alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT),
         };
         let region = (frame.tag == host::REGION).then(|| open_region(input, &frame.payload));
         if descriptors_pending(input) {
-            alpha2_os::exit_without_handlers(BROKEN);
+            alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT);
         }
         sequence = sequence.wrapping_add(1);
         let seq = sequence.to_le_bytes();
@@ -139,11 +138,11 @@ fn serve(input: &mut BufReader<Input>, writer: &Writer) -> ! {
                     let failure = serde_json::to_vec(&Failure::from(&error)).unwrap_or_default();
                     send(writer, child::REGION_FAILED, &[&seq, &failure]);
                 }
-                None => alpha2_os::exit_without_handlers(BROKEN),
+                None => alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT),
             },
             (host::VIDEO_SHARED, Some(plugin)) => {
                 let Some(status) = shared_video(plugin, mapped.as_ref(), &frame.payload) else {
-                    alpha2_os::exit_without_handlers(BROKEN);
+                    alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT);
                 };
                 finish_call(plugin, writer, &mut reported, &seq, status);
             }
@@ -152,11 +151,11 @@ fn serve(input: &mut BufReader<Input>, writer: &Writer) -> ! {
             }
             (tag, Some(plugin)) => {
                 let Some(status) = call(plugin, tag, &frame.payload) else {
-                    alpha2_os::exit_without_handlers(BROKEN);
+                    alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT);
                 };
                 finish_call(plugin, writer, &mut reported, &seq, status);
             }
-            (_, None) => alpha2_os::exit_without_handlers(BROKEN),
+            (_, None) => alpha2_os::exit_without_handlers(BROKEN_WIRE_EXIT),
         }
     }
 }
@@ -286,13 +285,13 @@ fn call(plugin: &mut NativeInstance, tag: u8, payload: &[u8]) -> Option<i32> {
                 .map(|bytes| f32::from_le_bytes(*bytes))
                 .collect::<Vec<_>>();
             plugin.audio(
-                (
-                    i64_at(payload, 0)?,
-                    i64_at(payload, 8)?,
-                    u32_at(payload, 16)?,
-                    u32_at(payload, 20)?,
-                    u32_at(payload, 24)?,
-                ),
+                &AudioBlock {
+                    start: i64_at(payload, 0)?,
+                    start_sample: i64_at(payload, 8)?,
+                    frames: u32_at(payload, 16)?,
+                    rate: u32_at(payload, 20)?,
+                    channels: u32_at(payload, 24)?,
+                },
                 &samples,
             )
         }

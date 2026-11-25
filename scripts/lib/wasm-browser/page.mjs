@@ -97,7 +97,6 @@ globalThis.trialDecodes = async (facts) => {
   return answer;
 };`;
 
-// The page's import map; it also resolves the "alpha2/..." imports of packages/alpha2-editor/dist.
 // Workers have no import map, so `/worker-modules/<path>` serves `<path>` with these resolved.
 export const IMPORTS = {
   "alpha2/extensions-wasm": "/packages/alpha2/wasm/alpha2_extensions.js",

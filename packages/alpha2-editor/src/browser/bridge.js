@@ -16,15 +16,6 @@ import { applyEdit as applyEngineEdit } from "alpha2/apply-edit";
 import { runExtractor } from "alpha2/extract";
 import { loadPlugin } from "alpha2/plugins";
 
-/** @type {import("alpha2/plugins").PluginCapabilities} */
-const EXTRACT_CAPABILITIES = Object.freeze({
-  inputs: Object.freeze({
-    video: Object.freeze(["source", "timeline"]),
-    audio: Object.freeze(["source"]),
-  }),
-  artifacts: Object.freeze(["wasm"]),
-  slots: true,
-});
 import {
   DecodeUnavailableError,
   PlanarDecodeUnavailableError,
@@ -68,6 +59,16 @@ import {
   conformProject,
   sha256Blob,
 } from "alpha2/assets";
+
+/** @type {import("alpha2/plugins").PluginCapabilities} */
+const EXTRACT_CAPABILITIES = Object.freeze({
+  inputs: Object.freeze({
+    video: Object.freeze(["source", "timeline"]),
+    audio: Object.freeze(["source"]),
+  }),
+  artifacts: Object.freeze(["wasm"]),
+  slots: true,
+});
 
 /**
  * An export refused before it rendered, with the engine's conform report. The message names sources
@@ -2426,14 +2427,6 @@ export function createBrowserBridge(options) {
       },
     };
   }
-  /**
-   * Refuses an export up front when it shows a source imported for a degraded preview: the engine
-   * would refuse its first frame, and browser tone mapping must not reach a file.
-   */
-  /**
-   * Holds the files the timeline of `project` shows and draws its frames on a CPU renderer of its
-   * own, started at the first frame; `close` lets them go.
-   */
   function holdTimelineFrames(document, project) {
     requireShownText(document, project);
     const used = shownSources(project);
@@ -2521,6 +2514,10 @@ export function createBrowserBridge(options) {
       },
     };
   }
+  /**
+   * Refuses an export up front when it shows a source imported for a degraded preview: the engine
+   * would refuse its first frame, and browser tone mapping must not reach a file.
+   */
   function refuseDegradedSources(
     document,
     project,

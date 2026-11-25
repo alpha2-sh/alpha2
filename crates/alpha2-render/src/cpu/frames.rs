@@ -138,8 +138,8 @@ impl FramePool {
 }
 
 impl State {
-    /// Removes the oldest spare buffers until within the limits; the caller frees them after
-    /// unlocking.
+    /// Removes the oldest spare buffers until within the limits.
+    #[must_use]
     fn evict(&mut self) -> Vec<Vec<HalfPixel>> {
         let mut evicted = Vec::new();
         let mut index = 0;

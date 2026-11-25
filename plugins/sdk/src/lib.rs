@@ -113,6 +113,61 @@ impl std::fmt::Display for Error {
     }
 }
 
+/// Mirrors `alpha2_time::TICKS_PER_SECOND`.
+pub const TICKS_PER_SECOND: i64 = 120_000;
+/// Mirrors `alpha2_model::MAX_DATA_CHANNELS`.
+pub const MAX_DATA_CHANNELS: usize = 64;
+/// Mirrors `alpha2_model::MAX_DATA_VALUES`.
+pub const MAX_DATA_VALUES: usize = 4_000_000;
+/// Mirrors `alpha2_model::MAX_DATA_WORDS`.
+pub const MAX_DATA_WORDS: usize = 200_000;
+/// Mirrors `alpha2_model::MAX_DATA_INTERVALS`.
+pub const MAX_DATA_INTERVALS: usize = 200_000;
+/// Mirrors `alpha2_model::MAX_DATA_LABEL_BYTES`.
+pub const MAX_DATA_LABEL_BYTES: usize = 256;
+/// Mirrors `alpha2_model::MAX_DATA_COORDINATE`.
+pub const MAX_DATA_COORDINATE: f32 = 16.0;
+/// Mirrors `alpha2_model::MAX_DATA_SCALAR`.
+pub const MAX_DATA_SCALAR: f32 = 1e9;
+/// Mirrors `alpha2_model::MAX_DATA_ROTATION_DEGREES`.
+pub const MAX_DATA_ROTATION_DEGREES: f32 = 36_000.0;
+/// Mirrors `alpha2_model::MAX_DATA_SCALE`.
+pub const MAX_DATA_SCALE: f32 = 1_000.0;
+
+/// A number param with its default and the inclusive bounds the descriptor declares.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NumberParam {
+    /// Its key in `params`.
+    pub key: &'static str,
+    /// The value when the request leaves it out.
+    pub default: f64,
+    /// The smallest value taken.
+    pub min: f64,
+    /// The largest value taken.
+    pub max: f64,
+}
+
+impl NumberParam {
+    /// `given`, or the default when it is `None`.
+    ///
+    /// # Errors
+    /// `given` is not a number from `min` to `max`.
+    pub fn value(&self, given: Option<&serde_json::Value>) -> Result<f64, Error> {
+        let Some(given) = given else {
+            return Ok(self.default);
+        };
+        given
+            .as_f64()
+            .filter(|number| (self.min..=self.max).contains(number))
+            .ok_or_else(|| {
+                Error(format!(
+                    "params.{} must be a number from {} to {}",
+                    self.key, self.min, self.max
+                ))
+            })
+    }
+}
+
 /// What a run reads, as `begin` receives it.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Context {
@@ -137,6 +192,31 @@ pub struct Context {
     /// The filled resource slots by name, with the files and sizes each offers.
     #[serde(default)]
     pub supplied: BTreeMap<String, SuppliedSlot>,
+}
+
+impl Context {
+    /// The value of each of `params` in order; the request may have no other param.
+    ///
+    /// # Errors
+    /// A param `params` does not list, or a value [`NumberParam::value`] refuses.
+    pub fn number_params<const N: usize>(
+        &self,
+        extractor: &str,
+        params: &[NumberParam; N],
+    ) -> Result<[f64; N], Error> {
+        if let Some(key) = self
+            .params
+            .keys()
+            .find(|key| params.iter().all(|param| param.key != *key))
+        {
+            return Err(Error(format!("params.{key} is not a param of {extractor}")));
+        }
+        let mut values = [0.0; N];
+        for (value, param) in values.iter_mut().zip(params) {
+            *value = param.value(self.params.get(param.key))?;
+        }
+        Ok(values)
+    }
 }
 
 /// A filled resource slot.

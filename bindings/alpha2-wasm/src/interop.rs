@@ -1053,7 +1053,7 @@ fn readback_failure(
             "DEVICE_LOST" => Code::GPU_DEVICE_LOST,
             "DEVICE_HUNG" => Code::GPU_DEVICE_HUNG,
             "GPU_TIMEOUT" => Code::GPU_TIMEOUT,
-            _ => Code::INTERNAL,
+            _ => Code::ALPHA2_ERROR,
         },
         message,
     );
@@ -1102,7 +1102,7 @@ pub(crate) fn renderer_with_builtins(
     let mut renderer = Renderer::new(gpu).with_gpu_error_reports(health.reports.clone());
     renderer
         .register_builtins()
-        .map_err(|diagnostics| diagnostics_to_js(Code::INTERNAL, diagnostics))?;
+        .map_err(|diagnostics| diagnostics_to_js(Code::ALPHA2_ERROR, diagnostics))?;
     Ok(renderer)
 }
 

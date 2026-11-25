@@ -4,6 +4,7 @@
 import { runExtractor } from "alpha2/extract";
 import { restorePlugin } from "alpha2/plugins";
 
+import { reviveRangeFile } from "./runtime/range-file.js";
 import { loadEngineWasm } from "./runtime/wasm.js";
 
 /** An error as it crosses to the page: its name, message, code and details. */
@@ -61,7 +62,16 @@ export function installExtractWorker(scope) {
           audioBinding: binding,
           project: data.project,
           request: data.request,
-          ...(data.media ? { media: data.media } : {}),
+          ...(data.media
+            ? {
+                media: Object.fromEntries(
+                  Object.entries(data.media).map(([id, file]) => [
+                    id,
+                    reviveRangeFile(file),
+                  ]),
+                ),
+              }
+            : {}),
           ...(timelineFrame ? { timelineFrame } : {}),
           ...(data.madeFrom ? { madeFrom: data.madeFrom } : {}),
           onProgress: (progress) =>
@@ -88,7 +98,7 @@ export function installExtractWorker(scope) {
  *   plugin: import("alpha2/plugins").LoadedPlugin,
  *   project: import("alpha2/project").Project,
  *   request: import("alpha2/extractor").ExtractRun,
- *   media?: Readonly<Record<string, Blob>>,
+ *   media?: Readonly<Record<string, Blob | import("./types.js").RangeFile>>,
  *   timelineFrame?: (time: bigint, width: number, height: number) => Promise<{ rgba: Uint8Array }>,
  *   madeFrom?: unknown,
  *   onProgress?: (progress: import("alpha2/extractor").ExtractProgress) => void,

@@ -369,7 +369,7 @@ pub(crate) struct MeasuredSubmit {
     pub(crate) lease_retire: Duration,
 }
 
-/// Quality controls consumed by graph compilation and pass execution.
+/// Quality controls consumed by pass execution.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct RenderQualityControls {
@@ -569,7 +569,6 @@ impl Renderer {
 
     pub(crate) fn forget_after_reported_errors(&self) {
         if self.gpu_errors.take_unhandled() {
-            // The browser reported an error for earlier work; cached results may be bad.
             self.clear_result_cache_for(crate::CacheInvalidation::GpuError);
             self.forget_untrusted_resources();
         }

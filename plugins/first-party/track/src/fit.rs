@@ -115,10 +115,9 @@ impl Similarity {
     }
 }
 
-/// `SplitMix64`.
-struct Sampler(u64);
+struct SplitMix64(u64);
 
-impl Sampler {
+impl SplitMix64 {
     fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
@@ -157,7 +156,7 @@ pub fn ransac(pairs: &[Pair], round: u64) -> Option<(Similarity, Vec<bool>)> {
     if count < MIN_INLIERS {
         return None;
     }
-    let mut sampler = Sampler(SEED ^ round.wrapping_mul(0x2545_f491_4f6c_dd1d));
+    let mut sampler = SplitMix64(SEED ^ round.wrapping_mul(0x2545_f491_4f6c_dd1d));
     let mut best: Option<(usize, f64, Similarity)> = None;
     for _ in 0..ITERATIONS {
         let first = sampler.below(count);

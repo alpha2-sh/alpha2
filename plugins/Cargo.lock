@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-scenes"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "alpha2-plugin-abi",
  "alpha2-plugin-sdk",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-transcribe"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "alpha2-plugin-abi",
  "alpha2-plugin-sdk",

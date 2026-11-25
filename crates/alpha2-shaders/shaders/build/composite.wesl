@@ -350,8 +350,7 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
 // devices truncate (half-float targets round toward zero; v * 255 = n.51 stores as n).
 
 // `value` rounded to the nearest half. Normals round their top 10 fraction bits; subnormals
-// round to multiples of 2^-24 via an exact 2^24 scale. Both are computed and one selected
-// without branching, so software rasterizers run one path.
+// round to multiples of 2^-24 via an exact 2^24 scale.
 fn stored_half(value: vec4f) -> vec4f {
     let bits = bitcast<vec4u>(value);
     let rounded = (bits + 0x0fffu + ((bits >> vec4u(13u)) & vec4u(1u))) & vec4u(0xffffe000u);
