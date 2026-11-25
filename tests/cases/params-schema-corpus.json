@@ -37,6 +37,58 @@
       },
       "title": {
         "type": "string"
+      },
+      "region": {
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "width": {
+            "type": "number",
+            "minimum": 0.04,
+            "maximum": 1
+          },
+          "height": {
+            "type": "number",
+            "minimum": 0.04,
+            "maximum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "focus": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "additionalProperties": false
       }
     }
   },
@@ -105,6 +157,69 @@
         "type": "string",
         "title": "Title",
         "description": "A param named like an annotation keyword."
+      },
+      "region": {
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "x-alpha2-display": "percent"
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "x-alpha2-display": "percent"
+          },
+          "width": {
+            "type": "number",
+            "minimum": 0.04,
+            "maximum": 1,
+            "x-alpha2-display": "percent"
+          },
+          "height": {
+            "type": "number",
+            "minimum": 0.04,
+            "maximum": 1,
+            "x-alpha2-display": "percent"
+          }
+        },
+        "additionalProperties": false,
+        "title": "Box",
+        "description": "A rectangle drawn on the picture.",
+        "x-alpha2-display": "box",
+        "x-alpha2-order": 3
+      },
+      "focus": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "additionalProperties": false,
+        "title": "Focus",
+        "x-alpha2-display": "point",
+        "x-alpha2-order": 4
       }
     },
     "title": "Settings",
@@ -126,7 +241,17 @@
         "label": {
           "text": "ok"
         },
-        "title": "t"
+        "title": "t",
+        "region": {
+          "x": 0.25,
+          "y": 0.25,
+          "width": 0.5,
+          "height": 0.5
+        },
+        "focus": {
+          "x": 0.5,
+          "y": 0.5
+        }
       },
       "problem": null
     },
@@ -217,6 +342,53 @@
         "title": 3
       },
       "problem": "params.title must be string"
+    },
+    {
+      "name": "box-too-narrow",
+      "params": {
+        "mode": "fast",
+        "region": {
+          "x": 0.25,
+          "y": 0.25,
+          "width": 0.01,
+          "height": 0.5
+        }
+      },
+      "problem": "params.region.width must be at least 0.04"
+    },
+    {
+      "name": "box-missing-field",
+      "params": {
+        "mode": "fast",
+        "region": {
+          "x": 0.25,
+          "y": 0.25,
+          "width": 0.5
+        }
+      },
+      "problem": "params.region.height is required"
+    },
+    {
+      "name": "point-outside",
+      "params": {
+        "mode": "fast",
+        "focus": {
+          "x": 1.5,
+          "y": 0.5
+        }
+      },
+      "problem": "params.focus.x must be at most 1"
+    },
+    {
+      "name": "point-as-array",
+      "params": {
+        "mode": "fast",
+        "focus": [
+          0.5,
+          0.5
+        ]
+      },
+      "problem": "params.focus must be object"
     }
   ]
 }

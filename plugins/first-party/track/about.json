@@ -1,0 +1,7 @@
+{
+  "name": "Track",
+  "summary": "Follows a box you pick on one frame through the frames before and after it.",
+  "author": "alpha2",
+  "homepage": "https://github.com/alpha2-sh/alpha2/tree/main/plugins#readme",
+  "license": "MIT"
+}
