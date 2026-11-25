@@ -19,7 +19,7 @@ import { loadPlugin } from "alpha2/plugins";
 /** @type {import("alpha2/plugins").PluginCapabilities} */
 const EXTRACT_CAPABILITIES = Object.freeze({
   inputs: Object.freeze({
-    video: Object.freeze(["source"]),
+    video: Object.freeze(["source", "timeline"]),
     audio: Object.freeze(["source"]),
   }),
   artifacts: Object.freeze(["wasm"]),
@@ -2410,7 +2410,103 @@ export function createBrowserBridge(options) {
    * Refuses an export up front when it shows a source imported for a degraded preview: the engine
    * would refuse its first frame, and browser tone mapping must not reach a file.
    */
-  function refuseDegradedSources(document, project, used) {
+  /**
+   * Holds the files the timeline of `project` shows and draws its frames on a CPU renderer of its
+   * own, started at the first frame; `close` lets them go.
+   */
+  function holdTimelineFrames(document, project) {
+    requireShownText(document, project);
+    const used = shownSources(project);
+    const drawnResources = drawnEffectResources(project);
+    refuseDegradedSources(document, project, used, "extract");
+    const held = [];
+    const map = new Map();
+    const fonts = [];
+    try {
+      for (const source of [
+        ...project.sources.filter((s) => used.has(s.id)),
+        ...(project.effect_resources ?? []).filter((r) =>
+          drawnResources.has(r.id),
+        ),
+      ]) {
+        if (drawnByEngine(source)) continue;
+        const lease = acquireOwned(document, document.assets[source.id]);
+        held.push(lease);
+        map.set(source.id, sourceView(document, source.id, lease.value));
+      }
+      for (const font of heldFonts(document)) {
+        const lease = acquireOwned(document, font);
+        held.push(lease);
+        fonts.push(lease.value);
+      }
+      fonts.push(...(runtimeAssets.fonts ?? []));
+    } catch (error) {
+      held.forEach((lease) => lease.release());
+      throw error;
+    }
+    const effects = keptEffects();
+    const lib = { get: (id) => map.get(id) };
+    let started = null;
+    const start = async () => {
+      const { Engine } = await import("./runtime/engine.js");
+      const pixels = new SourcePixels(lib, {
+        extensionWasmUrls: extensionWasmUrls(runtimeAssets),
+        videoDecode: "software",
+      });
+      const { width, height } = project.settings;
+      const renderer = new Engine(
+        new OffscreenCanvas(width, height),
+        pixels,
+        lib,
+        runtimeAssets,
+        { videoConversion, renderer: "cpu" },
+      );
+      try {
+        await renderer.start();
+        await renderer.registerEffects(effects, "export");
+        renderer.loadProject(project, "export");
+        if (renderer.projectRuntimeEffects().length > 0)
+          throw new EditorError(
+            "unsupported_media",
+            "The timeline draws runtime effects, which the renderer that reads timeline frames for an extractor cannot draw",
+            "extract",
+          );
+        renderer.setCaptionFonts(fonts);
+        pixels.setOutputSize(width, height);
+      } catch (error) {
+        await renderer.dispose();
+        await pixels.dispose();
+        throw error;
+      }
+      return { renderer, pixels };
+    };
+    return {
+      async frame(time, width, height) {
+        started ??= start();
+        const { renderer } = await started;
+        return {
+          width,
+          height,
+          rgba: await renderer.readRgbaAt(time, width, height, {
+            context: context(project, lib),
+          }),
+        };
+      },
+      async close() {
+        held.forEach((lease) => lease.release());
+        if (started === null) return;
+        const { renderer, pixels } = await started.catch(() => ({}));
+        await renderer?.dispose();
+        await pixels?.dispose();
+      },
+    };
+  }
+  function refuseDegradedSources(
+    document,
+    project,
+    used,
+    operation = "export",
+  ) {
     const degraded = project.sources
       .filter(
         (source) =>
@@ -2423,8 +2519,8 @@ export function createBrowserBridge(options) {
     const names = degraded.join(", ");
     throw new EditorError(
       "unsupported_media",
-      `This browser cannot export ${names}: it decodes this HDR video only to frames the engine cannot read, so the preview shows it with the browser's tone mapping. Export with the native host.`,
-      "export",
+      `This browser cannot ${operation === "export" ? "export" : "read for an extractor"} ${names}: it decodes this HDR video only to frames the engine cannot read, so the preview shows it with the browser's tone mapping. Use the native host.`,
+      operation,
       undefined,
       true,
       {
@@ -3008,26 +3104,24 @@ export function createBrowserBridge(options) {
           "Pass a plugin or an extractor",
           "extract",
         );
-      if (run.input.from !== "source")
-        throw new EditorError(
-          "unsupported_media",
-          "The browser runtime extracts from source media; it draws no timeline frames for an extractor",
-          "extract",
-        );
-      const id = run.input.source_id ?? "";
+      const timeline = run.input.from === "timeline";
+      if (timeline) materializeText(editor.document);
       const { project, read } = editor.extractionProject();
       const document = editor.document;
-      const file = originalOf(document, id)?.file;
-      if (!file)
+      const id = run.input.source_id ?? "";
+      const file = timeline ? undefined : originalOf(document, id)?.file;
+      if (!timeline && !file)
         throw new EditorError(
           "missing_asset",
           "Relink the original to extract from it",
           "extract",
           id,
         );
-      const madeFrom =
-        project.sources.find((source) => source.id === id)?.fingerprint ??
-        document.assets[id]?.fingerprint;
+      const frames = timeline ? holdTimelineFrames(document, project) : null;
+      const madeFrom = timeline
+        ? undefined
+        : (project.sources.find((source) => source.id === id)?.fingerprint ??
+          document.assets[id]?.fingerprint);
       const job = new ExtractionJob(
         async (aborted) => {
           const binding = await loadWasm();
@@ -3050,7 +3144,8 @@ export function createBrowserBridge(options) {
               audioBinding: binding,
               project,
               request: run,
-              media: { [id]: file },
+              ...(file ? { media: { [id]: file } } : {}),
+              ...(frames ? { timelineFrame: frames.frame } : {}),
               ...(madeFrom ? { madeFrom } : {}),
               ...(loaded ? { plugin: loaded } : {}),
               signal: aborted,
@@ -3061,7 +3156,10 @@ export function createBrowserBridge(options) {
           return { result, read };
         },
         signal,
-        () => extractions.delete(job),
+        () => {
+          extractions.delete(job);
+          void frames?.close();
+        },
       );
       extractions.add(job);
       return job.result;

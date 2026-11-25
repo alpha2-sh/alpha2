@@ -92,6 +92,54 @@ await bridge.dispose();
 `;
 }
 
+// bridge.extract reads the timeline: the generated project's frames hash as every surface pins
+// them, a video clip on the timeline is drawn from its decoded frames, and timeline audio is
+// refused.
+export function pluginEditorTimeline() {
+  return `${prelude}
+const { dataHash } = await import("/scripts/lib/surface-conformance.mjs");
+const fixture = table.extract.find((c) => c.name === "plugin-digest-timeline-cpu");
+const manifest = "/plugins/target/browser-fixtures/fixtures/digest/manifest.json";
+const plugin = { manifest, sha256: await sha256(await (await fetch(manifest)).arrayBuffer()) };
+const generated = createEditor({ document: createDocument(table.projects[fixture.project]) });
+const drawing = createBrowserBridge({ editor: generated, runtimeAssets, audio: false });
+const capabilities = drawing.extractCapabilities();
+const { result, read } = await drawing.extract(fixture.request, { plugin });
+const found = await dataHash(result.dataSets);
+const applied = generated.applyExtraction(result, { read }).ok;
+await drawing.dispose();
+
+const editor = createEditor({ document: createDocument({
+  schema_version: 1, id: "v", name: "V",
+  settings: { width: 320, height: 180, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [], timeline: { tracks: [{ id: "t", name: "T", kind: "video", clips: [] }] },
+}) });
+const bridge = createBrowserBridge({ editor, runtimeAssets, audio: false });
+const id = await importVideo(bridge, await (await fetch("/tests/corpus/h264-bt709-copy.mp4")).blob());
+editor.dispatch({ type: "clip.insert", trackId: "t", clip: { id: "c", source_id: id,
+  timeline_range: { start: 0, end: 40000 }, source_range: { start: 0, end: 40000 } } });
+const video = await bridge.extract(fixture.request, { plugin });
+const set = /** @type {Extract<import("/packages/alpha2/dist/project.js").DataSet, { kind: "scalars" }>} */ (video.result.dataSets[0]);
+const distinct = new Set(set.values.map(String)).size;
+/** @type {import("/packages/alpha2/dist/extractor.js").ExtractRun} */
+const audioRun = { extractor: "com.example.level", version: 1,
+  input: { from: "timeline", range: { start: 0, end: 40000 } }, outputs: { level: "level" } };
+const audio = await codeOf(bridge.extract(audioRun, { extractor: {
+  describe: () => ({ id: "com.example.level", version: 1,
+    input: { media: "audio", from: ["timeline"], format: "f32" },
+    outputs: [{ name: "level", kind: "scalars", channels: ["a"] }] }),
+} }));
+await bridge.dispose();
+report({
+  ok: found === fixture.sha256 && applied && capabilities.inputs.video.includes("timeline")
+    && !capabilities.inputs.audio.includes("timeline")
+    && set.times.length === 10 && distinct > 2 && set.anchor.type === "timeline"
+    && audio === "INVALID_INPUT",
+  found, applied, capabilities, times: set.times.length, distinct, audio,
+});
+`;
+}
+
 // bridge.applyEdit called before the engine has loaded waits for it, then commits one step.
 export function editorApplyEdit() {
   return `${prelude}

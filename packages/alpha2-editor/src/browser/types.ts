@@ -648,16 +648,21 @@ export interface BrowserBridge {
    */
   extractCapabilities(): import("alpha2/plugins").PluginCapabilities;
   /**
-   * Runs an extractor over a source's original media on this page (`runExtractor` from
-   * `alpha2/extract`), with an app's `extractor` or a `plugin`: one the app loaded with
+   * Runs an extractor over a source's original media or the timeline on this page
+   * (`runExtractor` from `alpha2/extract`), with an app's `extractor` or a `plugin`: one the app loaded with
    * `loadPlugin` from `alpha2/plugins`, which many runs share (its module compiles once), or a
    * manifest and its SHA-256 for the bridge to load for this run, with `fetch` when the app
    * fetches the plugin's files itself (a cache, a proxy). `onProgress` reports the plugin's files
    * as they arrive (`phase: "load"`), then the extraction. Resolves with the result and the read
    * taken when the run started; commit them with `EditorSession.applyExtraction(result, { read })`.
    *
-   * Rejects without exactly one of `plugin` and `extractor` (`invalid_command`), for a timeline
-   * input (`unsupported_media`), without the source's original in this session (`missing_asset`),
+   * Timeline frames are drawn as the CPU renderer draws them at export quality, as every surface
+   * reads them; timeline audio is not supplied (`INVALID_INPUT`).
+   *
+   * Rejects without exactly one of `plugin` and `extractor` (`invalid_command`), without the
+   * source's original in this session or, for a timeline input, a file the timeline shows
+   * (`missing_asset`), for a timeline that draws runtime effects or HDR video this browser cannot
+   * read (`unsupported_media`),
    * with the plugin loader's and the extractor's errors (`PLUGIN_*`, `INVALID_INPUT`,
    * `INVALID_EMIT`, `EXTRACTOR_FAILED`, `DECODE_UNAVAILABLE`), with `cancelled` when `signal`
    * aborts or the bridge is disposed, and after disposal (`disposed`).

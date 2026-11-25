@@ -29,6 +29,10 @@ All notable changes to this project are documented in this file.
   `alpha2/plugins` says why a plugin would not run there. A host's `capabilities` result reports
   its plugin policy as `plugins` (`mode`, `slots`, `isolation`), typed in `@alpha2-sh/node`.
 
+- `bridge.extract` reads the timeline: it draws the frames an extractor asks for on a CPU renderer
+  of its own at export quality, the bytes every surface reads timeline frames as. Timeline audio
+  is not supplied (`INVALID_INPUT`), as on the native hosts.
+
 ### Changed
 
 - **Breaking:** the browser's `loadPlugin` checks the whole manifest as the native loaders do

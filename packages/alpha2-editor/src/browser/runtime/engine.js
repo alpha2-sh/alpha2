@@ -397,6 +397,21 @@ export class Engine {
   }
 
   /**
+   * The frame at `ticks` drawn at `width` x `height` from the sources it shows, uploaded for it
+   * and retired after, as straight-alpha sRGB RGBA8. Only the CPU renderer reads frames this way.
+   */
+  async readRgbaAt(ticks, width, height, { context }) {
+    if (!this.#registry) throw new Error("the renderer is not initialized");
+    await this.supply(Number(ticks) / 120000, { context });
+    try {
+      return this.#registry.readRgbaAt(BigInt(ticks), width, height);
+    } finally {
+      this.#supply.retire(this.#exportUploads);
+      this.#exportUploads = [];
+    }
+  }
+
+  /**
    * Renders the next export frame. Once a ticket is not `waiting`, the engine has consumed the
    * frame's uploads, so they are retired here.
    */

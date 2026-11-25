@@ -16,6 +16,7 @@ import {
   editorExportUndecodableAudio,
   editorImportUndecodable,
   pluginEditorExtract,
+  pluginEditorTimeline,
 } from "./editor.mjs";
 import {
   aacLayoutRefusal,
@@ -137,6 +138,7 @@ export const cases = {
   "plugin-digest": pluginDigest,
   "plugin-conformance": pluginConformance,
   "plugin-editor-extract": pluginEditorExtract,
+  "plugin-editor-timeline": pluginEditorTimeline,
   "editor-apply-edit": editorApplyEdit,
   "editor-conform-stale-data": editorConformStaleData,
   "editor-audio-lane-failure": editorAudioLaneFailure,
