@@ -3,7 +3,9 @@
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
-use whisper_rs::whisper_rs_sys::{ggml_blck_size, ggml_type_GGML_TYPE_COUNT, ggml_type_size};
+use whisper_rs::whisper_rs_sys::{
+    ggml_blck_size, ggml_type, ggml_type_GGML_TYPE_COUNT, ggml_type_size,
+};
 use whisper_rs::{DtwMode, DtwModelPreset};
 
 /// `GGML_FILE_MAGIC`, the first four bytes of a whisper.cpp model, little-endian.
@@ -182,12 +184,12 @@ fn filters_and_vocabulary<R: Read + Seek>(file: &mut Reader<R>) -> Result<(), St
     Ok(())
 }
 
-fn tensor_bytes(ggml_type: i32, elements: i64) -> Option<u64> {
-    let ggml_type = u32::try_from(ggml_type)
+fn tensor_bytes(id: i32, elements: i64) -> Option<u64> {
+    let kind = ggml_type::try_from(id)
         .ok()
-        .filter(|&id| id < ggml_type_GGML_TYPE_COUNT)?;
+        .filter(|&kind| id >= 0 && kind < ggml_type_GGML_TYPE_COUNT)?;
     // SAFETY: ggml's type tables cover every id below `GGML_TYPE_COUNT`.
-    let (size, block) = unsafe { (ggml_type_size(ggml_type), ggml_blck_size(ggml_type)) };
+    let (size, block) = unsafe { (ggml_type_size(kind), ggml_blck_size(kind)) };
     if size == 0 || block <= 0 || elements % block != 0 {
         return None;
     }
