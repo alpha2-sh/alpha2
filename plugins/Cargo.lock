@@ -42,6 +42,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "alpha2-plugin-scenes"
+version = "1.0.0"
+dependencies = [
+ "alpha2-plugin-abi",
+ "alpha2-plugin-sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "alpha2-plugin-sdk"
 version = "0.7.0"
 dependencies = [

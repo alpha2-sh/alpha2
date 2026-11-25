@@ -14,6 +14,8 @@ mod resources;
 #[cfg(test)]
 mod resources_tests;
 #[cfg(test)]
+mod scenes_tests;
+#[cfg(test)]
 mod silence_tests;
 #[cfg(test)]
 mod tests;
