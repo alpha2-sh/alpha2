@@ -26,7 +26,10 @@ mod track_tests;
 #[cfg(test)]
 mod transcribe_tests;
 mod wasm;
+#[cfg(feature = "wire-fuzz")]
 pub mod wire;
+#[cfg(not(feature = "wire-fuzz"))]
+mod wire;
 pub mod worker;
 
 use std::collections::BTreeMap;

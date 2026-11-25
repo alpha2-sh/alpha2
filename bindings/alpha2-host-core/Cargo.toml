@@ -37,6 +37,8 @@ requests = [
 ]
 # Decode budget and delay overrides for dependents' tests. Never enable in a product build.
 test-hooks = []
+# Makes `plugins::wire` public for the fuzz targets. Never enable in a product build.
+wire-fuzz = ["plugins"]
 
 [dependencies]
 alpha2-assets = { workspace = true, optional = true }
