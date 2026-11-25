@@ -142,7 +142,8 @@ All notable changes to this project are documented in this file.
   `Plugin.load` takes `supplied` (absolute paths; a relative one is refused with
   `INVALID_REQUEST`), and `Alpha2Error::Failed` gains `details`.
 - **Breaking:** `GpuSubmissionStats` gains `over_budget` (submissions still predicted over the
-  submission budget, which the planner cuts passes to avoid) and `budget_ms`; the host's and the
+  submission budget: passes that could not be cut finer, and frames spread past the per-frame
+  submission cap) and `budget_ms`; the host's and the
   browser's `gpuSubmissions` add `overBudget`, and the host prints a warning when it is nonzero.
   `alpha2_gpu::FrameMeasurement` gains `device_rated_ms`.
 - **Breaking:** every YUV pack in `alpha2-render` (the GPU readbacks, the NV12 pack and the CPU
@@ -271,7 +272,9 @@ All notable changes to this project are documented in this file.
   before it draws with the new `RenderError::FrameExceedsGpuMemory`, classed `OUT_OF_MEMORY`,
   instead of evicting idle textures it could not do without; the quarter-of-the-budget cap bounds
   only idle textures no recent frame used. An export that runs out of GPU memory at the smallest
-  in-flight profile now moves to the CPU renderer when the client allows it, where it stopped.
+  in-flight profile now moves to the CPU renderer when the client allows it, where it stopped;
+  other memory failures (`resource` other than `gpu`) still stop there. In Rust,
+  `export_policy::AttemptFailure` gains `resource` (`MemoryResource`).
 - Layer composites, vector scenes, source conversions and packs get pass rates of their own, as
   effect passes did: a planned frame pilots each kind it draws past the planning threshold once per
   device and frame size, and plans it at what the pilot measured when that is slower than the
