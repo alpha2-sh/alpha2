@@ -375,6 +375,87 @@ fn links_are_followed_by_name_and_loops_broken_links_and_odd_names_are_refused()
     }
 }
 
+fn link_or_copy(target: &Path, blob: &Path, link: &Path) {
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(target, link);
+    // Windows refuses symbolic links without developer mode or the privilege to create them.
+    if linked.is_err() {
+        std::fs::copy(blob, link).expect("copy");
+    }
+}
+
+#[test]
+fn a_hugging_face_snapshot_enumerates_by_name_and_hands_out_plain_paths() {
+    let dir = scratch("snapshot");
+    let model = dir.join("model.bin");
+    write(&model, b"w");
+    let hub = dir.join("hub");
+    let snapshot = hub.join("snapshots").join("rev");
+    let files: [(&[&str], &[u8]); 3] = [
+        (&["config.json"], b"{}"),
+        (&["onnx", "model.onnx"], b"encoder"),
+        (&["onnx", "model.onnx_data"], b"tensors"),
+    ];
+    for (parts, bytes) in files {
+        let blob = hub.join("blobs").join(sha256_hex(bytes));
+        write(&blob, bytes);
+        let link = parts
+            .iter()
+            .fold(snapshot.clone(), |path, part| path.join(part));
+        std::fs::create_dir_all(link.parent().expect("parent")).expect("dir");
+        let target = (0..=parts.len())
+            .fold(PathBuf::new(), |path, _| path.join(".."))
+            .join("blobs")
+            .join(sha256_hex(bytes));
+        link_or_copy(&target, &blob, &link);
+    }
+    let set = resolve(
+        &slots(),
+        &[("model", &model), ("extra", &snapshot)],
+        &ResourceRoot::Any,
+    )
+    .expect("a snapshot resolves");
+    assert_eq!(
+        files_of(&set)["extra"]["files"],
+        json!([
+            { "name": "extra/config.json", "bytes": 2 },
+            { "name": "extra/onnx/model.onnx", "bytes": 7 },
+            { "name": "extra/onnx/model.onnx_data", "bytes": 7 }
+        ])
+    );
+    let mut reader = ResourceReader::new(set, CancelToken::default());
+    let root = canonical(&snapshot).expect("canonical");
+    for (name, expected) in [
+        ("extra", root.clone()),
+        ("extra/onnx", root.join("onnx")),
+        (
+            "extra/onnx/model.onnx",
+            root.join("onnx").join("model.onnx"),
+        ),
+        ("model", canonical(&model).expect("canonical")),
+    ] {
+        let path = reader.path(name).expect(name).to_owned();
+        assert!(!path.starts_with(r"\\?\"), "{name}: {path}");
+        assert_eq!(Path::new(&path), expected, "{name}");
+    }
+    assert!(reader.take_failure().is_none());
+    assert_eq!(
+        reader
+            .supplied()
+            .iter()
+            .map(|file| (file.name.as_str(), file.sha256.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("extra/config.json", sha256_hex(b"{}")),
+            ("extra/onnx/model.onnx", sha256_hex(b"encoder")),
+            ("extra/onnx/model.onnx_data", sha256_hex(b"tensors")),
+            ("model", sha256_hex(b"w")),
+        ]
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_resource_root_takes_only_files_whose_links_resolve_under_it() {
