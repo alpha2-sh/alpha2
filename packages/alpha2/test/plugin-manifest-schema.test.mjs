@@ -54,7 +54,7 @@ test("parsePluginManifest refuses text past the manifest limit and text that is 
   const complete = corpus.find((entry) => entry.name === "complete").manifest;
   const padded = JSON.stringify(complete).replace(
     "{",
-    `{"x":"${"é".repeat(MAX_MANIFEST_BYTES / 2)}",`,
+    `{"x":"${"\u00e9".repeat(MAX_MANIFEST_BYTES / 2)}",`,
   );
   assert.throws(() => parsePluginManifest(padded), {
     code: "PLUGIN_LOAD_FAILED",
