@@ -698,13 +698,13 @@ export interface BrowserBridge {
    */
   extractCapabilities(): import("alpha2/plugins").PluginCapabilities;
   /**
-   * Runs an extractor over a source's original media or the timeline on this page
-   * (`runExtractor` from `alpha2/extract`), with an app's `extractor` or a `plugin`: one the app loaded with
+   * Runs an extractor over a source's original media or the timeline on this page (`runExtractor`
+   * from `alpha2/extract`), with an app's `extractor` or a `plugin`: one the app loaded with
    * `loadPlugin` from `alpha2/plugins`, which many runs share (its module compiles once), or a
-   * manifest and its SHA-256 for the bridge to load for this run, with `fetch` when the app
-   * fetches the plugin's files itself (a cache, a proxy). `onProgress` reports the plugin's files
-   * as they arrive (`phase: "load"`), then the extraction. Resolves with the result and the read
-   * taken when the run started; commit them with `EditorSession.applyExtraction(result, { read })`.
+   * manifest and its SHA-256 for the bridge to load for this run, with `fetch` when the app fetches
+   * the plugin's files itself (a cache, a proxy). `onProgress` reports the plugin's files as they
+   * arrive (`phase: "load"`), then the extraction. Resolves with the result and the read taken when
+   * the run started; commit them with `EditorSession.applyExtraction(result, { read })`.
    *
    * Timeline frames are drawn as the CPU renderer draws them at export quality, as every surface
    * reads them; timeline audio is not supplied (`INVALID_INPUT`).

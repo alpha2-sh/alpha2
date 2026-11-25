@@ -12,6 +12,10 @@ import {
   reviveRangeFile,
 } from "../dist/browser/runtime/range-file.js";
 import { openMediaReference } from "../dist/browser/runtime/media-reference.js";
+import {
+  extractInWorker,
+  installExtractWorker,
+} from "../dist/browser/extract-worker.js";
 import { probeEvidence } from "../dist/browser/runtime/fingerprint.js";
 import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
@@ -91,6 +95,152 @@ test("a range file reads, slices and streams the bytes its URL serves", async ()
     await server.close();
   }
 });
+
+const AUDIO_DESCRIPTOR = {
+  id: "alpha2.test.blocks",
+  version: 1,
+  input: { media: "audio", from: ["source"], format: "f32" },
+  params_schema: { type: "object" },
+  outputs: [{ name: "blocks", kind: "scalars", channels: ["frames"] }],
+};
+
+async function audioPlugin() {
+  const binaryen = (await import("binaryen")).default;
+  const { loadPlugin } = await import("alpha2/plugins");
+  const json = JSON.stringify(AUDIO_DESCRIPTOR);
+  const packed = (BigInt(json.length) << 32n).toString();
+  const module = binaryen.parseText(`(module
+    (import "alpha2" "emit" (func $emit (param i32 i32) (result i32)))
+    (memory (export "memory") 128)
+    (data (i32.const 0) "${json.replaceAll('"', "\\22")}")
+    (func (export "alpha2_abi") (result i32) i32.const 1)
+    (func (export "alpha2_describe") (result i64) i64.const ${packed})
+    (func (export "alpha2_alloc") (param i32 i32) (result i32) i32.const 65536)
+    (func (export "alpha2_free") (param i32 i32 i32))
+    (func (export "alpha2_begin") (param i32 i32) (result i32) i32.const 0)
+    (func (export "alpha2_pass") (param i32 i32) (result i32) i32.const 0)
+    (func (export "alpha2_video") (param i64 i32 i32 i32 i32 i32) (result i32) i32.const 0)
+    (func (export "alpha2_audio") (param i64 i64 i32 i32 i32 i32 i32) (result i32)
+      (i32.store8 (i32.const 4096) (i32.const 1))
+      (i32.store16 (i32.const 4098) (i32.const 0))
+      (i32.store (i32.const 4100) (i32.const 20))
+      (i64.store (i32.const 4104) (local.get 0))
+      (i32.store (i32.const 4112) (i32.const 1))
+      (i32.store (i32.const 4116) (i32.const 0))
+      (f32.store (i32.const 4120) (f32.convert_i32_s (local.get 2)))
+      (call $emit (i32.const 4096) (i32.const 28)))
+    (func (export "alpha2_end") (result i32) i32.const 0))`);
+  const wasm = module.emitBinary();
+  module.dispose();
+  const hex = async (bytes) =>
+    Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
+  const manifest = new TextEncoder().encode(
+    JSON.stringify({
+      id: AUDIO_DESCRIPTOR.id,
+      version: "0.1.0",
+      abi: "alpha2-plugin/1",
+      kind: "extractor",
+      artifacts: [
+        {
+          target: "wasm32",
+          type: "wasm",
+          url: "m.wasm",
+          sha256: await hex(wasm),
+          bytes: wasm.byteLength,
+        },
+      ],
+      descriptor: AUDIO_DESCRIPTOR,
+    }),
+  );
+  const files = { "manifest.json": manifest, "m.wasm": wasm };
+  return loadPlugin("https://plugins.test/manifest.json", await hex(manifest), {
+    fetch: async (url) => new Response(files[new URL(url).pathname.slice(1)]),
+  });
+}
+
+function fakeExtractWorker() {
+  const worker = {
+    terminated: false,
+    onmessage: null,
+    onerror: null,
+    terminate() {
+      worker.terminated = true;
+    },
+    postMessage(message) {
+      const data = structuredClone(message);
+      setTimeout(() => scope.onmessage({ data }));
+    },
+  };
+  const scope = {
+    onmessage: null,
+    postMessage(message) {
+      if (worker.terminated) return;
+      const data = structuredClone(message);
+      setTimeout(() => worker.onmessage?.({ data }));
+    },
+  };
+  installExtractWorker(scope);
+  return worker;
+}
+
+test(
+  "the extraction worker reads a referenced source over range requests",
+  { skip },
+  async () => {
+    const wav = new Uint8Array(
+      readFileSync(
+        join(import.meta.dirname, "../../../tests/corpus/audio-3.0.wav"),
+      ),
+    );
+    const server = await serve({ "/a.wav": wav });
+    try {
+      const wasm = await import("alpha2/wasm");
+      wasm.initSync({
+        module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
+      });
+      const file = await openMediaReference({
+        url: server.url("/a.wav"),
+        name: "a.wav",
+      });
+      const plugin = await audioPlugin();
+      const result = await extractInWorker(fakeExtractWorker, {
+        plugin,
+        project: {
+          schema_version: 1,
+          id: "p",
+          name: "P",
+          settings: {
+            width: 320,
+            height: 180,
+            frame_rate: { num: 30, den: 1 },
+            sample_rate: 48000,
+          },
+          sources: [{ id: "a", kind: "audio", locator: "a.wav" }],
+          timeline: { tracks: [] },
+        },
+        request: {
+          extractor: AUDIO_DESCRIPTOR.id,
+          version: 1,
+          input: {
+            from: "source",
+            source_id: "a",
+            range: { start: 0, end: 24000 },
+          },
+          outputs: { blocks: "blocks" },
+        },
+        media: { a: file },
+        signal: new AbortController().signal,
+      });
+      assert.ok(result, "ran in the worker");
+      const [set] = result.dataSets;
+      assert.equal(set.id, "blocks");
+      assert.ok(set.times.length > 0);
+      assert.ok(server.requests.some((range) => range.startsWith("bytes=")));
+    } finally {
+      await server.close();
+    }
+  },
+);
 
 const stillAdapter = {
   async stage(file) {
