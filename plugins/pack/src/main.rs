@@ -5,6 +5,7 @@
 //! ```text
 //! cargo run -p alpha2-plugin-pack -- <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
 //! cargo run -p alpha2-plugin-pack -- merge <pack-dir> <pack-dir>... --out <dir>
+//! cargo run -p alpha2-plugin-pack -- builds-wasm <plugin-dir>
 //! ```
 //!
 //! The plugin crate has `descriptor.json` at its root; files under `resources/` are copied, and
@@ -12,8 +13,8 @@
 //! (`name`, `url`, `sha256`, `bytes`) and slots the caller fills (`name`, `supplied`);
 //! `about.json`, when present, is written as the manifest's `about`. Native targets default to the
 //! host's. A crate whose `Cargo.toml` sets `[package.metadata.alpha2-plugin] wasm = false` is
-//! packed without a wasm artifact and refuses `--no-native`. `merge` joins packs of one plugin
-//! made on several machines. Nothing is uploaded.
+//! packed without a wasm artifact and refuses `--no-native`; `builds-wasm` prints `true` or `false`
+//! for a crate. `merge` joins packs of one plugin made on several machines. Nothing is uploaded.
 
 mod check;
 mod merge;
@@ -33,7 +34,8 @@ const NATIVE_BUILD_ENV: [(&str, &str); 2] = [("GGML_NATIVE", "OFF"), ("GGML_CCAC
 
 const USAGE: &str =
     "usage: alpha2-plugin-pack <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
-       alpha2-plugin-pack merge <pack-dir> <pack-dir>... --out <dir>";
+       alpha2-plugin-pack merge <pack-dir> <pack-dir>... --out <dir>
+       alpha2-plugin-pack builds-wasm <plugin-dir>";
 
 struct Options {
     plugin: PathBuf,
@@ -45,12 +47,23 @@ struct Options {
 enum Job {
     Pack(Options),
     Merge { inputs: Vec<PathBuf>, out: PathBuf },
+    BuildsWasm(PathBuf),
 }
 
 fn job() -> Result<Job, String> {
     let mut args = std::env::args().skip(1).peekable();
-    if args.peek().map(String::as_str) != Some("merge") {
-        return options(args).map(Job::Pack);
+    match args.peek().map(String::as_str) {
+        Some("merge") => {}
+        Some("builds-wasm") => {
+            args.next();
+            return match (args.next(), args.next()) {
+                (Some(plugin), None) if !plugin.starts_with('-') => {
+                    Ok(Job::BuildsWasm(PathBuf::from(plugin)))
+                }
+                _ => Err(USAGE.to_owned()),
+            };
+        }
+        _ => return options(args).map(Job::Pack),
     }
     args.next();
     let (mut inputs, mut out) = (Vec::new(), None);
@@ -205,16 +218,18 @@ fn builds_wasm(package: &Value) -> Result<bool, String> {
     }
 }
 
-fn pack(options: &Options) -> Result<PathBuf, String> {
-    let manifest_path = options.plugin.join("Cargo.toml");
-    let metadata: Value = serde_json::from_str(&run(cargo()
+fn metadata(manifest_path: &Path) -> Result<Value, String> {
+    serde_json::from_str(&run(cargo()
         .args(["metadata", "--format-version", "1", "--manifest-path"])
-        .arg(&manifest_path))?)
-    .map_err(|error| error.to_string())?;
-    let package = metadata["packages"]
+        .arg(manifest_path))?)
+    .map_err(|error| error.to_string())
+}
+
+fn package<'a>(metadata: &'a Value, manifest_path: &Path) -> Result<&'a Value, String> {
+    metadata["packages"]
         .as_array()
         .and_then(|packages| {
-            let wanted = std::fs::canonicalize(&manifest_path).ok()?;
+            let wanted = std::fs::canonicalize(manifest_path).ok()?;
             packages.iter().find(|package| {
                 package["manifest_path"]
                     .as_str()
@@ -222,7 +237,13 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
                     == Some(wanted.clone())
             })
         })
-        .ok_or("cargo metadata does not list the plugin crate")?;
+        .ok_or_else(|| "cargo metadata does not list the plugin crate".to_owned())
+}
+
+fn pack(options: &Options) -> Result<PathBuf, String> {
+    let manifest_path = options.plugin.join("Cargo.toml");
+    let metadata = metadata(&manifest_path)?;
+    let package = package(&metadata, &manifest_path)?;
     let library = package["name"]
         .as_str()
         .ok_or("unnamed package")?
@@ -325,12 +346,19 @@ fn manifest_text(mut manifest: Value, descriptor: &str) -> Result<String, String
 
 fn main() -> ExitCode {
     let done = job().and_then(|job| match job {
-        Job::Pack(options) => pack(&options),
-        Job::Merge { inputs, out } => merge::merge(&inputs, &out),
+        Job::Pack(options) => pack(&options).map(|path| path.display().to_string()),
+        Job::Merge { inputs, out } => {
+            merge::merge(&inputs, &out).map(|path| path.display().to_string())
+        }
+        Job::BuildsWasm(plugin) => {
+            let manifest_path = plugin.join("Cargo.toml");
+            let metadata = metadata(&manifest_path)?;
+            builds_wasm(package(&metadata, &manifest_path)?).map(|wasm| wasm.to_string())
+        }
     });
     match done {
-        Ok(path) => {
-            println!("{}", path.display());
+        Ok(text) => {
+            println!("{text}");
             ExitCode::SUCCESS
         }
         Err(error) => {
