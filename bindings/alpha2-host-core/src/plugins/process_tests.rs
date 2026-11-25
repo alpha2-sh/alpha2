@@ -685,6 +685,15 @@ fn ms_per_frame(plugin: usize, policy: &Policy, size: (u32, u32), format: VideoF
     started.elapsed().as_secs_f64() * 1000.0 / f64::from(TIMED_FRAMES)
 }
 
+fn isolated_through(frames: FramePath) -> Policy {
+    let mut command = worker_command("run_as_worker", &[(WORKER, "1")]);
+    command.frames = frames;
+    Policy {
+        isolation: Isolation::Child(command),
+        ..native_allowed()
+    }
+}
+
 #[test]
 #[ignore = "a measurement, run in release with --nocapture"]
 fn time_video_frames_in_process_and_through_a_worker() {
@@ -693,15 +702,18 @@ fn time_video_frames_in_process_and_through_a_worker() {
         ((960, 540), VideoFormat::Luma8),
     ] {
         let here = ms_per_frame(0, &native_allowed(), size, format);
-        let there = ms_per_frame(0, &isolated(), size, format);
-        let idle = ms_per_frame(1, &isolated(), size, format);
-        println!(
-            "{}x{} {format:?}: digest in process {here:.3} ms/frame, digest in a worker \
-             {there:.3}, scripted in a worker {idle:.3}; worker cost {:.1} % of in process",
-            size.0,
-            size.1,
-            (there - here) / here * 100.0
-        );
+        for frames in [FramePath::Shared, FramePath::Pipe] {
+            let there = ms_per_frame(0, &isolated_through(frames), size, format);
+            let idle = ms_per_frame(1, &isolated_through(frames), size, format);
+            println!(
+                "{}x{} {format:?} {frames:?}: digest in process {here:.3} ms/frame, digest in a \
+                 worker {there:.3}, scripted in a worker {idle:.3}; worker cost {:.1} % of in \
+                 process",
+                size.0,
+                size.1,
+                (there - here) / here * 100.0
+            );
+        }
     }
 }
 
