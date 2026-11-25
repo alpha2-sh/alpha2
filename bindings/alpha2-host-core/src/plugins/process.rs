@@ -292,10 +292,18 @@ impl ProcessTransport {
                 command.program.display()
             ))
         })?;
-        let job = alpha2_os::KillOnCloseJob::new().ok();
-        if let Some(job) = &job {
-            let _ = job.assign(&child);
-        }
+        let job = match alpha2_os::KillOnCloseJob::new()
+            .and_then(|job| job.assign(&child).map(|()| job))
+        {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = alpha2_os::kill_process_tree(&mut child);
+                let _ = child.wait();
+                return Err(failed(format!(
+                    "the plugin worker could not join its kill-on-close job: {error}"
+                )));
+            }
+        };
         let (Some((input, output)), Some(errors)) =
             (channel_ends(channel, &mut child), child.stderr.take())
         else {
@@ -306,7 +314,7 @@ impl ProcessTransport {
         let shared = Arc::new(Shared {
             watch: Mutex::new(Watch {
                 child: Some(child),
-                job,
+                job: Some(job),
                 ends: None,
                 killed: None,
                 done: false,
