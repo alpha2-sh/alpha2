@@ -410,26 +410,12 @@ fn check_pinned(
     sha256: &str,
     size: u64,
 ) -> Result<resources::PinnedFile, PluginError> {
-    use std::io::Read;
     let Fetched { path, local } = fetch.fetch(url, sha256, size)?;
-    let failed = |error: std::io::Error| {
-        PluginError::new(codes::FETCH_FAILED, format!("{}: {error}", path.display()))
-    };
-    let mut file = std::fs::File::open(&path)
-        .map_err(failed)?
-        .take(size.saturating_add(1));
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0; 1 << 20];
-    let mut total = 0_u64;
-    loop {
-        let read = file.read(&mut buffer).map_err(failed)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        total += read as u64;
-    }
-    let found = hex(&hasher.finalize());
+    let resources::Hashed {
+        sha256: found,
+        bytes: total,
+        ..
+    } = resources::hash_file(&path, size.saturating_add(1), || Ok(()), |_, _| true)?;
     if total != size || found != sha256 {
         let message = if !local {
             format!("{url} does not match the length and SHA-256 the manifest pins")

@@ -13,8 +13,7 @@ use sha2::{Digest, Sha256};
 
 use super::{CANCELLED, PluginError, ResourceRoot, codes, slot_reasons};
 
-/// Bytes read or hashed between two checks of the cancel and the call's deadline.
-const STEP_BYTES: usize = 1 << 20;
+const READ_STEP_BYTES: usize = 1 << 20;
 /// The deepest directory below a directory slot's own.
 pub(super) const MAX_SLOT_DEPTH: usize = 8;
 
@@ -88,6 +87,46 @@ fn plain(path: PathBuf) -> PathBuf {
         }
     }
     path
+}
+
+pub(super) struct Hashed {
+    pub(super) sha256: String,
+    pub(super) bytes: u64,
+    pub(super) stopped_by_sink: bool,
+}
+
+pub(super) fn hash_file(
+    path: &Path,
+    limit: u64,
+    mut before_read: impl FnMut() -> Result<(), PluginError>,
+    mut sink: impl FnMut(u64, &[u8]) -> bool,
+) -> Result<Hashed, PluginError> {
+    let file = std::fs::File::open(path).map_err(|error| fetch_failed(path, &error))?;
+    let mut reader = file.take(limit);
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0; READ_STEP_BYTES];
+    let mut bytes = 0_u64;
+    let stopped_by_sink = loop {
+        before_read()?;
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break false,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(fetch_failed(path, &error)),
+        };
+        let chunk = &buffer[..read];
+        hasher.update(chunk);
+        let offset = bytes;
+        bytes = bytes.saturating_add(read as u64);
+        if !sink(offset, chunk) {
+            break true;
+        }
+    };
+    Ok(Hashed {
+        sha256: super::hex(&hasher.finalize()),
+        bytes,
+        stopped_by_sink,
+    })
 }
 
 pub(super) fn canonical(path: &Path) -> Result<PathBuf, PluginError> {
@@ -532,38 +571,16 @@ impl ResourceReader {
         &self,
         path: &Path,
         expected: u64,
-        mut sink: impl FnMut(u64, &[u8]) -> bool,
+        sink: impl FnMut(u64, &[u8]) -> bool,
     ) -> Result<(String, u64), PluginError> {
-        let file = std::fs::File::open(path).map_err(|error| fetch_failed(path, &error))?;
-        let mut reader = file.take(expected.saturating_add(1));
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0; STEP_BYTES];
-        let mut total = 0_u64;
-        loop {
-            self.check_step()?;
-            let read = match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => read,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(fetch_failed(path, &error)),
-            };
-            let chunk = &buffer[..read];
-            hasher.update(chunk);
-            if !sink(total, chunk) {
-                total = total.saturating_add(read as u64).max(expected + 1);
-                break;
-            }
-            total = total.saturating_add(read as u64);
-        }
-        let hex = hasher
-            .finalize()
-            .iter()
-            .fold(String::with_capacity(64), |mut hex, byte| {
-                use std::fmt::Write;
-                let _ = write!(hex, "{byte:02x}");
-                hex
-            });
-        Ok((hex, total))
+        let past = expected.saturating_add(1);
+        let hashed = hash_file(path, past, || self.check_step(), sink)?;
+        let bytes = if hashed.stopped_by_sink {
+            hashed.bytes.max(past)
+        } else {
+            hashed.bytes
+        };
+        Ok((hashed.sha256, bytes))
     }
 
     /// Reads resource `name` through `sink`, checking it as its kind asks.
