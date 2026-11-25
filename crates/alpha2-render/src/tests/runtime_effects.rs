@@ -479,7 +479,7 @@ fn every_uniform_a_graph_writes_fits_the_arena_at_the_adapters_own_alignment() {
 }
 
 #[test]
-fn an_effect_registered_while_a_frame_encodes_never_overruns_the_frames_uniform_arena() {
+fn an_effect_registered_after_a_frame_is_prepared_never_overruns_its_uniform_arena() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());
     let compiled = pollster::block_on(
@@ -502,27 +502,17 @@ fn an_effect_registered_while_a_frame_encodes_never_overruns_the_frames_uniform_
         )
         .expect("effect");
     graph.set_output(effect).expect("output");
-    graph
-        .set_cache_intent(effect, crate::CacheIntent::Auto)
-        .expect("known node");
-    let (shared, graph) = (&renderer, &graph);
-    let frame = std::thread::scope(|scope| {
-        let result_cache = shared.lock_result_cache();
-        let frame = scope.spawn(move || shared.execute_graph(graph).map(drop));
-        while shared.uniform_buffers.stats().active == 0 && !frame.is_finished() {
-            std::thread::yield_now();
-        }
-        shared.register_compiled(compiled).expect("registers");
-        drop(result_cache);
-        frame.join()
-    });
-    let frame = frame.map_err(|panic| panic.downcast_ref::<&str>().copied());
+    let _held = renderer.frame_lock.hold();
+    let start = renderer
+        .prepare_graph(&graph, &[], crate::prepared_frame::FramePack::Nothing)
+        .expect("the frame prepares");
+    renderer.register_compiled(compiled).expect("registers");
+    let mut encoder = renderer.command_encoder("late registration encoder");
+    let frame = renderer.encode_graph(start, &graph, &mut encoder, &[], None);
     assert!(
-        matches!(
-            frame,
-            Ok(Ok(()) | Err(GraphError::Render(RenderError::UnknownEffect)))
-        ),
-        "{frame:?}"
+        matches!(frame, Err(GraphError::Render(RenderError::UnknownEffect))),
+        "{:?}",
+        frame.err()
     );
 }
 
