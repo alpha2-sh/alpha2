@@ -54,7 +54,7 @@ fn worker_command(test: &str, envs: &[(&str, &str)]) -> WorkerCommand {
     }
 }
 
-fn isolated() -> Policy {
+pub(super) fn isolated() -> Policy {
     Policy {
         isolation: Isolation::Child(worker_command("run_as_worker", &[(WORKER, "1")])),
         ..native_allowed()

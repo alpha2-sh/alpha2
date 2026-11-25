@@ -1,0 +1,1 @@
+[{ "name": "model", "supplied": { "shape": "file", "accept": [".bin"], "max_bytes": 4294967296 } }]

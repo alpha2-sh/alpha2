@@ -11,7 +11,9 @@
 //! `resources.json` lists entries written to the manifest as they are: resources hosted elsewhere
 //! (`name`, `url`, `sha256`, `bytes`) and slots the caller fills (`name`, `supplied`);
 //! `about.json`, when present, is written as the manifest's `about`. Native targets default to the
-//! host's. `merge` joins packs of one plugin made on several machines. Nothing is uploaded.
+//! host's. A crate whose `Cargo.toml` sets `[package.metadata.alpha2-plugin] wasm = false` is
+//! packed without a wasm artifact and refuses `--no-native`. `merge` joins packs of one plugin
+//! made on several machines. Nothing is uploaded.
 
 mod check;
 mod merge;
@@ -189,6 +191,16 @@ fn resources(plugin: &Path, out: &Path) -> Result<Vec<Value>, String> {
     Ok(resources)
 }
 
+fn builds_wasm(package: &Value) -> Result<bool, String> {
+    match &package["metadata"]["alpha2-plugin"]["wasm"] {
+        Value::Null => Ok(true),
+        Value::Bool(wasm) => Ok(*wasm),
+        other => Err(format!(
+            "package.metadata.alpha2-plugin.wasm is {other}, not true or false"
+        )),
+    }
+}
+
 fn pack(options: &Options) -> Result<PathBuf, String> {
     let manifest_path = options.plugin.join("Cargo.toml");
     let metadata: Value = serde_json::from_str(&run(cargo()
@@ -225,15 +237,27 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
         .ok_or("descriptor.json has no id")?
         .to_owned();
 
+    let wasm = builds_wasm(package)?;
+    if !wasm && !options.native {
+        return Err(format!(
+            "{} is native only (package.metadata.alpha2-plugin.wasm = false): --no-native leaves \
+             nothing to pack",
+            package["name"].as_str().unwrap_or_default()
+        ));
+    }
+
     std::fs::create_dir_all(&options.out).map_err(|error| error.to_string())?;
     let mut artifacts = Vec::new();
-    build(&manifest_path, "wasm32-unknown-unknown", true)?;
-    let module = read(&target_dir.join(format!("wasm32-unknown-unknown/release/{library}.wasm")))?;
-    check::wasm_module(&module)?;
-    let mut entry = place(&options.out, &format!("{library}.wasm"), &module)?;
-    entry["target"] = json!("wasm32");
-    entry["type"] = json!("wasm");
-    artifacts.push(entry);
+    if wasm {
+        build(&manifest_path, "wasm32-unknown-unknown", true)?;
+        let module =
+            read(&target_dir.join(format!("wasm32-unknown-unknown/release/{library}.wasm")))?;
+        check::wasm_module(&module)?;
+        let mut entry = place(&options.out, &format!("{library}.wasm"), &module)?;
+        entry["target"] = json!("wasm32");
+        entry["type"] = json!("wasm");
+        artifacts.push(entry);
+    }
     let mut targets = options.targets.clone();
     if options.native && targets.is_empty() {
         targets.push(host_triple()?);
@@ -315,6 +339,42 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_crate_builds_wasm_unless_its_metadata_says_wasm_false() {
+        assert_eq!(builds_wasm(&json!({ "metadata": null })), Ok(true));
+        assert_eq!(
+            builds_wasm(&json!({ "metadata": { "other": { "wasm": false } } })),
+            Ok(true)
+        );
+        assert_eq!(
+            builds_wasm(&json!({ "metadata": { "alpha2-plugin": { "wasm": true } } })),
+            Ok(true)
+        );
+        assert_eq!(
+            builds_wasm(&json!({ "metadata": { "alpha2-plugin": { "wasm": false } } })),
+            Ok(false)
+        );
+        let error = builds_wasm(&json!({ "metadata": { "alpha2-plugin": { "wasm": "no" } } }))
+            .expect_err("refused");
+        assert!(error.contains("not true or false"), "{error}");
+    }
+
+    #[test]
+    fn a_native_only_crate_refuses_no_native_before_building() {
+        let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../first-party/transcribe");
+        let out =
+            std::env::temp_dir().join(format!("alpha2-pack-no-native-{}", std::process::id()));
+        let error = pack(&Options {
+            plugin,
+            out: out.clone(),
+            targets: Vec::new(),
+            native: false,
+        })
+        .expect_err("refused");
+        assert!(error.contains("native only"), "{error}");
+        assert!(!out.exists(), "nothing written");
+    }
 
     #[test]
     fn the_manifest_keeps_the_descriptor_text_as_written() {

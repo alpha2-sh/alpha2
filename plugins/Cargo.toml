@@ -5,6 +5,7 @@ members = [
     "sdk",
     "pack",
     "first-party/silence",
+    "first-party/transcribe",
     "fixtures/digest",
     "fixtures/scripted",
     "fixtures/supplied",
