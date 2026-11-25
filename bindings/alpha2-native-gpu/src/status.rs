@@ -2,9 +2,9 @@
 //!
 //! Each helper returns the failing step and its platform status
 //! (`include/alpha2_native_gpu_status.h`). [`classify`] names the step without `FFmpeg` types;
-//! with `hwdevice`, [`helper_failure`] maps the status through its backend's codes so a lost
-//! device, exhausted memory, or timeout reaches the host as a [`GpuFault`]. Every backend's table
-//! compiles on every target, so the D3D12 and Metal codes are tested on Linux.
+//! with `hwdevice`, `helper_failure` maps the status through its backend's codes so a lost
+//! device, exhausted memory, or timeout reaches the host as a `GpuFault`. With `hwdevice`, every
+//! backend's table compiles on every target, so the D3D12 and Metal codes are tested on Linux.
 
 #[cfg(feature = "hwdevice")]
 use alpha2_ffmpeg_bridge::{BridgeError, GpuFault, NativeGpuBackend, NativeGpuFailure};
