@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use alpha2_gpu::GpuContext;
-use alpha2_host_core::export::SurfaceImport;
+use alpha2_host_core::export::{EncoderTargets, SurfaceImport};
 use alpha2_host_core::video_stream::VideoBackends;
 
 /// What a renderer whose device imports decoder surfaces decodes and imports with. Made with the
@@ -23,9 +23,23 @@ pub(crate) struct GpuFrames {
     pub import: Arc<dyn SurfaceImport>,
     imported: Arc<AtomicU64>,
     fallbacks: Arc<AtomicU64>,
+    targets: Option<TargetsFactory>,
+    in_place: Arc<AtomicU64>,
 }
 
+type TargetsFactory = Box<dyn Fn(Arc<AtomicU64>) -> Box<dyn EncoderTargets> + Send + Sync>;
+
 impl GpuFrames {
+    pub(crate) fn encoder_targets(&self) -> Option<Box<dyn EncoderTargets>> {
+        self.targets
+            .as_ref()
+            .map(|targets| targets(Arc::clone(&self.in_place)))
+    }
+
+    pub(crate) fn rendered_in_place(&self) -> u64 {
+        self.in_place.load(Ordering::Relaxed)
+    }
+
     /// How many decoded frames were imported from surfaces so far.
     pub(crate) fn imported(&self) -> u64 {
         self.imported.load(Ordering::Relaxed)
@@ -86,6 +100,8 @@ mod android {
                     }),
                     imported: count,
                     fallbacks: Arc::default(),
+                    targets: None,
+                    in_place: Arc::default(),
                 };
                 (gpu, Some(frames))
             }
@@ -189,10 +205,16 @@ mod apple {
 
     use alpha2_apple_media::{AppleSurface, AppleVideo, VideoOutput};
     use alpha2_gpu::GpuContext;
-    use alpha2_host_core::export::{GpuSource, SurfaceImport, prepare_gpu, prepare_gpu_planes};
+    use alpha2_host_core::encode::LentBuffer;
+    use alpha2_host_core::export::{
+        EncoderTargets, GpuSource, LentPlanes, SurfaceImport, prepare_gpu, prepare_gpu_planes,
+    };
     use alpha2_host_core::video_stream::{BackendImage, FrameFacts, StreamFrame, SurfaceLease};
     use alpha2_media::YuvFormat;
-    use alpha2_native_gpu::{MetalImportLease, NativePlaneLayout, SharedMetalContext};
+    use alpha2_native_gpu::{
+        MetalEncoderPlanes, MetalImportLease, NativePlaneLayout, SharedMetalContext,
+        pixel_buffer_surface_id,
+    };
     use alpha2_render::{ColorPolicy, ExternalTextureLease, GpuVideoPlanes, RenderSize, Renderer};
 
     use super::GpuFrames;
@@ -205,6 +227,7 @@ mod apple {
                 };
                 let imported = Arc::new(AtomicU64::new(0));
                 let fallbacks = Arc::new(AtomicU64::new(0));
+                let targets = context.clone();
                 let frames = GpuFrames {
                     decoders: Arc::new(AppleVideo { output }),
                     import: Arc::new(MetalImport {
@@ -215,6 +238,17 @@ mod apple {
                     }),
                     imported,
                     fallbacks,
+                    targets: Some(Box::new(move |in_place| {
+                        Box::new(MetalTargets {
+                            context: targets.clone(),
+                            generation: None,
+                            wraps: Vec::new(),
+                            clock: 0,
+                            in_place,
+                            reported: false,
+                        })
+                    })),
+                    in_place: Arc::default(),
                 };
                 (gpu, Some(frames))
             }
@@ -335,6 +369,221 @@ mod apple {
             )?;
             self.imported.fetch_add(1, Ordering::Relaxed);
             Ok(prepared)
+        }
+    }
+
+    const SPARE_WRAPS: usize = 2;
+
+    struct Wrap {
+        surface: u32,
+        _planes: MetalEncoderPlanes,
+        views: LentPlanes,
+        used: u64,
+    }
+
+    struct MetalTargets {
+        context: SharedMetalContext,
+        generation: Option<u64>,
+        wraps: Vec<Wrap>,
+        clock: u64,
+        in_place: Arc<AtomicU64>,
+        reported: bool,
+    }
+
+    impl MetalTargets {
+        fn wrap(&mut self, buffer: &LentBuffer, size: RenderSize) -> Result<LentPlanes, String> {
+            if self.generation != Some(buffer.generation()) {
+                self.wraps.clear();
+                self.generation = Some(buffer.generation());
+            }
+            // SAFETY: the lent buffer holds its pixel buffer for the call.
+            let surface = unsafe { pixel_buffer_surface_id(buffer.surface()) }
+                .ok_or_else(|| "the encoder's buffer has no IOSurface".to_owned())?;
+            self.clock += 1;
+            if let Some(wrap) = self.wraps.iter_mut().find(|wrap| wrap.surface == surface) {
+                wrap.used = self.clock;
+                return Ok(wrap.views.clone());
+            }
+            // SAFETY: as above; the planes keep the IOSurface, not the buffer, alive.
+            let planes = unsafe { self.context.pixel_buffer_planes(buffer.surface()) }
+                .map_err(|error| error.to_string())?;
+            let (luma, chroma) = (planes.luma.size(), planes.chroma.size());
+            if (luma.width, luma.height) != (size.width, size.height)
+                || (chroma.width, chroma.height) != (size.width / 2, size.height / 2)
+            {
+                return Err(format!(
+                    "the encoder's {}x{} buffer with {}x{} chroma does not take a {}x{} frame",
+                    luma.width, luma.height, chroma.width, chroma.height, size.width, size.height
+                ));
+            }
+            let views = LentPlanes {
+                luma: planes
+                    .luma
+                    .create_view(&wgpu::TextureViewDescriptor::default()),
+                chroma: planes
+                    .chroma
+                    .create_view(&wgpu::TextureViewDescriptor::default()),
+            };
+            if self.wraps.len() >= buffer.most_out() + SPARE_WRAPS
+                && let Some(oldest) = (0..self.wraps.len()).min_by_key(|at| self.wraps[*at].used)
+            {
+                self.wraps.swap_remove(oldest);
+            }
+            self.wraps.push(Wrap {
+                surface,
+                _planes: planes,
+                views: views.clone(),
+                used: self.clock,
+            });
+            Ok(views)
+        }
+    }
+
+    impl EncoderTargets for MetalTargets {
+        fn planes(&mut self, buffer: &LentBuffer, size: RenderSize) -> Result<LentPlanes, String> {
+            let wrapped = self.wrap(buffer, size);
+            if let Err(reason) = &wrapped
+                && !std::mem::replace(&mut self.reported, true)
+            {
+                alpha2_os::diagnostic!(
+                    "alpha2 export: frames are read back for the encoder: {reason}"
+                );
+            }
+            wrapped
+        }
+
+        fn finished(&mut self, _buffer: &LentBuffer) -> Result<(), String> {
+            let gpu = self.context.gpu();
+            let submitted = gpu.submit(std::iter::empty());
+            let timeout = alpha2_native_gpu::metal_wait_timeout();
+            match gpu.device().poll(wgpu::PollType::Wait {
+                submission_index: Some(submitted),
+                timeout: Some(timeout),
+            }) {
+                Ok(wgpu::PollStatus::WaitSucceeded | wgpu::PollStatus::QueueEmpty) => {
+                    self.in_place.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                }
+                Ok(wgpu::PollStatus::Poll) | Err(wgpu::PollError::Timeout) => Err(format!(
+                    "the render into an encoder buffer: {} (after {timeout:?})",
+                    alpha2_media::GPU_TIMEOUT_MESSAGE
+                )),
+                Err(error) => Err(format!(
+                    "waiting for the render into an encoder buffer failed: {error}"
+                )),
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::Arc;
+
+        use alpha2_apple_media::AppleVideoEncoders;
+        use alpha2_gpu::GpuContext;
+        use alpha2_host_core::encode::{
+            Lend, LentBuffer, VideoEncodeBackend, VideoEncodeConfig, VideoEncoders,
+        };
+        use alpha2_host_core::export::EncoderTargets;
+        use alpha2_media::{BitrateMode, ColorMetadata, PixelLayout, VideoRateControl};
+        use alpha2_native_gpu::SharedMetalContext;
+        use alpha2_render::RenderSize;
+        use alpha2_time::FrameRate;
+
+        use super::MetalTargets;
+
+        fn encoder() -> Box<dyn VideoEncodeBackend> {
+            AppleVideoEncoders
+                .open(&VideoEncodeConfig {
+                    codec: alpha2_media::VideoCodec::H264,
+                    width: 320,
+                    height: 180,
+                    frame_rate: FrameRate::new(30, 1).expect("rate"),
+                    layout: PixelLayout::YUV420P,
+                    rate: VideoRateControl {
+                        bitrate: 1_000_000,
+                        mode: BitrateMode::Variable,
+                        quantizer: None,
+                    },
+                    color: ColorMetadata::EXPORT,
+                    keyframe_interval: 30,
+                    software: false,
+                })
+                .expect("an encoder opens")
+        }
+
+        fn lend(encoder: &mut Box<dyn VideoEncodeBackend>) -> LentBuffer {
+            match encoder.lender().expect("lends").lend().expect("a lend") {
+                Lend::Buffer(buffer) => buffer,
+                Lend::Busy => panic!("busy"),
+            }
+        }
+
+        #[test]
+        fn a_pool_buffer_is_wrapped_once_per_generation_and_the_least_recent_goes_first() {
+            let Ok(gpu) = pollster::block_on(GpuContext::request_product()) else {
+                alpha2_test_support::skip!(alpha2_test_support::Capability::Metal, "no GPU");
+                return;
+            };
+            let context = SharedMetalContext::from_gpu(gpu).expect("a Metal device");
+            let mut targets = MetalTargets {
+                context,
+                generation: None,
+                wraps: Vec::new(),
+                clock: 0,
+                in_place: Arc::default(),
+                reported: false,
+            };
+            let size = RenderSize::new(320, 180).expect("size");
+            let mut encoder = encoder();
+            let held = (0..3).map(|_| lend(&mut encoder)).collect::<Vec<_>>();
+            for buffer in held.iter().chain(&held) {
+                targets.planes(buffer, size).expect("render targets");
+            }
+            assert_eq!(
+                targets.wraps.len(),
+                3,
+                "a buffer lent again is wrapped again"
+            );
+            let bounded = |buffer: &LentBuffer, generation, most_out| {
+                LentBuffer::new(buffer.surface(), generation, most_out, Box::new(()))
+            };
+            let first = targets.wraps[0].surface;
+            targets
+                .planes(&bounded(&held[0], 0, 1), size)
+                .expect("targets");
+            targets
+                .planes(&bounded(&held[1], 0, 1), size)
+                .expect("targets");
+            let fourth = lend(&mut encoder);
+            targets
+                .planes(&bounded(&fourth, 0, 1), size)
+                .expect("targets");
+            assert_eq!(targets.wraps.len(), 3, "most out plus the spare wraps");
+            assert!(
+                targets
+                    .wraps
+                    .iter()
+                    .all(|wrap| wrap.surface != held_surface(&held[2])),
+                "the least recently lent buffer goes first"
+            );
+            assert!(targets.wraps.iter().any(|wrap| wrap.surface == first));
+            targets
+                .planes(&bounded(&held[0], 1, 16), size)
+                .expect("targets");
+            assert_eq!(
+                targets.wraps.len(),
+                1,
+                "a new pool generation drops the old wraps"
+            );
+            let odd = RenderSize::new(322, 180).expect("size");
+            assert!(targets.planes(&held[1], odd).is_err());
+        }
+
+        fn held_surface(buffer: &LentBuffer) -> u32 {
+            // SAFETY: a live lent buffer.
+            unsafe { alpha2_native_gpu::pixel_buffer_surface_id(buffer.surface()) }
+                .expect("an IOSurface")
         }
     }
 

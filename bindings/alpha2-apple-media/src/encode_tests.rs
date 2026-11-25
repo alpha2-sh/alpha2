@@ -5,7 +5,7 @@ use alpha2_container::{Mp4Flavor, Mp4Writer, TrackKind};
 use alpha2_host_core::DecodePolicy;
 use alpha2_host_core::audio_stream::{AudioStream, WithPcm};
 use alpha2_host_core::encode::{
-    AudioEncodeConfig, AudioEncoders, EncodePoll, EncodeSink, VideoEncodeBackend,
+    AudioEncodeConfig, AudioEncoders, EncodePoll, EncodeSink, Lend, LentBuffer, VideoEncodeBackend,
     VideoEncodeConfig, VideoEncoders,
 };
 use alpha2_host_core::export::{PlaneBuffer, VideoSink};
@@ -611,4 +611,151 @@ fn aac_takes_the_highest_listed_bitrate_at_or_below_the_request() {
         failures.push(format!("mono 8000 Hz: {mono:?}"));
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[allow(unsafe_code)]
+fn draw(buffer: &LentBuffer, index: u64) {
+    use objc2_core_video::{
+        CVPixelBuffer, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
+        CVPixelBufferGetHeightOfPlane, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
+        CVPixelBufferUnlockBaseAddress,
+    };
+    // SAFETY: a lent buffer is a live CVPixelBufferRef while the lend lives.
+    let pixels = unsafe { &*buffer.surface().cast::<CVPixelBuffer>() };
+    // SAFETY: the buffer is live; it is unlocked below.
+    let locked = unsafe { CVPixelBufferLockBaseAddress(pixels, CVPixelBufferLockFlags::empty()) };
+    assert_eq!(locked, 0);
+    for (plane, value) in [(0, u8::try_from(level(index)).expect("8 bits")), (1, 128)] {
+        let base = CVPixelBufferGetBaseAddressOfPlane(pixels, plane).cast::<u8>();
+        let length = CVPixelBufferGetBytesPerRowOfPlane(pixels, plane)
+            * CVPixelBufferGetHeightOfPlane(pixels, plane);
+        // SAFETY: a locked plane holds its rows at its base address.
+        unsafe { std::slice::from_raw_parts_mut(base, length) }.fill(value);
+    }
+    // SAFETY: locked above.
+    unsafe { CVPixelBufferUnlockBaseAddress(pixels, CVPixelBufferLockFlags::empty()) };
+}
+
+fn encode_lending(path: &std::path::Path, lose_after_lend: Option<u64>) -> Vec<u64> {
+    let config = h264_config(WIDTH, HEIGHT, false);
+    let mut encoder = VideoToolboxEncoder::open(&config).expect("an encoder opens");
+    if let Some(lend) = lose_after_lend {
+        encoder.lose_session_after_lend(lend);
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .expect("output");
+    let writer = Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4));
+    let mut sink = EncodeSink::new(
+        writer,
+        Box::new(encoder),
+        config,
+        None,
+        CancelToken::default(),
+    );
+    let mut generations = Vec::new();
+    for index in 0..FRAMES {
+        if index % 2 == 0 {
+            sink.write_frame(index, &frame(index, PixelLayout::YUV420P))
+                .expect("a written frame");
+            continue;
+        }
+        let buffer = sink.lend().expect("a lent buffer");
+        generations.push(buffer.generation());
+        draw(&buffer, index);
+        sink.write_lent(index, buffer).expect("a lent frame");
+    }
+    sink.finish().expect("finished");
+    generations
+}
+
+#[test]
+fn lent_and_written_frames_make_one_stream() {
+    let path = scratch_mp4("lent");
+    let generations = encode_lending(&path, None);
+    let (failures, _) = check_video(&path, PixelLayout::YUV420P);
+    let _ = std::fs::remove_file(&path);
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert!(generations.iter().all(|generation| *generation == 0));
+}
+
+#[test]
+fn a_buffer_lent_before_its_session_was_lost_encodes_on_the_new_one() {
+    let path = scratch_mp4("lent-lost");
+    let generations = encode_lending(&path, Some(7));
+    let (failures, keyframes) = check_video(&path, PixelLayout::YUV420P);
+    let _ = std::fs::remove_file(&path);
+    assert!(failures.is_empty(), "{failures:#?} keyframes {keyframes:?}");
+    let (before, after) = generations.split_at(8);
+    assert!(
+        before.iter().all(|generation| *generation == 0),
+        "{generations:?}"
+    );
+    assert!(
+        after.iter().all(|generation| *generation == 1),
+        "{generations:?}"
+    );
+}
+
+#[test]
+fn a_dropped_lent_buffer_gives_back_its_place_in_flight() {
+    let mut encoder =
+        VideoToolboxEncoder::open(&h264_config(WIDTH, HEIGHT, false)).expect("an encoder opens");
+    let lender = encoder.lender().expect("8-bit video range lends");
+    let mut held = Vec::new();
+    while let Lend::Buffer(buffer) = lender.lend().expect("a lend") {
+        held.push(buffer);
+    }
+    assert_eq!(held.len() as u64, MAX_IN_FLIGHT);
+    assert_eq!(held[0].most_out() as u64, MAX_IN_FLIGHT);
+    held.pop();
+    let lender = encoder.lender().expect("lends");
+    assert!(matches!(lender.lend().expect("a lend"), Lend::Buffer(_)));
+    drop(held);
+    assert_eq!(encoder.in_flight(), 0);
+}
+
+#[test]
+fn only_eight_bit_video_range_encoders_lend() {
+    let full = VideoEncodeConfig {
+        color: ColorMetadata {
+            range: alpha2_media::ColorRange::Full,
+            ..ColorMetadata::EXPORT
+        },
+        ..h264_config(WIDTH, HEIGHT, false)
+    };
+    let ten_bit = VideoEncodeConfig {
+        codec: VideoCodec::Hevc,
+        layout: PixelLayout {
+            bit_depth: BitDepth::Ten,
+            ..PixelLayout::YUV420P
+        }
+        .as_p010(),
+        ..h264_config(WIDTH, HEIGHT, false)
+    };
+    for (name, config, lends) in [
+        ("8-bit video range", h264_config(WIDTH, HEIGHT, false), true),
+        ("full range", full, false),
+        ("P010", ten_bit, false),
+    ] {
+        let mut encoder = VideoToolboxEncoder::open(&config).expect(name);
+        assert_eq!(encoder.lender().is_some(), lends, "{name}");
+    }
+}
+
+#[test]
+fn a_buffer_another_encoder_lent_is_refused() {
+    let config = h264_config(WIDTH, HEIGHT, false);
+    let mut first = VideoToolboxEncoder::open(&config).expect("opens");
+    let mut second = VideoToolboxEncoder::open(&config).expect("opens");
+    let Lend::Buffer(buffer) = first.lender().expect("lends").lend().expect("a lend") else {
+        panic!("busy");
+    };
+    let refused = second.lender().expect("lends").encode_lent(0, buffer, true);
+    assert!(refused.is_err());
+    assert_eq!(first.in_flight(), 0);
 }
