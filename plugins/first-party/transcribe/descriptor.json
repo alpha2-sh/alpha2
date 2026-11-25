@@ -1,0 +1,34 @@
+{
+  "id": "alpha2.transcribe",
+  "version": 1,
+  "input": {
+    "media": "audio",
+    "from": ["source"],
+    "format": "f32",
+    "sample_rate": 16000,
+    "channels": "mono",
+    "block_frames": 16000
+  },
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "language": {
+        "type": "string",
+        "enum": ["auto", "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu", "ha", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jv", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh"],
+        "title": "Language",
+        "description": "The language spoken, as an ISO 639-1 code, or auto to let the model tell.",
+        "default": "auto",
+        "x-alpha2-order": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "outputs": [
+    {
+      "name": "words",
+      "kind": "words",
+      "label": "Words",
+      "description": "Each word spoken, with when it starts and ends, as the whisper model hears it."
+    }
+  ]
+}

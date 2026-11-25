@@ -1,0 +1,7 @@
+{
+  "name": "Transcribe",
+  "summary": "Writes down the words spoken, with their times, using a whisper.cpp model you supply.",
+  "author": "alpha2",
+  "homepage": "https://github.com/alpha2-sh/alpha2/tree/main/plugins#readme",
+  "license": "MIT"
+}

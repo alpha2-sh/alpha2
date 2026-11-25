@@ -71,10 +71,35 @@ if (!existsSync(join(root, "packages/alpha2/wasm/alpha2_wasm_bg.wasm"))) {
 // Plugin cases load every plugin crate packed for the browser, wasm only, at the path it has
 // under plugins/.
 if (names.some((name) => name.startsWith("plugin-"))) {
+  const metadata = spawnSync(
+    "cargo",
+    [
+      "metadata",
+      "--no-deps",
+      "--format-version",
+      "1",
+      "--manifest-path",
+      join(root, "plugins", "Cargo.toml"),
+    ],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (metadata.status !== 0) {
+    process.stdout.write("FAIL cargo metadata of plugins/ failed\n");
+    process.exit(1);
+  }
+  const nativeOnly = new Set(
+    JSON.parse(metadata.stdout)
+      .packages.filter(
+        (crate) => crate.metadata?.["alpha2-plugin"]?.wasm === false,
+      )
+      .map((crate) => resolve(crate.manifest_path, "..")),
+  );
   const browserPlugins = ["first-party", "fixtures"].flatMap((group) =>
     readdirSync(join(root, "plugins", group))
-      .filter((name) =>
-        existsSync(join(root, "plugins", group, name, "descriptor.json")),
+      .filter(
+        (name) =>
+          existsSync(join(root, "plugins", group, name, "descriptor.json")) &&
+          !nativeOnly.has(join(root, "plugins", group, name)),
       )
       .map((name) => join(group, name)),
   );

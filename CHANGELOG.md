@@ -162,6 +162,37 @@ All notable changes to this project are documented in this file.
   `x-alpha2-order`, `x-alpha2-group`, `x-alpha2-advanced`), which every params check ignores.
 - `alpha2.silence` 1.1.0 carries its `about`, an output label and annotated params. Its outputs
   are unchanged (`descriptor.version` 1).
+- `alpha2-plugin-pack merge <pack-dir>... --out <dir>` joins packs of one plugin made on several
+  machines: the first pack's manifest, wasm artifact, resources and licences with the native
+  artifacts of the others. It refuses packs of another id, version, descriptor, about, resources
+  or licences, a target two packs have, and a file that differs from what its manifest pins.
+- `alpha2.silence` 1.1.1 is 1.1.0 with no code change, to be published with macOS and Windows
+  native artifacts beside the Linux one.
+- `alpha2.scenes` 1.0.0 finds the cuts between shots as instants (`cuts`, `suggest: split_at`)
+  and the stretches of black (`black`, `suggest: remove_ranges`) in a video, each with a `score`.
+  It compares 4x4 grids of luma histograms by earth mover's distance against a threshold that
+  adapts to recent motion and requires a cut to stand out from its neighbours, so fades,
+  dissolves, flashes and camera noise do not cut. Params: `sensitivity`, `min_scene_ms`,
+  `black_level`, `min_black_ms`.
+- `alpha2.beats` 1.0.0 finds the beats and onsets in music as instants with a 0 to 1 `score`
+  (`suggest: split_at`), with an onset and loudness `envelope` (`scalars` `onset` and `rms`,
+  normalized over the range, `suggest: bind`): log spectral flux, an autocorrelation tempo within
+  `min_bpm`..`max_bpm` and dynamic-programming beat tracking; `sensitivity` sets the onset
+  threshold.
+- `alpha2.track` 1.0.0 follows a box picked on one frame through the frames each pass delivers,
+  forward and backward, from sources or the timeline: its centre (`center`, points) and its
+  translation, rotation and scale from the picked frame (`motion`, similarity), both suggested
+  for binding, with frames whose box no longer matches the picked one by `confidence` marked
+  lost. `docs/plugin-abi.md` adds the `x-alpha2-display` values `box` and `point` for object
+  params picked on the picture.
+- `alpha2.transcribe` 1.0.0 finds the words spoken in audio and their times, from a whisper.cpp
+  ggml model the caller supplies in its `model` slot (none is pinned), run natively on the CPU
+  with whisper.cpp linked in, in any ISO 639-1 language whisper knows or `auto`. It transcribes
+  30 s windows as audio arrives and joins their overlaps without repeating them; it has no wasm
+  artifact.
+- A plugin crate opts out of wasm with `wasm = false` under `[package.metadata.alpha2-plugin]`:
+  `alpha2-plugin-pack` then builds native artifacts only and refuses `--no-native`, and
+  `scripts/pack-plugins.sh --no-native` leaves the crate out.
 - `alpha2/plugins` exports `parsePluginManifest`, which checks a manifest by the engine loaders'
   rules without fetching anything, the `PluginManifest` types and the manifest limits
   (`MAX_MANIFEST_BYTES`, `MAX_PLUGIN_*`, `MAX_ABOUT_*`); `LoadedPlugin` gains `about`, and

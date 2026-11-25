@@ -1,0 +1,7 @@
+{
+  "name": "Scenes",
+  "summary": "Finds the cuts between shots and the stretches of black in a video.",
+  "author": "alpha2",
+  "homepage": "https://github.com/alpha2-sh/alpha2/tree/main/plugins#readme",
+  "license": "MIT"
+}

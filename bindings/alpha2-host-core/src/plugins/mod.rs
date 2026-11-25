@@ -6,6 +6,8 @@
 //!
 //! The caller fetches: [`load`] asks a [`Fetch`] for each file by URL and hash.
 
+#[cfg(test)]
+mod beats_tests;
 mod native;
 mod process;
 #[cfg(test)]
@@ -14,9 +16,15 @@ mod resources;
 #[cfg(test)]
 mod resources_tests;
 #[cfg(test)]
+mod scenes_tests;
+#[cfg(test)]
 mod silence_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod track_tests;
+#[cfg(test)]
+mod transcribe_tests;
 mod wasm;
 pub mod wire;
 pub mod worker;
