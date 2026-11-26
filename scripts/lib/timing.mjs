@@ -2,6 +2,9 @@
 // CPU work must grow less than 8^1.5 (22x), which linear and n log n work meet and quadratic work
 // does not. Mirrors `tests/scaling_support` in Rust.
 
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+
 export const GROWTH = 8;
 
 function boundFor(growth) {
@@ -13,6 +16,11 @@ const LEAST_WORK_US = 20_000;
 const LEAST_TICKS = 10;
 
 const READINGS = 3;
+
+// V8 identity hashes have 21 bits, so a WeakMap holding millions of keys a GC has not yet cleared
+// slows every lookup. Each measurement starts from a collected heap.
+setFlagsFromString("--expose-gc");
+const collectGarbage = runInNewContext("gc");
 
 function cpuMicros() {
   const { user, system } = process.cpuUsage();
@@ -44,6 +52,7 @@ function cpuTickMicros() {
 async function measure(size, repeats, setup, run, count) {
   const inputs = [];
   for (let index = 0; index < count; index += 1) inputs.push(await setup(size));
+  collectGarbage();
   const started = cpuMicros();
   for (let index = 0; index < repeats; index += 1)
     await run(inputs[index % count]);
@@ -106,13 +115,14 @@ export async function assertScalesBelow(
 }
 
 /**
- * The least wall time of `count` runs, for comparison with a baseline measured the same way. Wall
- * time because one run is often shorter than Windows' CPU-time tick.
+ * The least wall time of `count` runs from a collected heap, for comparison with a baseline
+ * measured the same way. Wall time because one run is often shorter than Windows' CPU-time tick.
  *
  * @param {number} count
  * @param {() => unknown} run
  */
 export function minOf(count, run) {
+  collectGarbage();
   let least = Infinity;
   for (let index = 0; index < count; index += 1) {
     const started = performance.now();
