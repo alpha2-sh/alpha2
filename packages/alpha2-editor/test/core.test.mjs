@@ -1505,14 +1505,19 @@ test("a document is made and opened in time linear in its clips", async () => {
     made.metadata.instanceIds,
   );
   // Each run gets a new project object, so no check is skipped as known.
-  await assertScalesBelow("making a document", 1_250, withClips, (project) =>
-    createDocument({ ...project }),
+  await assertScalesBelow(
+    "making a document",
+    625,
+    withClips,
+    (project) => createDocument({ ...project }),
+    { growth: 16 },
   );
   await assertScalesBelow(
     "opening a document",
-    1_250,
+    625,
     (count) => withoutIds(createDocument(withClips(count))),
     (text) => parseDocument(text),
+    { growth: 16 },
   );
 });
 
