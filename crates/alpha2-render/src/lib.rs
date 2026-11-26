@@ -9,7 +9,7 @@
 
 #![cfg_attr(
     target_os = "android",
-    expect(
+    allow(
         clippy::missing_const_for_thread_local,
         reason = "clippy misreads the emulated-TLS expansion of `const` thread locals on Android"
     )
