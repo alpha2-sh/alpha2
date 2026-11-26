@@ -10,6 +10,10 @@ publish.workspace = true
 [package.metadata.alpha2-plugin]
 wasm = false
 
+[package.metadata.alpha2-plugin.native-env]
+GGML_NATIVE = "OFF"
+GGML_CCACHE = "OFF"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
