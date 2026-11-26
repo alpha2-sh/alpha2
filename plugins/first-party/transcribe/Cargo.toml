@@ -13,6 +13,7 @@ wasm = false
 [package.metadata.alpha2-plugin.native-env]
 GGML_NATIVE = "OFF"
 GGML_CCACHE = "OFF"
+CMAKE_PROJECT_INCLUDE = { path = "cmake/whisper.cmake" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
