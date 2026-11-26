@@ -1543,12 +1543,8 @@ test("a gesture step on a 10,000-clip document costs a small part of validating 
     sources: [{ id: "s", kind: "video", locator: "test://s" }],
     timeline: { tracks },
   };
-  const copies = Array.from({ length: 5 }, () => structuredClone(project));
-  const timed = (count, run) => {
-    let index = 0;
-    return minOf(count, () => run(index++));
-  };
-  const whole = timed(5, (i) => validateProject(copies[i]));
+  const rounds = 5;
+  const stepsPerRound = 4;
   const e = createEditor({ document: createDocument(project) });
   for (const step of [
     (at) => ({ type: "clip.move", id: "c0-0", at }),
@@ -1557,10 +1553,26 @@ test("a gesture step on a 10,000-clip document costs a small part of validating 
       commands: [{ type: "clips.move", moves: [{ id: "c0-0", at }] }],
     }),
   ]) {
+    const copies = Array.from({ length: rounds }, () =>
+      structuredClone(project),
+    );
     const gesture = e.beginGesture();
-    const update = timed(20, (i) => {
-      assert.equal(gesture.update(step((i + 1) * 100)).ok, true);
-    });
+    let whole = Infinity;
+    let update = Infinity;
+    let at = 0;
+    for (let round = 0; round < rounds; round += 1) {
+      whole = Math.min(
+        whole,
+        minOf(1, () => validateProject(copies[round])),
+      );
+      update = Math.min(
+        update,
+        minOf(stepsPerRound, () => {
+          at += 100;
+          assert.equal(gesture.update(step(at)).ok, true);
+        }),
+      );
+    }
     gesture.cancel();
     assert.ok(
       update < whole / 4,
