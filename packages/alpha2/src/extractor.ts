@@ -158,10 +158,22 @@ export interface ExtractProgress {
   readonly total: number | null;
 }
 
+/** How the browser decoded one source's video for an extraction. */
+export interface ExtractSourceDecode {
+  /** What the decoder was opened with: software, unless this browser's did not decode the source. */
+  readonly hardwareAcceleration: "prefer-software" | "no-preference";
+  /** Why software decoding was not used, when it was not. */
+  readonly softwareRefusal?: string;
+  /** The first decoded frame's pixel format, once a frame was read. */
+  readonly frameFormat?: string;
+}
+
 /** What an extraction returns: the data sets, ready to put in the project. */
 export interface ExtractResult {
   readonly dataSets: readonly DataSet[];
   readonly timings: Readonly<Record<string, number>>;
+  /** In the browser: how each source whose frames were read was decoded, by source id. */
+  readonly sourceDecode?: Readonly<Record<string, ExtractSourceDecode>>;
 }
 
 function text(value: unknown, what: string): string {

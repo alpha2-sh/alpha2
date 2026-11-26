@@ -5,17 +5,20 @@ import {
   ALL_FORMATS,
   EncodedPacketSink,
   Input,
+  type InputVideoTrack,
   type VideoSample,
   VideoSampleSink,
 } from "mediabunny";
 
 import type { ChromaSiting } from "./chroma-siting.js";
+import { decodeFailureOf, withDecoderFallback } from "./decoder-fallback.js";
 import {
   collectEmits,
   type ExtractContext,
   type ExtractProgress,
   type ExtractResult,
   type ExtractRun,
+  type ExtractSourceDecode,
   type Extractor,
   schemaProblem,
 } from "./extractor.js";
@@ -27,15 +30,22 @@ export type {
   ExtractProgress,
   ExtractResult,
   ExtractRun,
+  ExtractSourceDecode,
   Extractor,
   ExtractorDescriptor,
 } from "./extractor.js";
 export { collectEmits, schemaProblem } from "./extractor.js";
 import type { DataSet, Project } from "./generated/project-schema.js";
+import { isUnreadableFrame, withReadbackRetries } from "./frame-intake.js";
 import {
-  copyPlanarYuvFrame,
+  codecName,
   DecodeUnavailableError,
   decodeRefusalMessage,
+  NonPlanarVideoFrameError,
+  PlanarDecodeUnavailableError,
+  type PlanarYuvFrame,
+  readPlanarYuvFrame,
+  type TrackDecodeFacts,
 } from "./hdr-frames.js";
 import { microsecondsToTicks, readVideoOrientation } from "./media.js";
 import { mediaSource } from "./media-source.js";
@@ -130,24 +140,40 @@ function coded(code: string, message: string, cause?: unknown): Error {
 }
 
 /**
- * One source's frames, decoded in software so they carry planes: the frame shown at a time, the
- * one after it in either direction.
+ * One source's frames as planes: the frame shown at a time, the one after it in either direction.
+ * Decoded in software where this browser's software decoder reads the source, and by the
+ * browser's own choice of decoder otherwise.
  */
 class SourceFrames {
-  readonly #sink: VideoSampleSink;
+  readonly #id: string;
   readonly #input: Input;
+  readonly #track: InputVideoTrack;
   readonly #orientation: { rotationDegrees: number; mirror: boolean };
   readonly #chromaSiting: ChromaSiting;
+  #sink: VideoSampleSink;
+  #acceleration: ExtractSourceDecode["hardwareAcceleration"];
+  #softwareRefusal: string | undefined;
+  #decodedAny = false;
+  #frameFormat: string | undefined;
   #forward: AsyncGenerator<VideoSample, void, unknown> | undefined;
 
   private constructor(
+    id: string,
     input: Input,
-    sink: VideoSampleSink,
+    track: InputVideoTrack,
+    softwareRefusal: string | undefined,
     orientation: { rotationDegrees: number; mirror: boolean },
     chromaSiting: ChromaSiting,
   ) {
+    this.#id = id;
     this.#input = input;
-    this.#sink = sink;
+    this.#track = track;
+    this.#softwareRefusal = softwareRefusal;
+    this.#acceleration =
+      softwareRefusal === undefined ? "prefer-software" : "no-preference";
+    this.#sink = new VideoSampleSink(track, {
+      hardwareAcceleration: this.#acceleration,
+    });
     this.#orientation = orientation;
     this.#chromaSiting = chromaSiting;
   }
@@ -156,60 +182,111 @@ class SourceFrames {
     resource: MediabunnyInput,
     id: string,
   ): Promise<SourceFrames> {
-    const source = mediaSource(resource);
-    const input = new Input({ source, formats: ALL_FORMATS });
-    const track = await input.getPrimaryVideoTrack();
-    if (track === null) {
+    const input = new Input({
+      source: mediaSource(resource),
+      formats: ALL_FORMATS,
+    });
+    try {
+      const track = await input.getPrimaryVideoTrack();
+      if (track === null)
+        throw coded("INVALID_INPUT", "the source has no video track");
+      if (!(await track.canDecode())) {
+        const facts = await videoTrackFacts(track);
+        throw new DecodeUnavailableError(
+          decodeRefusalMessage(`source ${id}`, facts),
+          facts,
+        );
+      }
+      const config = await track.getDecoderConfig();
+      const softwareListed =
+        typeof VideoDecoder === "undefined" ||
+        (config !== null &&
+          (await VideoDecoder.isConfigSupported({
+            ...config,
+            hardwareAcceleration: "prefer-software",
+          }).then(
+            (support) => support.supported === true,
+            () => false,
+          )));
+      const orientation = (await readVideoOrientation(resource, track.id)) ?? {
+        rotationDegrees: track.rotation,
+        mirror: false,
+      };
+      const chromaSiting = await streamChromaSiting(
+        track,
+        new EncodedPacketSink(track),
+      );
+      return new SourceFrames(
+        id,
+        input,
+        track,
+        softwareListed
+          ? undefined
+          : `no software decoder for ${codecName(config?.codec ?? track.codec ?? null)}`,
+        orientation,
+        chromaSiting,
+      );
+    } catch (error) {
       input.dispose();
-      throw coded("INVALID_INPUT", "the source has no video track");
+      throw error;
     }
-    // `canDecode` does not ask for a software decoder, so a hardware-only codec would pass it and
-    // then fail on its first read.
-    const config = (await track.canDecode())
-      ? await track.getDecoderConfig()
-      : null;
-    const software =
-      config !== null &&
-      (
-        await VideoDecoder.isConfigSupported({
-          ...config,
-          hardwareAcceleration: "prefer-software",
-        })
-      ).supported === true;
-    if (!software) {
-      const facts = await videoTrackFacts(track);
-      input.dispose();
-      throw new DecodeUnavailableError(
-        decodeRefusalMessage(`source ${id}`, facts),
-        facts,
+  }
+
+  get decode(): ExtractSourceDecode {
+    return {
+      hardwareAcceleration: this.#acceleration,
+      ...(this.#softwareRefusal === undefined
+        ? {}
+        : { softwareRefusal: this.#softwareRefusal }),
+      ...(this.#frameFormat === undefined
+        ? {}
+        : { frameFormat: this.#frameFormat }),
+    };
+  }
+
+  async #read<T>(read: () => Promise<T>): Promise<T> {
+    if (this.#decodedAny) return read();
+    try {
+      return await withDecoderFallback(
+        read,
+        this.#acceleration === "no-preference"
+          ? undefined
+          : (cause) => {
+              this.#softwareRefusal = `${cause.name}: ${cause.message}`;
+              this.#acceleration = "no-preference";
+              this.#sink = new VideoSampleSink(this.#track, {
+                hardwareAcceleration: "no-preference",
+              });
+              return Promise.resolve();
+            },
+      );
+    } catch (error) {
+      throw decodeFailureOf(
+        error,
+        `source ${this.#id}`,
+        await videoTrackFacts(this.#track),
+        false,
       );
     }
-    const orientation = (await readVideoOrientation(resource, track.id)) ?? {
-      rotationDegrees: track.rotation,
-      mirror: false,
-    };
-    const chromaSiting = await streamChromaSiting(
-      track,
-      new EncodedPacketSink(track),
-    );
-    // Software frames carry planes, which present alike on every surface.
-    const sink = new VideoSampleSink(track, {
-      hardwareAcceleration: "prefer-software",
-    });
-    return new SourceFrames(input, sink, orientation, chromaSiting);
+  }
+
+  #decoded(sample: VideoSample | null): VideoSample | null {
+    if (sample !== null) this.#decodedAny = true;
+    return sample;
   }
 
   /** The frame shown at `ticks`, or the first frame when none is; a forward pass continues. */
   async start(ticks: bigint, forward: boolean): Promise<VideoSample | null> {
-    await this.#forward?.return();
-    const seconds = Number(ticks) / TICKS_PER_SECOND;
-    this.#forward = this.#sink.samples(seconds);
-    const first = await this.#forward.next();
+    const first = await this.#read(async () => {
+      await this.#forward?.return();
+      this.#forward = this.#sink.samples(Number(ticks) / TICKS_PER_SECOND);
+      return this.#forward.next();
+    });
     if (!forward) {
-      await this.#forward.return();
+      await this.#forward?.return();
       this.#forward = undefined;
     }
-    return first.done === true ? null : first.value;
+    return this.#decoded(first.done === true ? null : first.value);
   }
 
   /** The frame after the one at `pts` in the pass's direction, or `null` past the end. */
@@ -219,8 +296,10 @@ class SourceFrames {
       return next === undefined || next.done === true ? null : next.value;
     }
     if (pts <= 0n) return null;
-    const sample = await this.#sink.getSample(
-      Number(pts - 1n) / TICKS_PER_SECOND,
+    const sample = this.#decoded(
+      await this.#read(() =>
+        this.#sink.getSample(Number(pts - 1n) / TICKS_PER_SECOND),
+      ),
     );
     if (sample === null) return null;
     if (ticksOf(sample) >= pts) {
@@ -236,11 +315,40 @@ class SourceFrames {
   ): Promise<void> {
     const frame = sample.toVideoFrame();
     sample.close();
-    const planes = await copyPlanarYuvFrame(frame, null, {
-      rotation: this.#orientation.rotationDegrees as 0 | 90 | 180 | 270,
-      mirror: this.#orientation.mirror,
-      chromaSiting: this.#chromaSiting,
-    });
+    let planes: PlanarYuvFrame;
+    try {
+      planes = await withReadbackRetries(() =>
+        readPlanarYuvFrame(frame, null, {
+          rotation: this.#orientation.rotationDegrees as 0 | 90 | 180 | 270,
+          mirror: this.#orientation.mirror,
+          chromaSiting: this.#chromaSiting,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof NonPlanarVideoFrameError) {
+        const facts: TrackDecodeFacts = {
+          ...(await videoTrackFacts(this.#track)),
+          frameFormat: error.format,
+          softwareDecoder:
+            this.#acceleration === "prefer-software" ? "opaque" : "none",
+        };
+        throw new PlanarDecodeUnavailableError(
+          decodeRefusalMessage(`source ${this.#id}`, facts),
+          facts,
+          { cause: error },
+        );
+      }
+      if (isUnreadableFrame(error))
+        throw coded(
+          "FRAME_UNREADABLE",
+          `the browser could not read back the frame of source ${this.#id} at ${microsecondsToTicks(frame.timestamp)}`,
+          error,
+        );
+      throw error;
+    } finally {
+      frame.close();
+    }
+    this.#frameFormat ??= planes.format;
     session.supplyYuvFrame(
       microsecondsToTicks(planes.physicalTimeMicroseconds),
       planes.format,
@@ -303,13 +411,17 @@ interface Need {
 
 /**
  * Runs `extractor` over `request.request` in the page or a worker: source frames are decoded in
- * software and presented by the engine exactly as the native hosts present them, so the data
- * matches theirs byte for byte; timeline frames come from `request.timelineFrame`. Resolves with
- * the data sets the session validated.
+ * software where the browser's software decoder reads the source, by the browser's own choice of
+ * decoder otherwise, and presented by the engine exactly as the native hosts present them, so the
+ * data matches theirs byte for byte; timeline frames come from `request.timelineFrame`. Resolves
+ * with the data sets the session validated and, in `sourceDecode`, how each source was decoded.
  *
  * Rejects with `INVALID_INPUT` for a request the session refuses or params the descriptor's
  * `params_schema` does not take, `INVALID_EMIT` (with `details`) for output the session refuses,
- * `EXTRACTOR_FAILED` when a step throws, and `ABORTED` on `request.signal`.
+ * `EXTRACTOR_FAILED` when a step throws, `DECODE_UNAVAILABLE` when no decoder gives a source's
+ * first frame (`facts` and `cause` say why), `PLANAR_DECODE_UNAVAILABLE` for frames without
+ * planes, `FRAME_UNREADABLE` for planes that cannot be read back, and `ABORTED` on
+ * `request.signal`. A decoder failure after the first frame rejects with the browser's error.
  */
 export async function runExtractor(
   request: RunExtractorRequest,
@@ -515,6 +627,13 @@ export async function runExtractor(
     return {
       dataSets: recorded as DataSet[],
       timings: { totalMs: performance.now() - started },
+      ...(sources.size === 0
+        ? {}
+        : {
+            sourceDecode: Object.fromEntries(
+              [...sources].map(([id, frames]) => [id, frames.decode]),
+            ),
+          }),
     };
   } finally {
     await Promise.all([...sources.values()].map((frames) => frames.close()));
