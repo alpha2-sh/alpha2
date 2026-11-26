@@ -4,7 +4,9 @@
 
 export const GROWTH = 8;
 
-export const BOUND = 22;
+function boundFor(growth) {
+  return Math.floor(growth ** 1.5);
+}
 
 // Windows advances the process CPU clock in 15.6 ms steps.
 const LEAST_WORK_US = 20_000;
@@ -64,7 +66,7 @@ export async function assertScalesBelow(
   small,
   setup,
   run,
-  { growth = GROWTH, bound = BOUND, fresh = false } = {},
+  { growth = GROWTH, bound = boundFor(growth), fresh = false } = {},
 ) {
   const large = small * growth;
   const count = (size, repeats) =>
