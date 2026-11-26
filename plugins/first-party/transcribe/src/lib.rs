@@ -13,14 +13,18 @@ mod model;
 mod seam;
 
 use std::collections::BTreeMap;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use alpha2_plugin_sdk::{
     Audio, Context, Direction, Emitter, Error, Extractor, Host, MAX_DATA_LABEL_BYTES,
     MAX_DATA_WORDS, SlotShape, TICKS_PER_SECOND,
 };
 use seam::Word;
-use whisper_rs::whisper_rs_sys::ggml_log_level;
+use whisper_rs::whisper_rs_sys::{
+    ggml_log_level, ggml_log_level_GGML_LOG_LEVEL_CONT, ggml_log_level_GGML_LOG_LEVEL_ERROR,
+};
 use whisper_rs::{
     DtwParameters, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
     WhisperState,
@@ -185,7 +189,27 @@ pub struct Transcribe {
     emitted_end: i64,
 }
 
-unsafe extern "C" fn quiet(_: ggml_log_level, _: *const c_char, _: *mut c_void) {}
+// ggml logs the rest of a line at GGML_LOG_LEVEL_CONT, not at the line's own level.
+static ERROR_LINE: AtomicBool = AtomicBool::new(false);
+
+fn error_line(level: ggml_log_level) -> bool {
+    if level != ggml_log_level_GGML_LOG_LEVEL_CONT {
+        ERROR_LINE.store(
+            level == ggml_log_level_GGML_LOG_LEVEL_ERROR,
+            Ordering::Relaxed,
+        );
+    }
+    ERROR_LINE.load(Ordering::Relaxed)
+}
+
+unsafe extern "C" fn errors_only(level: ggml_log_level, text: *const c_char, _: *mut c_void) {
+    if !error_line(level) || text.is_null() {
+        return;
+    }
+    // SAFETY: whisper.cpp passes a NUL-terminated string that outlives the call.
+    let text = unsafe { CStr::from_ptr(text) };
+    let _ = std::io::stderr().write_all(text.to_bytes());
+}
 
 fn load(context: &Context, host: &Host, language: Option<&str>) -> Result<WhisperContext, Error> {
     let slot = context
@@ -208,8 +232,8 @@ fn load(context: &Context, host: &Host, language: Option<&str>) -> Result<Whispe
             "params.language is {code}, but the model in the slot transcribes English only"
         )));
     }
-    // SAFETY: `quiet` neither unwinds nor keeps what it is given.
-    unsafe { whisper_rs::set_log_callback(Some(quiet), std::ptr::null_mut()) };
+    // SAFETY: `errors_only` neither unwinds nor keeps what it is given.
+    unsafe { whisper_rs::set_log_callback(Some(errors_only), std::ptr::null_mut()) };
     let mut parameters = WhisperContextParameters::default();
     parameters
         .use_gpu(false)
@@ -469,6 +493,19 @@ alpha2_plugin_sdk::export_extractor!(Transcribe);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_error_lines_of_the_whisper_log_are_kept() {
+        use whisper_rs::whisper_rs_sys::{
+            ggml_log_level_GGML_LOG_LEVEL_INFO, ggml_log_level_GGML_LOG_LEVEL_WARN,
+        };
+        assert!(!error_line(ggml_log_level_GGML_LOG_LEVEL_INFO));
+        assert!(!error_line(ggml_log_level_GGML_LOG_LEVEL_CONT));
+        assert!(error_line(ggml_log_level_GGML_LOG_LEVEL_ERROR));
+        assert!(error_line(ggml_log_level_GGML_LOG_LEVEL_CONT));
+        assert!(!error_line(ggml_log_level_GGML_LOG_LEVEL_WARN));
+        assert!(!error_line(ggml_log_level_GGML_LOG_LEVEL_CONT));
+    }
 
     #[test]
     fn the_descriptor_offers_auto_and_every_language_the_plugin_takes() {
