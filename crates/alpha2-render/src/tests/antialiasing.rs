@@ -110,10 +110,10 @@ fn minification_averages_texture_detail_and_associated_alpha() {
         let texture = rgba_image_texture(&renderer, source_size, &bytes);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let transform = visual([1.0, 1.0], 1.0);
-        renderer.set_quality_controls(1, 1);
+        renderer.set_quality_controls(1);
         let unfiltered = composite_pixels(&renderer, &view, output_size, transform);
         assert_rgba8_near(&unfiltered[..4], &color, 1);
-        renderer.set_quality_controls(64, 1);
+        renderer.set_quality_controls(64);
         let filtered = composite_pixels(&renderer, &view, output_size, transform);
         for pixel in filtered.as_chunks::<4>().0 {
             assert_rgba8_near(pixel, &color.map(|v| v / 3), 1);

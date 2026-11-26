@@ -33,13 +33,15 @@ pub enum ErrorCode {
     GpuDeviceHung,
     /// GPU work did not complete within the wait timeout.
     GpuTimeout,
+    /// A defect in the engine failed the request; the engine stays usable.
+    Internal,
     /// A failure nothing classified.
     Alpha2Error,
 }
 
 impl ErrorCode {
     /// Every code, for tables and tests.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::InvalidInput,
         Self::MissingInput,
         Self::IncompleteComposition,
@@ -48,6 +50,7 @@ impl ErrorCode {
         Self::GpuDeviceLost,
         Self::GpuDeviceHung,
         Self::GpuTimeout,
+        Self::Internal,
         Self::Alpha2Error,
     ];
 
@@ -63,6 +66,7 @@ impl ErrorCode {
             Self::GpuDeviceLost => "GPU_DEVICE_LOST",
             Self::GpuDeviceHung => "GPU_DEVICE_HUNG",
             Self::GpuTimeout => "GPU_TIMEOUT",
+            Self::Internal => "INTERNAL",
             Self::Alpha2Error => "ALPHA2_ERROR",
         }
     }
@@ -129,6 +133,7 @@ impl ErrorCode {
 pub fn gpu_error_of(error: &(dyn Error + 'static)) -> Option<alpha2_gpu::GpuErrorKind> {
     let render = |error: &RenderError| match error {
         RenderError::Gpu { kind } => Some(*kind),
+        RenderError::FrameExceedsGpuMemory { .. } => Some(alpha2_gpu::GpuErrorKind::OutOfMemory),
         _ => None,
     };
     let mut cause = Some(error);
@@ -240,7 +245,8 @@ fn render_code(error: RenderError) -> ErrorCode {
         | RenderError::InvalidVisual
         | RenderError::InvalidImageData
         | RenderError::InvalidGraph
-        | RenderError::UnsupportedHdr => ErrorCode::InvalidInput,
+        | RenderError::UnsupportedHdr
+        | RenderError::UnsupportedOutputColor(_) => ErrorCode::InvalidInput,
         RenderError::InvalidEffectParameter
         | RenderError::UnknownEffect
         | RenderError::InvalidEffectParams
@@ -256,6 +262,7 @@ fn render_code(error: RenderError) -> ErrorCode {
         | RenderError::ExternalTextureSync(Some(GpuFault::DeviceLost)) => ErrorCode::GpuDeviceLost,
         RenderError::GpuDeviceHung { .. }
         | RenderError::ExternalTextureSync(Some(GpuFault::DeviceHung)) => ErrorCode::GpuDeviceHung,
+        RenderError::UniformArenaOverrun => ErrorCode::Internal,
         // A GPU rejection is the engine's failure, not the caller's input.
         _ => ErrorCode::Alpha2Error,
     }
@@ -304,12 +311,33 @@ mod tests {
             );
         }
         assert_eq!(gpu_error_of(&RenderError::GpuWorkDropped), None);
+        let oversized = RenderError::FrameExceedsGpuMemory {
+            needed: 2,
+            budget: 1,
+        };
+        assert_eq!(
+            gpu_error_of(&oversized),
+            Some(alpha2_gpu::GpuErrorKind::OutOfMemory)
+        );
+        assert_eq!(ErrorCode::of(&oversized), Some(ErrorCode::Alpha2Error));
         assert_eq!(
             ErrorCode::of(&RenderError::GpuTimeout),
             Some(ErrorCode::GpuTimeout)
         );
         assert_eq!(
             ErrorCode::of(&RenderError::UnsupportedHdr),
+            Some(ErrorCode::InvalidInput)
+        );
+        assert_eq!(
+            ErrorCode::of(&RenderError::UniformArenaOverrun),
+            Some(ErrorCode::Internal)
+        );
+        let wide = alpha2_media::ColorMetadata {
+            primaries: alpha2_media::ColorPrimaries::Bt2020,
+            ..alpha2_media::ColorMetadata::EXPORT
+        };
+        assert_eq!(
+            ErrorCode::of(&RenderError::UnsupportedOutputColor(wide)),
             Some(ErrorCode::InvalidInput)
         );
         let model = alpha2_model::ModelError::UnsupportedSchemaVersion { found: 0 };

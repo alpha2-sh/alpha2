@@ -391,6 +391,65 @@ fn uniform_arenas_are_reused_at_any_source_count_and_graph_size() {
 }
 
 #[test]
+fn a_frame_converting_its_sources_and_packing_its_output_leases_one_uniform_arena() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(4, 4).expect("source size");
+    let y = [16_u8; 16];
+    let u = [128_u8; 4];
+    let v = [128_u8; 4];
+    let frame = Yuv420Frame {
+        y: &y,
+        u: &u,
+        v: &v,
+        y_stride: 4,
+        chroma_stride: 2,
+        size,
+        alpha: 1.0,
+        color: Some(ColorMetadata::default()),
+    };
+    let leased = || {
+        let stats = renderer.diagnostics().uniform_buffers;
+        stats.created + stats.reused
+    };
+    let sources = (0..5)
+        .map(|_| {
+            renderer
+                .prepare_yuv420p_presented(
+                    frame,
+                    SourcePresentation::identity(size),
+                    ColorPolicy::RejectHdr,
+                )
+                .expect("prepared YUV source")
+                .0
+                .into_parts()
+        })
+        .collect::<Vec<_>>();
+    let mut graph = RenderGraph::new(size);
+    let layers = sources
+        .iter()
+        .map(|(texture, _)| GraphLayer {
+            source: graph.add_source(SourceView::from_wgpu(texture.view())),
+            visual: visual([0.5, 0.5], 0.8),
+            blend_mode: BlendMode::Normal,
+        })
+        .collect::<Vec<_>>();
+    let output = graph.add_composite(layers).expect("composite");
+    graph.set_output(output).expect("output");
+    let pending = sources
+        .iter()
+        .map(|(_, pending)| pending.as_ref().expect("the conversion is pending"))
+        .collect::<Vec<_>>();
+    let before = leased();
+    renderer
+        .render_graph_yuv420p(&graph, &pending, centred(ColorMetadata::default()))
+        .expect("the frame renders")
+        .wait_ready()
+        .expect("the readback maps");
+    assert_eq!(leased() - before, 1);
+}
+
+#[test]
 fn gpu_rgba_presentation_contains_rotates_and_premultiplies() {
     let _lock = gpu_test_lock();
     let renderer = Renderer::new(gpu());

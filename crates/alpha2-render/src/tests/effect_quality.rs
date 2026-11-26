@@ -432,7 +432,7 @@ fn a_tier_b_renderer_filters_with_the_tier_b_sample_budget_and_says_so() {
         let mut renderer = Renderer::new(gpu().with_tier(tier));
         renderer.register_builtins().expect("built-ins compile");
         if let Some(budget) = budget {
-            renderer.set_quality_controls(budget, 1);
+            renderer.set_quality_controls(budget);
         }
         renderer
     };
@@ -447,13 +447,13 @@ fn a_tier_b_renderer_filters_with_the_tier_b_sample_budget_and_says_so() {
     assert_eq!(tier_b.quality_controls().max_filter_samples, 16);
     assert_eq!(tier_b.diagnostics().max_filter_samples, 16);
     assert_eq!(tier_b.diagnostics().degradations, reduced(64));
-    tier_b.set_quality_controls(32, 1);
+    tier_b.set_quality_controls(32);
     assert_eq!(tier_b.quality_controls().max_filter_samples, 16);
     assert_eq!(tier_b.diagnostics().degradations, reduced(32));
-    tier_b.set_quality_controls(8, 1);
+    tier_b.set_quality_controls(8);
     assert_eq!(tier_b.quality_controls().max_filter_samples, 8);
     assert_eq!(tier_b.diagnostics().degradations, Vec::new());
-    tier_b.set_quality_controls(64, 1);
+    tier_b.set_quality_controls(64);
 
     // Passes use the reduced budget: a wide blur on Tier B matches a 16-sample draw.
     let size = RenderSize::new(512, 1080).expect("non-zero size");

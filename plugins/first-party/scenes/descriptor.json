@@ -1,0 +1,78 @@
+{
+  "id": "alpha2.scenes",
+  "version": 1,
+  "input": {
+    "media": "video",
+    "from": ["source", "timeline"],
+    "format": "luma8",
+    "max_size": 160
+  },
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "sensitivity": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "title": "Sensitivity",
+        "description": "Higher finds subtler cuts: the threshold is three times higher at 0 and three times lower at 1 than at 50 %.",
+        "default": 0.5,
+        "x-alpha2-display": "percent",
+        "x-alpha2-step": 0.05,
+        "x-alpha2-order": 1
+      },
+      "min_scene_ms": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 60000,
+        "title": "Shortest shot",
+        "description": "A cut closer than this to one already reported is not reported.",
+        "default": 500,
+        "x-alpha2-unit": "ms",
+        "x-alpha2-step": 100,
+        "x-alpha2-display": "seconds",
+        "x-alpha2-order": 2
+      },
+      "black_level": {
+        "type": "number",
+        "minimum": 0.01,
+        "maximum": 0.5,
+        "title": "Black level",
+        "description": "A frame whose mean brightness is under this is black.",
+        "default": 0.06,
+        "x-alpha2-display": "percent",
+        "x-alpha2-step": 0.01,
+        "x-alpha2-order": 3
+      },
+      "min_black_ms": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 60000,
+        "title": "Shortest black",
+        "description": "Black stretches shorter than this are not reported.",
+        "default": 500,
+        "x-alpha2-unit": "ms",
+        "x-alpha2-step": 100,
+        "x-alpha2-display": "seconds",
+        "x-alpha2-order": 4
+      }
+    },
+    "additionalProperties": false
+  },
+  "outputs": [
+    {
+      "name": "cuts",
+      "kind": "intervals",
+      "suggest": "split_at",
+      "label": "Cuts",
+      "description": "The first frame of each new shot, as an instant, scored from 0 for a change just past the threshold toward 1 for a change far past it."
+    },
+    {
+      "name": "black",
+      "kind": "intervals",
+      "suggest": "remove_ranges",
+      "label": "Black",
+      "description": "Stretches where the picture stays black, scored from 0 at the black level to 1 for pure black."
+    }
+  ]
+}

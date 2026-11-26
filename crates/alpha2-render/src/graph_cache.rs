@@ -151,7 +151,6 @@ pub(crate) fn renderer_cache_key(
     hash.u128(structural.value());
     hash.f32(blend_space);
     hash.u32(quality.max_filter_samples);
-    hash.u32(quality.motion_blur_subframes);
     hash.string(match intermediate {
         wgpu::TextureFormat::Rgba16Float => "rgba16float",
         _ => "rgba8unorm",
@@ -171,7 +170,6 @@ pub(crate) fn cpu_renderer_cache_key(
     hash.u128(structural.value());
     hash.f32(blend_space);
     hash.u32(quality.max_filter_samples);
-    hash.u32(quality.motion_blur_subframes);
     hash.string("cpu/rgba16float/2");
     RenderCacheKey(hash.finish())
 }

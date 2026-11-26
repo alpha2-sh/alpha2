@@ -1165,6 +1165,7 @@ pub(crate) fn color_tags(
             ColorPrimaries::Bt601 => ffi::AVCOL_PRI_SMPTE170M,
             ColorPrimaries::Bt709 => ffi::AVCOL_PRI_BT709,
             ColorPrimaries::Bt2020 => ffi::AVCOL_PRI_BT2020,
+            ColorPrimaries::DisplayP3 => ffi::AVCOL_PRI_SMPTE432,
         },
         match color.transfer {
             TransferFunction::Bt709 => ffi::AVCOL_TRC_BT709,

@@ -263,6 +263,8 @@ fn two_passes_from_a_seed_meet_without_repeating_it() {
         channels: vec!["a".into()],
         interpolation: None,
         suggest: None,
+        label: None,
+        description: None,
     }];
     let sample = |time: i64| Emit::Sample {
         output: "track".into(),
@@ -323,6 +325,8 @@ fn a_time_emitted_twice_is_refused_at_finish() {
         channels: vec!["a".into()],
         interpolation: None,
         suggest: None,
+        label: None,
+        description: None,
     }];
     let sample = |time: i64| Emit::Sample {
         output: "track".into(),
@@ -403,6 +407,8 @@ fn scalar_output() -> Vec<OutputSpec> {
         channels: vec!["a".into()],
         interpolation: None,
         suggest: None,
+        label: None,
+        description: None,
     }]
 }
 
@@ -452,6 +458,8 @@ fn words_and_intervals_follow_their_rules() {
             channels: vec![],
             interpolation: None,
             suggest: None,
+            label: None,
+            description: None,
         },
         OutputSpec {
             name: "i".into(),
@@ -459,6 +467,8 @@ fn words_and_intervals_follow_their_rules() {
             channels: vec![],
             interpolation: None,
             suggest: None,
+            label: None,
+            description: None,
         },
     ];
     let word = |start, end, text: &str| Emit::Word {
@@ -567,6 +577,8 @@ fn an_emit_past_a_data_limit_is_refused_when_it_is_emitted() {
         channels: (0..channels).map(|channel| format!("c{channel}")).collect(),
         interpolation: None,
         suggest: None,
+        label: None,
+        description: None,
     };
     let interval = |name: &str, score: f32| Emit::Interval {
         output: name.into(),
@@ -900,4 +912,164 @@ fn an_audio_range_up_to_the_last_tick_stays_on_the_sample_grid() {
         ExtractSession::new(&project(), &descriptor, past).err(),
         Some(RequestError::InvalidAudio)
     );
+}
+
+struct Placing {
+    digest: Digest,
+    buffer: Vec<u8>,
+    placed: usize,
+}
+
+impl Extractor for Placing {
+    fn describe(&self) -> &Descriptor {
+        self.digest.describe()
+    }
+
+    fn begin(&mut self, context: &RunContext) -> Result<(), ExtractorError> {
+        self.digest.begin(context)
+    }
+
+    fn pass(&mut self, pass: &PassInfo) -> Result<(), ExtractorError> {
+        self.digest.pass(pass)
+    }
+
+    fn video(&mut self, frame: &VideoInput, out: &mut Emitter) -> Result<(), ExtractorError> {
+        if !frame.bytes.is_empty() {
+            return self.digest.video(frame, out);
+        }
+        self.placed += 1;
+        let placed = VideoInput {
+            bytes: self.buffer.clone(),
+            ..frame.clone()
+        };
+        self.digest.video(&placed, out)
+    }
+
+    fn frame_buffer(&mut self, len: usize) -> Option<&mut [u8]> {
+        self.buffer.resize(len, 0);
+        Some(&mut self.buffer)
+    }
+
+    fn audio(&mut self, block: &AudioInput, out: &mut Emitter) -> Result<(), ExtractorError> {
+        self.digest.audio(block, out)
+    }
+
+    fn end(&mut self, out: &mut Emitter) -> Result<(), ExtractorError> {
+        self.digest.end(out)
+    }
+}
+
+struct FakeInPlace(Fake);
+
+impl Supplier for FakeInPlace {
+    fn frame(&mut self, need: &Need) -> Result<Option<SuppliedFrame>, String> {
+        self.0.frame(need)
+    }
+
+    fn frame_into(
+        &mut self,
+        need: &Need,
+        place: &mut FramePlace<'_>,
+    ) -> Result<Option<SuppliedFrame>, String> {
+        let Some(mut frame) = self.0.frame(need)? else {
+            return Ok(None);
+        };
+        if let Some(buffer) = place.buffer(frame.rgba.len()) {
+            buffer.copy_from_slice(&frame.rgba);
+            frame.rgba.clear();
+        }
+        Ok(Some(frame))
+    }
+
+    fn audio(&mut self, need: &Need) -> Result<SuppliedAudio, String> {
+        self.0.audio(need)
+    }
+}
+
+#[test]
+fn frames_written_into_an_extractors_memory_give_the_data_frames_in_bytes_give() {
+    for format in [VideoFormat::Rgba8, VideoFormat::Luma8] {
+        let digest = Digest::new(video_input(format, 960));
+        let descriptor = digest.describe().clone();
+        let session = || {
+            ExtractSession::new(
+                &project(),
+                &descriptor,
+                request(&descriptor, InputFrom::Source, range(0, 24_000), vec![]),
+            )
+            .expect("session")
+        };
+        let in_bytes = drive(
+            session(),
+            &mut digest.clone(),
+            &mut FakeInPlace(Fake::new(PTS.to_vec())),
+        )
+        .expect("in bytes");
+        let mut placing = Placing {
+            digest: digest.clone(),
+            buffer: Vec::new(),
+            placed: 0,
+        };
+        let placed = drive(
+            session(),
+            &mut placing,
+            &mut FakeInPlace(Fake::new(PTS.to_vec())),
+        )
+        .expect("placed");
+        assert_eq!(placed, in_bytes, "{format:?}");
+        assert_eq!(placing.placed, PTS.len(), "{format:?}");
+
+        let mut offered = Placing {
+            digest: digest.clone(),
+            buffer: Vec::new(),
+            placed: 0,
+        };
+        let by_default = drive(session(), &mut offered, &mut Fake::new(PTS.to_vec()))
+            .expect("a supplier that does not place");
+        assert_eq!(by_default, in_bytes, "{format:?}");
+        let converted = if format == VideoFormat::Luma8 {
+            PTS.len()
+        } else {
+            0
+        };
+        assert_eq!(offered.placed, converted, "{format:?}");
+    }
+}
+
+#[test]
+fn a_supplier_that_places_a_frame_of_another_length_fails_the_run() {
+    struct Short(Fake);
+    impl Supplier for Short {
+        fn frame(&mut self, need: &Need) -> Result<Option<SuppliedFrame>, String> {
+            self.0.frame(need)
+        }
+        fn frame_into(
+            &mut self,
+            need: &Need,
+            place: &mut FramePlace<'_>,
+        ) -> Result<Option<SuppliedFrame>, String> {
+            let mut frame = self.0.frame(need)?.expect("a frame");
+            place.buffer(frame.rgba.len() - 4).expect("memory");
+            frame.rgba.clear();
+            Ok(Some(frame))
+        }
+        fn audio(&mut self, need: &Need) -> Result<SuppliedAudio, String> {
+            self.0.audio(need)
+        }
+    }
+    let digest = Digest::new(video_input(VideoFormat::Rgba8, 960));
+    let descriptor = digest.describe().clone();
+    let session = ExtractSession::new(
+        &project(),
+        &descriptor,
+        request(&descriptor, InputFrom::Source, range(0, 8_000), vec![]),
+    )
+    .expect("session");
+    let mut placing = Placing {
+        digest,
+        buffer: Vec::new(),
+        placed: 0,
+    };
+    let result = drive(session, &mut placing, &mut Short(Fake::new(PTS.to_vec())));
+    assert!(matches!(result, Err(DriveError::Supplier(_))), "{result:?}");
 }

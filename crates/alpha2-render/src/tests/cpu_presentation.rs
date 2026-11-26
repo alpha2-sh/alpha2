@@ -423,7 +423,7 @@ fn the_table_path_equals_the_per_pixel_path() {
     for budget in [64, 12] {
         // Bands of three rows put seams inside every picture.
         let renderer = crate::CpuRenderer::with_band_rows(2, 3);
-        renderer.set_quality_controls(budget, 1);
+        renderer.set_quality_controls(budget);
         for format in [YuvFormat::I420, YuvFormat::NV12, YuvFormat::P010] {
             for &(size, crop, sample_aspect_ratio) in &sources {
                 for exif in 1..=8 {
@@ -468,7 +468,7 @@ fn the_rgba_table_path_equals_the_per_pixel_path() {
     let canvas = sized(24, 16);
     for budget in [64, 12] {
         let renderer = crate::CpuRenderer::with_band_rows(2, 3);
-        renderer.set_quality_controls(budget, 1);
+        renderer.set_quality_controls(budget);
         for size in [sized(16, 12), canvas, sized(60, 40), sized(192, 128)] {
             let card = super::cpu_parity::test_card(size, false);
             // Straight alpha reads the card as straight color: translucent corners stay soft.

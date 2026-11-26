@@ -27,10 +27,8 @@ pub(crate) const TRANSCENDENTAL_UNITS: u64 = 2;
 /// Units of any other operator or call.
 pub(crate) const ARITHMETIC_UNITS: u64 = 1;
 
-/// Most units one runtime effect invocation may cost.
-///
-/// At the cap, an 8K frame on the slowest integrated GPU measured, split into
-/// [`crate::submission_planner::MAX_BANDS`] bands, keeps each band under half the watchdog.
+/// Most units one runtime effect invocation may cost. It bounds no submission: the planner cuts a
+/// pass into bands and tiles predicted within the budget.
 pub(crate) const MAX_INVOCATION_COST: u64 = 1_048_576;
 
 /// WGSL built-ins counted as transcendental calls.
@@ -87,7 +85,7 @@ impl EffectCost {
             .saturating_add(self.arithmetic.saturating_mul(ARITHMETIC_UNITS))
     }
 
-    const fn plus(self, other: Self) -> Self {
+    pub(crate) const fn plus(self, other: Self) -> Self {
         Self {
             fetches: self.fetches.saturating_add(other.fetches),
             transcendentals: self.transcendentals.saturating_add(other.transcendentals),

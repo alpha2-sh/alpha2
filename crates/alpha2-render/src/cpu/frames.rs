@@ -1,9 +1,11 @@
 //! Frame-sized pixel buffers kept between pictures, so each frame does not map and fault in fresh
 //! memory.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+
+use crate::recent_use::RecentPeaks;
 
 /// Smaller buffers come from the allocator's own free lists cheaply.
 const MIN_BYTES: usize = 1 << 20;
@@ -14,6 +16,10 @@ const DEFAULT_BUDGET_BYTES: u64 = 768 << 20;
 pub(crate) type HalfPixel = [u16; 4];
 
 /// Idle half-float pixel buffers of one CPU renderer, reused by exact length.
+///
+/// Per length it keeps as many buffers as any of the last
+/// [`crate::recent_use::RECENT_FRAMES`] frames took from it at once, whatever the limits; the
+/// count and byte limits bound only the idle buffers beyond that, oldest first.
 #[derive(Debug)]
 pub(crate) struct FramePool {
     state: Mutex<State>,
@@ -26,6 +32,13 @@ struct State {
     idle: VecDeque<Vec<HalfPixel>>,
     bytes: u64,
     budget: u64,
+    recent_use: HashMap<usize, RecentTakes>,
+}
+
+#[derive(Debug)]
+struct RecentTakes {
+    out_this_frame: usize,
+    peaks: RecentPeaks,
 }
 
 impl Default for FramePool {
@@ -35,6 +48,7 @@ impl Default for FramePool {
                 idle: VecDeque::new(),
                 bytes: 0,
                 budget: DEFAULT_BUDGET_BYTES,
+                recent_use: HashMap::new(),
             }),
             reused: AtomicU64::new(0),
         }
@@ -47,6 +61,12 @@ impl FramePool {
     pub(crate) fn take(&self, len: usize) -> Vec<HalfPixel> {
         if bytes_of(len) >= MIN_BYTES as u64 {
             let mut state = self.lock();
+            let taken = state.recent_use.entry(len).or_insert(RecentTakes {
+                out_this_frame: 0,
+                peaks: RecentPeaks::new(),
+            });
+            taken.out_this_frame = taken.out_this_frame.saturating_add(1);
+            taken.peaks.raise(taken.out_this_frame);
             if let Some(index) = state.idle.iter().rposition(|buffer| buffer.len() == len) {
                 let buffer = state.idle.remove(index).expect("the index is in range");
                 state.bytes -= bytes_of(len);
@@ -58,13 +78,17 @@ impl FramePool {
         vec![[0; 4]; len]
     }
 
-    /// Keeps `buffer` for a later [`Self::take`], evicting the oldest buffers past the limits.
+    /// Keeps `buffer` for a later [`Self::take`], evicting the oldest spare buffers past the
+    /// limits.
     pub(crate) fn give_back(&self, buffer: Vec<HalfPixel>) {
         let bytes = bytes_of(buffer.len());
         if bytes < MIN_BYTES as u64 || buffer.capacity() != buffer.len() {
             return;
         }
         let mut state = self.lock();
+        if let Some(taken) = state.recent_use.get_mut(&buffer.len()) {
+            taken.out_this_frame = taken.out_this_frame.saturating_sub(1);
+        }
         state.idle.push_back(buffer);
         state.bytes += bytes;
         let evicted = state.evict();
@@ -91,6 +115,18 @@ impl FramePool {
         drop(evicted);
     }
 
+    pub(crate) fn next_frame(&self) {
+        let mut state = self.lock();
+        state.recent_use.retain(|_, taken| {
+            taken.peaks.advance(1, 0);
+            taken.out_this_frame = 0;
+            taken.peaks.most() > 0
+        });
+        let evicted = state.evict();
+        drop(state);
+        drop(evicted);
+    }
+
     /// Takes served by an idle buffer.
     pub(crate) fn reused(&self) -> u64 {
         self.reused.load(Ordering::Relaxed)
@@ -102,17 +138,37 @@ impl FramePool {
 }
 
 impl State {
-    /// Removes the oldest buffers until within the limits; the caller frees them after unlocking.
+    /// Removes the oldest spare buffers until within the limits.
+    #[must_use]
     fn evict(&mut self) -> Vec<Vec<HalfPixel>> {
         let mut evicted = Vec::new();
+        let mut index = 0;
         while self.idle.len() > MAX_BUFFERS || self.bytes > self.budget {
-            let Some(buffer) = self.idle.pop_front() else {
+            let Some(len) = self.idle.get(index).map(Vec::len) else {
                 break;
             };
-            self.bytes -= bytes_of(buffer.len());
+            if self.idle_of(len) <= self.kept_idle(len) {
+                index += 1;
+                continue;
+            }
+            let buffer = self.idle.remove(index).expect("the index is in range");
+            self.bytes -= bytes_of(len);
             evicted.push(buffer);
         }
         evicted
+    }
+
+    fn kept_idle(&self, len: usize) -> usize {
+        self.recent_use
+            .get(&len)
+            .map_or(0, |taken| taken.peaks.most())
+    }
+
+    fn idle_of(&self, len: usize) -> usize {
+        self.idle
+            .iter()
+            .filter(|buffer| buffer.len() == len)
+            .count()
     }
 }
 
@@ -157,6 +213,49 @@ mod tests {
         assert_eq!(pool.reused(), 0, "the first buffer was evicted");
         pool.set_budget(bytes_of(LARGE + MAX_BUFFERS));
         assert_eq!(pool.release(), bytes_of(LARGE + MAX_BUFFERS));
+    }
+
+    fn frame(pool: &FramePool, len: usize, at_once: usize) {
+        pool.next_frame();
+        let taken = (0..at_once).map(|_| pool.take(len)).collect::<Vec<_>>();
+        for buffer in taken {
+            pool.give_back(buffer);
+        }
+    }
+
+    #[test]
+    fn a_frame_taking_more_than_the_limits_hold_reuses_its_buffers() {
+        let pool = FramePool::default();
+        pool.set_budget(bytes_of(LARGE));
+        for _ in 0..2 {
+            frame(&pool, LARGE, MAX_BUFFERS + 2);
+        }
+        let reused = pool.reused();
+        for _ in 0..10 {
+            frame(&pool, LARGE, MAX_BUFFERS + 2);
+        }
+        assert_eq!(
+            pool.reused() - reused,
+            10 * u64::try_from(MAX_BUFFERS + 2).expect("small"),
+            "every take after warm-up is served by an idle buffer"
+        );
+    }
+
+    #[test]
+    fn a_length_no_frame_takes_any_more_leaves_after_the_recent_frames() {
+        let pool = FramePool::default();
+        pool.set_budget(bytes_of(LARGE + 1));
+        frame(&pool, LARGE, 3);
+        assert_eq!(pool.release(), 3 * bytes_of(LARGE));
+        frame(&pool, LARGE, 3);
+        for _ in 0..crate::recent_use::RECENT_FRAMES {
+            frame(&pool, LARGE + 1, 1);
+        }
+        assert_eq!(
+            pool.release(),
+            bytes_of(LARGE + 1),
+            "only the length the recent frames took stays"
+        );
     }
 
     #[test]

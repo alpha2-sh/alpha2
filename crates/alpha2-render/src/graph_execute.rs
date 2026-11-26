@@ -2,17 +2,26 @@ use std::collections::HashSet;
 use web_time::Instant;
 
 use crate::composite::CompositeTarget;
+use crate::frame_gpu_time::FrameSample;
 use crate::graph::{GraphError, RenderCacheKey, RenderGraph, RenderNode, RenderNodeId};
 use crate::graph_cache::{renderer_cache_key, renderer_node_key};
+use crate::prepared_frame::{FramePack, PreparedNode};
 use crate::runtime_effect::{EffectPass, PendingEffectTiming};
-use crate::uniform::{
-    BATCH_UNIFORM_FLOATS, RUNTIME_UNIFORM_WORDS, UniformArenaLease, aligned_uniform_end,
-    float_uniform_bytes, param_uniform_bytes,
-};
+use crate::submission_pilot::PassKind;
+use crate::uniform::UniformArenaLease;
+use crate::yuv::SourceWorkTicket;
 use crate::{
     CompositeLayer, EffectId, EffectKind, RenderedTexture, Renderer, ShaderDiagnostics,
     WarmupReport,
 };
+
+pub(crate) struct FrameStart {
+    plan: crate::RenderPlan,
+    prepared: crate::prepared_frame::PreparedFrame,
+    uniforms: UniformArenaLease,
+    cached: CachedResults,
+    submission_plan: Option<crate::submission_planner::SubmissionPlan>,
+}
 
 pub(crate) struct EncodedGraph {
     texture: RenderedTexture,
@@ -28,12 +37,12 @@ pub(crate) struct EncodedGraph {
 }
 
 impl EncodedGraph {
-    pub(crate) fn texture(&self) -> &RenderedTexture {
-        &self.texture
-    }
-
     pub(crate) fn flush_uniforms(&self, queue: &wgpu::Queue) {
         self.uniforms.flush(queue);
+    }
+
+    pub(crate) fn output_and_uniforms(&mut self) -> (&RenderedTexture, &mut UniformArenaLease) {
+        (&self.texture, &mut self.uniforms)
     }
 }
 
@@ -45,12 +54,11 @@ impl Renderer {
     /// # Errors
     /// Returns [`GraphError::MissingOutput`] when no output was selected.
     pub fn graph_cache_key(&self, graph: &RenderGraph<'_>) -> Result<RenderCacheKey, GraphError> {
-        let quality = self.quality_controls();
-        let plan = graph.compile_with_quality(quality)?;
+        let plan = graph.compile()?;
         Ok(renderer_cache_key(
             plan.cache_key,
             graph.blend_space.unwrap_or(self.blend_space).shader_value(),
-            quality,
+            self.quality_controls(),
             self.intermediate_format(),
         ))
     }
@@ -123,55 +131,122 @@ impl Renderer {
     /// Returns a structural error or the first rendering failure.
     #[allow(clippy::too_many_lines)]
     pub fn execute_graph(&self, graph: &RenderGraph<'_>) -> Result<RenderedTexture, GraphError> {
+        let _frame = self.frame_lock.hold();
+        let start = self.prepare_graph(graph, &[], FramePack::Nothing)?;
         let mut command_encoder = self.command_encoder("alpha2 render graph encoder");
-        let graph_work = self.encode_graph(graph, &mut command_encoder)?;
+        let graph_work = self.encode_graph(start, graph, &mut command_encoder, &[], None)?;
         graph_work.flush_uniforms(self.gpu.queue());
         self.submit([command_encoder.finish()])
             .map_err(GraphError::Render)?;
         Ok(self.complete_graph_work(graph_work, true))
     }
 
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn encode_graph(
+    pub(crate) fn prepare_graph(
         &self,
         graph: &RenderGraph<'_>,
-        encoder: &mut crate::renderer::RenderEncoder,
-    ) -> Result<EncodedGraph, GraphError> {
+        sources: &[SourceWorkTicket<'_>],
+        pack: FramePack,
+    ) -> Result<FrameStart, GraphError> {
+        self.forget_after_reported_errors();
         self.validate_size(graph.size)?;
         let plan = graph.compile()?;
         if matches!(graph.nodes[plan.output.index], RenderNode::Source(_)) {
             return Err(GraphError::SourceOutput);
         }
-        let format = self.intermediate_format();
-        let uniform_alignment = u64::from(self.limits.min_uniform_buffer_offset_alignment.max(1));
-        let uniform_capacity = graph_uniform_capacity(self, graph, &plan.order, uniform_alignment);
-        let mut uniforms = self
-            .uniform_buffers
-            .acquire(self.gpu.device(), uniform_capacity);
-        let mut outputs: Vec<Option<RenderedTexture>> =
-            (0..graph.nodes.len()).map(|_| None).collect();
+        let mut prepared = self.prepare_frame(graph, &plan.order);
         let blend_space = graph.blend_space.unwrap_or(self.blend_space).shader_value();
         let cached = self.cached_results(graph, &plan.order, plan.output, blend_space);
         let pixels = u64::from(graph.size.width) * u64::from(graph.size.height);
-        let predicted = plan
-            .order
-            .iter()
-            .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
-            .fold(crate::FrameCost::default(), |mut total, node| {
-                if let Some(cost) = self.node_cost(&graph.nodes[node.index]) {
-                    total.add(cost, pixels);
-                }
-                total
-            });
-        self.plan_submissions(encoder, predicted);
-        if encoder.planner().is_planned() {
+        let drawn = || {
+            plan.order
+                .iter()
+                .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
+        };
+        prepared.prepare_vectors(self, graph, drawn());
+        let uniforms = self.uniform_buffers.acquire(
+            self.gpu.device(),
+            prepared.uniform_capacity(sources, &plan.order, pack, self.uniform_alignment()),
+        );
+        let mut conversions = crate::FrameCost::default();
+        for work in sources {
+            conversions.add_cost(work.work());
+        }
+        let mut composites = crate::FrameCost::default();
+        let mut predicted = pack.work(graph.size);
+        predicted.add_cost(conversions);
+        for node in drawn() {
+            let work = node_work(&graph.nodes[node.index], prepared.node(*node), pixels);
+            if prepared.composite(*node).is_some() {
+                composites.add_cost(work);
+            }
+            predicted.add_cost(work);
+        }
+        let needed = self.texture_need(graph, &plan, &prepared, &cached, sources, pack);
+        if let Some(budget) = self.gpu_memory_budget()
+            && needed > budget
+        {
+            return Err(GraphError::Render(
+                crate::RenderError::FrameExceedsGpuMemory { needed, budget },
+            ));
+        }
+        let mut submission_plan = self.plan_submissions(predicted);
+        if let Some(submission_plan) = &mut submission_plan {
             self.pilot_passes(
-                plan.order
-                    .iter()
-                    .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
-                    .map(|node| &graph.nodes[node.index]),
+                drawn().map(|node| (&graph.nodes[node.index], prepared.registration(*node))),
                 graph.size,
             );
+            self.pilot_kinds(
+                graph.size,
+                &[
+                    (PassKind::Conversion, conversions),
+                    (PassKind::Composite, composites),
+                    (PassKind::Pack, pack.work(graph.size)),
+                ],
+            );
+            for node in drawn() {
+                if let Some(Ok(scene)) = prepared.vector(*node) {
+                    let _ = self.pilot_vector(scene, graph.size);
+                }
+            }
+            submission_plan.predict(planned_passes(graph, drawn(), &prepared, sources, pack));
+        }
+        Ok(FrameStart {
+            plan,
+            prepared,
+            uniforms,
+            cached,
+            submission_plan,
+        })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn encode_graph(
+        &self,
+        start: FrameStart,
+        graph: &RenderGraph<'_>,
+        encoder: &mut crate::renderer::RenderEncoder,
+        sources: &[SourceWorkTicket<'_>],
+        sample: Option<&FrameSample<'_>>,
+    ) -> Result<EncodedGraph, GraphError> {
+        let FrameStart {
+            plan,
+            prepared,
+            mut uniforms,
+            cached,
+            submission_plan,
+        } = start;
+        encoder.planner().mark_frame();
+        if let Some(submission_plan) = submission_plan {
+            encoder.planner().plan(submission_plan);
+        }
+        let format = self.intermediate_format();
+        let mut outputs: Vec<Option<RenderedTexture>> =
+            (0..graph.nodes.len()).map(|_| None).collect();
+        for work in sources {
+            work.encode(self, encoder, &mut uniforms)?;
+        }
+        if let Some(sample) = sample {
+            sample.graph_start(encoder);
         }
         let mut pending_timings = Vec::<PendingEffectTiming>::new();
         let mut encoded_nodes = 0_u64;
@@ -190,13 +265,6 @@ impl Renderer {
                 release_inputs(graph, &plan.last_use, &mut outputs, node_id, position);
                 continue;
             }
-            // Recorded for the report of a loss this submission causes.
-            if let RenderNode::Effect { effect, .. }
-            | RenderNode::Transition { effect, .. }
-            | RenderNode::Generator { effect, .. } = &graph.nodes[node_id.index]
-            {
-                self.submission_clock.note_effect(effect);
-            }
             let output = match &graph.nodes[node_id.index] {
                 RenderNode::Source(_) => None,
                 RenderNode::Effect {
@@ -207,9 +275,9 @@ impl Renderer {
                     resources,
                     runtime,
                 } => {
-                    if self
-                        .effect_definition(effect)
-                        .is_some_and(|definition| definition.kind != EffectKind::Effect)
+                    let registered = prepared.registration(node_id);
+                    if registered
+                        .is_some_and(|registered| registered.definition.kind != EffectKind::Effect)
                     {
                         return Err(GraphError::EffectKindMismatch);
                     }
@@ -226,6 +294,7 @@ impl Renderer {
                     );
                     if let Some(pending) = self.encode_effect_pass(
                         encoder,
+                        registered,
                         EffectPass {
                             id: effect,
                             kind: crate::RenderNodeKind::Effect,
@@ -253,10 +322,10 @@ impl Renderer {
                     resources,
                     runtime,
                 } => {
-                    if self
-                        .effect_definition(effect)
-                        .is_some_and(|definition| definition.kind != EffectKind::Transition)
-                    {
+                    let registered = prepared.registration(node_id);
+                    if registered.is_some_and(|registered| {
+                        registered.definition.kind != EffectKind::Transition
+                    }) {
                         return Err(GraphError::EffectKindMismatch);
                     }
                     let from_view = graph_view(graph, &outputs, *from)?;
@@ -269,6 +338,7 @@ impl Renderer {
                     );
                     if let Some(pending) = self.encode_effect_pass(
                         encoder,
+                        registered,
                         EffectPass {
                             id: effect,
                             kind: crate::RenderNodeKind::Transition,
@@ -294,10 +364,10 @@ impl Renderer {
                     resources,
                     runtime,
                 } => {
-                    if self
-                        .effect_definition(effect)
-                        .is_some_and(|definition| definition.kind != EffectKind::Generator)
-                    {
+                    let registered = prepared.registration(node_id);
+                    if registered.is_some_and(|registered| {
+                        registered.definition.kind != EffectKind::Generator
+                    }) {
                         return Err(GraphError::EffectKindMismatch);
                     }
                     let target = self.textures.acquire(
@@ -309,6 +379,7 @@ impl Renderer {
                     // A generator samples nothing, but its bindings still need a texture.
                     if let Some(pending) = self.encode_effect_pass(
                         encoder,
+                        registered,
                         EffectPass {
                             id: effect,
                             kind: crate::RenderNodeKind::Generator,
@@ -328,8 +399,12 @@ impl Renderer {
                     encoded_render_passes = encoded_render_passes.saturating_add(1);
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
-                RenderNode::Vector { scene } => {
-                    encoder.place_pass(crate::submission_planner::VECTOR_COST, pixels, false, None);
+                RenderNode::Vector { .. } => {
+                    let scene = prepared
+                        .vector(node_id)
+                        .ok_or(GraphError::Render(crate::RenderError::InvalidGraph))?
+                        .as_ref()
+                        .map_err(|error| GraphError::Render(*error))?;
                     let target = self.textures.acquire(
                         self.gpu.device(),
                         graph.size,
@@ -341,20 +416,15 @@ impl Renderer {
                             encoder,
                             scene,
                             graph.size,
-                            graph.blend_space.unwrap_or(self.blend_space),
                             target.view(),
                             &mut uniforms,
                         )?);
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
                 RenderNode::Composite { layers, background } => {
-                    encoder.place_pass(
-                        crate::submission_planner::COMPOSITE_LAYER_COST
-                            .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
-                        pixels,
-                        false,
-                        None,
-                    );
+                    let prepared_composite = prepared
+                        .composite(node_id)
+                        .ok_or(GraphError::Render(crate::RenderError::InvalidGraph))?;
                     let views = layers
                         .iter()
                         .map(|layer| graph_view(graph, &outputs, layer.source))
@@ -379,6 +449,7 @@ impl Renderer {
                             encoder,
                             graph.size,
                             &composite_layers,
+                            prepared_composite,
                             CompositeTarget {
                                 background: *background,
                                 blend_space: graph.blend_space.unwrap_or(self.blend_space),
@@ -426,23 +497,6 @@ impl Renderer {
         })
     }
 
-    /// Predicted per-pixel cost of drawing `node`; `None` for sources.
-    fn node_cost(&self, node: &RenderNode<'_>) -> Option<crate::effect_cost::EffectCost> {
-        match node {
-            RenderNode::Effect { effect, .. }
-            | RenderNode::Transition { effect, .. }
-            | RenderNode::Generator { effect, .. } => {
-                self.effects().get(effect).map(|registered| registered.cost)
-            }
-            RenderNode::Composite { layers, .. } => Some(
-                crate::submission_planner::COMPOSITE_LAYER_COST
-                    .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
-            ),
-            RenderNode::Vector { .. } => Some(crate::submission_planner::VECTOR_COST),
-            RenderNode::Source(_) => None,
-        }
-    }
-
     pub(crate) fn complete_graph_work(
         &self,
         encoded: EncodedGraph,
@@ -480,68 +534,107 @@ impl Renderer {
     }
 }
 
-fn graph_uniform_capacity(
-    renderer: &Renderer,
+fn planned_passes<'a>(
     graph: &RenderGraph<'_>,
-    order: &[RenderNodeId],
-    alignment: u64,
-) -> u64 {
-    let mut capacity = 0_u64;
-    for node in order {
-        match &graph.nodes[node.index] {
-            RenderNode::Effect { effect, .. }
-            | RenderNode::Transition { effect, .. }
-            | RenderNode::Generator { effect, .. } => {
-                let params = renderer
-                    .effects()
-                    .get(effect)
-                    .map_or(0, |registered| registered.definition.params.len());
-                capacity = effect_uniform_end(capacity, params, alignment);
-            }
-            RenderNode::Composite { layers, .. } => {
-                let passes = renderer
-                    .composite_batch_count(layers.iter().map(|layer| layer.visual), graph.size);
-                for _ in 0..passes {
-                    capacity = aligned_uniform_end(
-                        capacity,
-                        float_uniform_bytes(BATCH_UNIFORM_FLOATS),
-                        alignment,
-                    );
-                }
-            }
-            RenderNode::Vector { scene } => {
-                let slices = scene
-                    .ops
-                    .iter()
-                    .filter(|op| !matches!(op, alpha2_geometry::VectorOp::PushLayer { .. }))
-                    .count()
-                    + 1;
-                for _ in 0..slices {
-                    capacity = aligned_uniform_end(
-                        capacity,
-                        crate::vector::VECTOR_UNIFORM_BYTES,
-                        alignment,
-                    );
-                }
-            }
-            RenderNode::Source(_) => {}
+    drawn: impl Iterator<Item = &'a crate::graph::RenderNodeId>,
+    prepared: &crate::prepared_frame::PreparedFrame,
+    sources: &[SourceWorkTicket<'_>],
+    pack: FramePack,
+) -> Vec<(crate::FrameCost, Option<alpha2_gpu::PassKey>)> {
+    let frame_pixels = graph.size.pixels();
+    let mut passes = vec![(
+        pack.work(graph.size),
+        Some(PassKind::Pack.key(frame_pixels)),
+    )];
+    passes.extend(sources.iter().map(|work| {
+        (
+            work.work(),
+            Some(PassKind::Conversion.key(work.output_size().pixels())),
+        )
+    }));
+    passes.extend(drawn.filter_map(|node| match prepared.node(*node) {
+        PreparedNode::Effect(Some(registered)) => Some((
+            crate::FrameCost::of(registered.cost, frame_pixels),
+            Some(alpha2_gpu::PassKey::new(registered.pass_id, frame_pixels)),
+        )),
+        PreparedNode::Composite(composite) => Some((composite.work(), Some(composite.pass))),
+        PreparedNode::Vector {
+            scene: Some(Ok(scene)),
+        } => Some((scene.work(), Some(PassKind::Vector.key(frame_pixels)))),
+        _ => None,
+    }));
+    passes
+}
+
+fn node_work(node: &RenderNode<'_>, prepared: &PreparedNode, pixels: u64) -> crate::FrameCost {
+    match (node, prepared) {
+        (_, PreparedNode::Effect(Some(registered))) => {
+            crate::FrameCost::of(registered.cost, pixels)
         }
+        (_, PreparedNode::Composite(composite)) => composite.work(),
+        (
+            _,
+            PreparedNode::Vector {
+                scene: Some(Ok(scene)),
+            },
+        ) => scene.work(),
+        _ => crate::FrameCost::default(),
     }
-    capacity
 }
 
-fn effect_uniform_end(cursor: u64, params: usize, alignment: u64) -> u64 {
-    let parameter_bytes = u64::try_from(param_uniform_bytes(params)).unwrap_or(u64::MAX);
-    let cursor = aligned_uniform_end(cursor, parameter_bytes, alignment);
-    aligned_uniform_end(
-        cursor,
-        float_uniform_bytes(RUNTIME_UNIFORM_WORDS),
-        alignment,
-    )
-}
-
-pub(crate) fn effect_uniform_capacity(params: usize, alignment: u64) -> u64 {
-    effect_uniform_end(0, params, alignment)
+impl Renderer {
+    fn texture_need(
+        &self,
+        graph: &RenderGraph<'_>,
+        plan: &crate::RenderPlan,
+        prepared: &crate::prepared_frame::PreparedFrame,
+        cached: &CachedResults,
+        sources: &[SourceWorkTicket<'_>],
+        pack: FramePack,
+    ) -> u64 {
+        let texel_bytes = match self.intermediate_format() {
+            wgpu::TextureFormat::Rgba16Float => 8,
+            _ => 4,
+        };
+        let frame = graph.size.pixels() * texel_bytes;
+        let fixed = sources
+            .iter()
+            .map(|work| work.output_size().pixels() * texel_bytes)
+            .sum::<u64>()
+            + match pack {
+                FramePack::Yuv420p | FramePack::Nv12 => graph.size.pixels() * 3 / 2,
+                FramePack::Layout(layout) => {
+                    layout.frame_bytes(graph.size.width, graph.size.height)
+                }
+                FramePack::Nothing => 0,
+            };
+        let mut held = vec![0_u64; graph.nodes.len()];
+        let (mut alive, mut peak) = (0_u64, 0_u64);
+        for (position, node) in plan.order.iter().enumerate() {
+            let index = node.index;
+            if matches!(graph.nodes[index], RenderNode::Source(_)) {
+                continue;
+            }
+            if cached.hits[index].is_some() || cached.needed[index] {
+                let scratch = match prepared.node(*node) {
+                    PreparedNode::Composite(composite) if composite.batches.len() > 1 => frame,
+                    PreparedNode::Vector {
+                        scene: Some(Ok(scene)),
+                    } => scene.texture_bytes(graph.size, texel_bytes),
+                    _ => 0,
+                };
+                peak = peak.max(alive + frame + scratch);
+                held[index] = frame;
+                alive += frame;
+            }
+            for dependency in graph.nodes[index].dependencies() {
+                if plan.last_use[dependency.index] == Some(position) {
+                    alive -= std::mem::take(&mut held[dependency.index]);
+                }
+            }
+        }
+        fixed + peak
+    }
 }
 
 /// The texture a dependency is drawn from; `None` for a CPU source.

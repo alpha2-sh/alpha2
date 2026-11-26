@@ -171,7 +171,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       # Over budget: raise the number.
-      XCFRAMEWORK_ZIP_BUDGET_BYTES: "82000000"
+      XCFRAMEWORK_ZIP_BUDGET_BYTES: "82300000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned Rust toolchain, the iOS targets and cargo-about
@@ -222,7 +222,7 @@ jobs:
     needs: [version, package]
     if: ${{ !cancelled() && needs.version.result == 'success' && needs.package.result == 'success' }}
     runs-on: >-
-      ${{ fromJSON('{"linux-x64":"ubuntu-22.04","linux-arm64":"ubuntu-24.04-arm","macos-arm64":"macos-26","win-x64":"windows-2025"}')[matrix.target] }}
+      ${{ fromJSON('{"linux-x64":"ubuntu-22.04","linux-arm64":"ubuntu-22.04-arm","macos-arm64":"macos-26","win-x64":"windows-2025"}')[matrix.target] }}
     timeout-minutes: 40
     strategy:
       fail-fast: false

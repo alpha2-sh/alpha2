@@ -4,13 +4,20 @@
 //!
 //! ```text
 //! cargo run -p alpha2-plugin-pack -- <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
+//! cargo run -p alpha2-plugin-pack -- merge <pack-dir> <pack-dir>... --out <dir>
+//! cargo run -p alpha2-plugin-pack -- builds-wasm <plugin-dir>
 //! ```
 //!
 //! The plugin crate has `descriptor.json` at its root; files under `resources/` are copied, and
-//! `resources.json` lists resources hosted elsewhere (`name`, `url`, `sha256`, `bytes`). Native
-//! targets default to the host's. Nothing is uploaded.
+//! `resources.json` lists entries written to the manifest as they are: resources hosted elsewhere
+//! (`name`, `url`, `sha256`, `bytes`) and slots the caller fills (`name`, `supplied`);
+//! `about.json`, when present, is written as the manifest's `about`. Native targets default to the
+//! host's. A crate whose `Cargo.toml` sets `[package.metadata.alpha2-plugin] wasm = false` is
+//! packed without a wasm artifact and refuses `--no-native`; `builds-wasm` prints `true` or `false`
+//! for a crate. `merge` joins packs of one plugin made on several machines. Nothing is uploaded.
 
 mod check;
+mod merge;
 mod notices;
 
 use std::path::{Path, PathBuf};
@@ -19,12 +26,18 @@ use std::process::{Command, ExitCode};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-/// The flags every wasm artifact is built with.
-const WASM_RUSTFLAGS: &str =
-    "-Ctarget-feature=-relaxed-simd --cfg getrandom_backend=\"unsupported\"";
+const WASM_RUSTFLAGS: [&str; 3] = [
+    "-Ctarget-feature=+simd128,-relaxed-simd",
+    "--cfg",
+    "getrandom_backend=\"unsupported\"",
+];
+
+const NATIVE_BUILD_ENV: [(&str, &str); 2] = [("GGML_NATIVE", "OFF"), ("GGML_CCACHE", "OFF")];
 
 const USAGE: &str =
-    "usage: alpha2-plugin-pack <plugin-dir> --out <dir> [--target <triple>]... [--no-native]";
+    "usage: alpha2-plugin-pack <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
+       alpha2-plugin-pack merge <pack-dir> <pack-dir>... --out <dir>
+       alpha2-plugin-pack builds-wasm <plugin-dir>";
 
 struct Options {
     plugin: PathBuf,
@@ -33,8 +46,43 @@ struct Options {
     native: bool,
 }
 
-fn options() -> Result<Options, String> {
-    let mut args = std::env::args().skip(1);
+enum Job {
+    Pack(Options),
+    Merge { inputs: Vec<PathBuf>, out: PathBuf },
+    BuildsWasm(PathBuf),
+}
+
+fn job() -> Result<Job, String> {
+    let mut args = std::env::args().skip(1).peekable();
+    match args.peek().map(String::as_str) {
+        Some("merge") => {}
+        Some("builds-wasm") => {
+            args.next();
+            return match (args.next(), args.next()) {
+                (Some(plugin), None) if !plugin.starts_with('-') => {
+                    Ok(Job::BuildsWasm(PathBuf::from(plugin)))
+                }
+                _ => Err(USAGE.to_owned()),
+            };
+        }
+        _ => return options(args).map(Job::Pack),
+    }
+    args.next();
+    let (mut inputs, mut out) = (Vec::new(), None);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--out" => out = args.next().map(PathBuf::from),
+            _ if !arg.starts_with('-') => inputs.push(PathBuf::from(arg)),
+            _ => return Err(USAGE.to_owned()),
+        }
+    }
+    Ok(Job::Merge {
+        inputs,
+        out: out.ok_or(USAGE)?,
+    })
+}
+
+fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let (mut plugin, mut out, mut targets, mut native) = (None, None, Vec::new(), true);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -70,13 +118,60 @@ fn cargo() -> Command {
     Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
 }
 
-fn host_triple() -> Result<String, String> {
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    run(Command::new(rustc).arg("-vV"))?
+fn rustc() -> Command {
+    Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+}
+
+fn rustc_version(field: &str) -> Result<String, String> {
+    run(rustc().arg("-vV"))?
         .lines()
-        .find_map(|line| line.strip_prefix("host: "))
+        .find_map(|line| line.strip_prefix(field)?.strip_prefix(": "))
         .map(str::to_owned)
-        .ok_or_else(|| "rustc -vV names no host".to_owned())
+        .ok_or_else(|| format!("rustc -vV names no {field}"))
+}
+
+fn host_triple() -> Result<String, String> {
+    rustc_version("host")
+}
+
+fn local_root(metadata: &Value) -> Option<PathBuf> {
+    let mut directories = metadata["packages"]
+        .as_array()?
+        .iter()
+        .filter(|package| package["source"].is_null())
+        .filter_map(|package| Path::new(package["manifest_path"].as_str()?).parent());
+    let first = directories.next()?.to_owned();
+    let root = directories.try_fold(first, |root, directory| {
+        root.ancestors()
+            .find(|ancestor| directory.starts_with(ancestor))
+            .map(Path::to_owned)
+    })?;
+    root.parent().is_some().then_some(root)
+}
+
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| Some(std::env::home_dir()?.join(".cargo")))
+}
+
+/// rustc applies the last `--remap-path-prefix` that matches, so a nested directory comes later.
+fn path_prefixes(metadata: &Value, target_dir: &Path) -> Result<Vec<(PathBuf, String)>, String> {
+    let sysroot = PathBuf::from(run(rustc().args(["--print", "sysroot"]))?.trim());
+    let commit = rustc_version("commit-hash")?;
+    let mut prefixes = Vec::new();
+    if let Some(root) = local_root(metadata) {
+        prefixes.push((root, "/alpha2".to_owned()));
+    }
+    if let Some(home) = cargo_home() {
+        prefixes.push((home, "/cargo".to_owned()));
+    }
+    prefixes.push((
+        sysroot.join("lib").join("rustlib").join("src").join("rust"),
+        format!("/rustc/{commit}"),
+    ));
+    prefixes.push((target_dir.to_owned(), "/target".to_owned()));
+    Ok(prefixes)
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, String> {
@@ -114,17 +209,43 @@ fn native_file(library: &str, target: &str) -> String {
     }
 }
 
-fn build(manifest: &Path, target: &str, wasm: bool) -> Result<(), String> {
+fn build(
+    manifest: &Path,
+    target: &str,
+    wasm: bool,
+    prefixes: &[(PathBuf, String)],
+) -> Result<(), String> {
     let mut command = cargo();
     command.args(["build", "--release", "--target", target, "--manifest-path"]);
     command.arg(manifest);
+    let mut rustflags: Vec<String> = Vec::new();
     if wasm {
         // Relaxed SIMD results differ between runtimes; the target never enables threads. A
         // plugin has no randomness, so getrandom reports it unsupported instead of importing it.
-        command.env(
-            "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS",
-            WASM_RUSTFLAGS,
-        );
+        rustflags.extend(WASM_RUSTFLAGS.map(str::to_owned));
+    } else {
+        command.envs(NATIVE_BUILD_ENV);
+    }
+    let mut cflags = Vec::new();
+    for (from, to) in prefixes {
+        let from = from
+            .to_str()
+            .ok_or_else(|| format!("{} is not UTF-8", from.display()))?;
+        rustflags.push(format!("--remap-path-prefix={from}={to}"));
+        if !from.contains(char::is_whitespace) {
+            cflags.push(format!("-ffile-prefix-map={from}={to}"));
+        }
+    }
+    command.env("CARGO_ENCODED_RUSTFLAGS", rustflags.join("\u{1f}"));
+    if !wasm && !target.contains("msvc") {
+        for variable in ["CFLAGS", "CXXFLAGS"] {
+            let given = std::env::var(variable).unwrap_or_default();
+            let flags = std::iter::once(given.as_str())
+                .chain(cflags.iter().map(String::as_str))
+                .filter(|flag| !flag.is_empty())
+                .collect::<Vec<_>>();
+            command.env(variable, flags.join(" "));
+        }
     }
     run(&mut command).map(drop)
 }
@@ -160,16 +281,28 @@ fn resources(plugin: &Path, out: &Path) -> Result<Vec<Value>, String> {
     Ok(resources)
 }
 
-fn pack(options: &Options) -> Result<PathBuf, String> {
-    let manifest_path = options.plugin.join("Cargo.toml");
-    let metadata: Value = serde_json::from_str(&run(cargo()
+fn builds_wasm(package: &Value) -> Result<bool, String> {
+    match &package["metadata"]["alpha2-plugin"]["wasm"] {
+        Value::Null => Ok(true),
+        Value::Bool(wasm) => Ok(*wasm),
+        other => Err(format!(
+            "package.metadata.alpha2-plugin.wasm is {other}, not true or false"
+        )),
+    }
+}
+
+fn metadata(manifest_path: &Path) -> Result<Value, String> {
+    serde_json::from_str(&run(cargo()
         .args(["metadata", "--format-version", "1", "--manifest-path"])
-        .arg(&manifest_path))?)
-    .map_err(|error| error.to_string())?;
-    let package = metadata["packages"]
+        .arg(manifest_path))?)
+    .map_err(|error| error.to_string())
+}
+
+fn package<'a>(metadata: &'a Value, manifest_path: &Path) -> Result<&'a Value, String> {
+    metadata["packages"]
         .as_array()
         .and_then(|packages| {
-            let wanted = std::fs::canonicalize(&manifest_path).ok()?;
+            let wanted = std::fs::canonicalize(manifest_path).ok()?;
             packages.iter().find(|package| {
                 package["manifest_path"]
                     .as_str()
@@ -177,7 +310,13 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
                     == Some(wanted.clone())
             })
         })
-        .ok_or("cargo metadata does not list the plugin crate")?;
+        .ok_or_else(|| "cargo metadata does not list the plugin crate".to_owned())
+}
+
+fn pack(options: &Options) -> Result<PathBuf, String> {
+    let manifest_path = options.plugin.join("Cargo.toml");
+    let metadata = metadata(&manifest_path)?;
+    let package = package(&metadata, &manifest_path)?;
     let library = package["name"]
         .as_str()
         .ok_or("unnamed package")?
@@ -196,21 +335,34 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
         .ok_or("descriptor.json has no id")?
         .to_owned();
 
+    let wasm = builds_wasm(package)?;
+    if !wasm && !options.native {
+        return Err(format!(
+            "{} is native only (package.metadata.alpha2-plugin.wasm = false): --no-native leaves \
+             nothing to pack",
+            package["name"].as_str().unwrap_or_default()
+        ));
+    }
+
+    let prefixes = path_prefixes(&metadata, &target_dir)?;
     std::fs::create_dir_all(&options.out).map_err(|error| error.to_string())?;
     let mut artifacts = Vec::new();
-    build(&manifest_path, "wasm32-unknown-unknown", true)?;
-    let module = read(&target_dir.join(format!("wasm32-unknown-unknown/release/{library}.wasm")))?;
-    check::wasm_module(&module)?;
-    let mut entry = place(&options.out, &format!("{library}.wasm"), &module)?;
-    entry["target"] = json!("wasm32");
-    entry["type"] = json!("wasm");
-    artifacts.push(entry);
+    if wasm {
+        build(&manifest_path, "wasm32-unknown-unknown", true, &prefixes)?;
+        let module =
+            read(&target_dir.join(format!("wasm32-unknown-unknown/release/{library}.wasm")))?;
+        check::wasm_module(&module)?;
+        let mut entry = place(&options.out, &format!("{library}.wasm"), &module)?;
+        entry["target"] = json!("wasm32");
+        entry["type"] = json!("wasm");
+        artifacts.push(entry);
+    }
     let mut targets = options.targets.clone();
     if options.native && targets.is_empty() {
         targets.push(host_triple()?);
     }
     for target in targets.iter().filter(|_| options.native) {
-        build(&manifest_path, target, false)?;
+        build(&manifest_path, target, false, &prefixes)?;
         let file = native_file(&library, target);
         let bytes = read(&target_dir.join(target).join("release").join(&file))?;
         let mut entry = place(&options.out, &format!("{target}/{file}"), &bytes)?;
@@ -239,6 +391,15 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
     if !resources.is_empty() {
         manifest["resources"] = json!(resources);
     }
+    let about = options.plugin.join("about.json");
+    if about.is_file() {
+        let about: Value = serde_json::from_slice(&read(&about)?)
+            .map_err(|error| format!("about.json: {error}"))?;
+        if !about.is_object() {
+            return Err("about.json is not an object".to_owned());
+        }
+        manifest["about"] = about;
+    }
     let path = options.out.join("manifest.json");
     let text = manifest_text(manifest, &descriptor_text)?;
     std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -258,9 +419,20 @@ fn manifest_text(mut manifest: Value, descriptor: &str) -> Result<String, String
 }
 
 fn main() -> ExitCode {
-    match options().and_then(|options| pack(&options)) {
-        Ok(path) => {
-            println!("{}", path.display());
+    let done = job().and_then(|job| match job {
+        Job::Pack(options) => pack(&options).map(|path| path.display().to_string()),
+        Job::Merge { inputs, out } => {
+            merge::merge(&inputs, &out).map(|path| path.display().to_string())
+        }
+        Job::BuildsWasm(plugin) => {
+            let manifest_path = plugin.join("Cargo.toml");
+            let metadata = metadata(&manifest_path)?;
+            builds_wasm(package(&metadata, &manifest_path)?).map(|wasm| wasm.to_string())
+        }
+    });
+    match done {
+        Ok(text) => {
+            println!("{text}");
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -273,6 +445,42 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_crate_builds_wasm_unless_its_metadata_says_wasm_false() {
+        assert_eq!(builds_wasm(&json!({ "metadata": null })), Ok(true));
+        assert_eq!(
+            builds_wasm(&json!({ "metadata": { "other": { "wasm": false } } })),
+            Ok(true)
+        );
+        assert_eq!(
+            builds_wasm(&json!({ "metadata": { "alpha2-plugin": { "wasm": true } } })),
+            Ok(true)
+        );
+        assert_eq!(
+            builds_wasm(&json!({ "metadata": { "alpha2-plugin": { "wasm": false } } })),
+            Ok(false)
+        );
+        let error = builds_wasm(&json!({ "metadata": { "alpha2-plugin": { "wasm": "no" } } }))
+            .expect_err("refused");
+        assert!(error.contains("not true or false"), "{error}");
+    }
+
+    #[test]
+    fn a_native_only_crate_refuses_no_native_before_building() {
+        let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("../first-party/transcribe");
+        let out =
+            std::env::temp_dir().join(format!("alpha2-pack-no-native-{}", std::process::id()));
+        let error = pack(&Options {
+            plugin,
+            out: out.clone(),
+            targets: Vec::new(),
+            native: false,
+        })
+        .expect_err("refused");
+        assert!(error.contains("native only"), "{error}");
+        assert!(!out.exists(), "nothing written");
+    }
 
     #[test]
     fn the_manifest_keeps_the_descriptor_text_as_written() {

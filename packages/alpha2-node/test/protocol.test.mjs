@@ -1528,6 +1528,20 @@ serve((request) => respond(request, { ok: true, result: { status: "ready", capab
   assert.deepEqual(await flagsOf({ origins: "none", root: "none" }), [
     ["--plugin-origins", "none", "--plugin-root", "none"],
   ]);
+  assert.deepEqual(
+    await flagsOf({ isolation: "in-process", resourceRoot: "models" }),
+    [
+      [
+        "--plugin-isolation",
+        "in-process",
+        "--plugin-resource-root",
+        join(root, "models"),
+      ],
+    ],
+  );
+  assert.deepEqual(await flagsOf({ resourceRoot: "any" }), [
+    ["--plugin-resource-root", "any"],
+  ]);
   await rm(starts, { force: true });
   for (const plugins of [
     { mode: "all" },
@@ -1535,6 +1549,8 @@ serve((request) => respond(request, { ok: true, result: { status: "ready", capab
     { origins: ["http://a.example"] },
     { origins: "https://a.example" },
     { root: "" },
+    { isolation: "worker" },
+    { resourceRoot: "" },
     "native",
   ])
     assert.throws(
@@ -3901,4 +3917,54 @@ test("extract sends the render inputs, and only a timeline input needs every eff
   });
   for (const field of ["frames", "resources", "effects", "fonts"])
     assert.ok(field in requests[1], field);
+});
+
+test("an extractor's params are refused alike with and without interface annotations", async () => {
+  const corpus = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../../tests/cases/params-schema-corpus.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const client = new KeptHostsClient({ hostPath: process.execPath });
+  try {
+    for (const { name, params, problem } of corpus.cases.filter(
+      (entry) => entry.problem !== null,
+    ))
+      for (const schema of [corpus.schema, corpus.annotated])
+        await assert.rejects(
+          client.extract(
+            {
+              project: exportRequest().project,
+              request: {
+                extractor: "example.levels",
+                version: 1,
+                params,
+                input: {
+                  from: "source",
+                  source_id: "clip-a",
+                  range: { start: 0, end: 1 },
+                },
+                outputs: {},
+              },
+            },
+            {
+              describe: () => ({
+                id: "example.levels",
+                version: 1,
+                input: { media: "video", from: ["source"], format: "luma8" },
+                outputs: [{ name: "level", kind: "scalars", channels: ["a"] }],
+                params_schema: schema,
+              }),
+            },
+          ),
+          { code: "INVALID_INPUT", message: `invalid params: ${problem}` },
+          name,
+        );
+  } finally {
+    await client.close();
+  }
 });

@@ -186,6 +186,7 @@ fn encoding_bytes(encoding: YuvEncoding) -> [u8; ENCODING_BYTES] {
         ColorPrimaries::Bt601 => 1,
         ColorPrimaries::Bt709 => 2,
         ColorPrimaries::Bt2020 => 3,
+        ColorPrimaries::DisplayP3 => 4,
     };
     let transfer = match color.transfer {
         TransferFunction::Bt709 => 1,

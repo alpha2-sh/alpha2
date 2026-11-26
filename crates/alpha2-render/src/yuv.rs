@@ -54,12 +54,19 @@ pub(crate) struct SourceWork {
     /// Whether the pass converts color into the working space (a plane repack does not).
     pub(crate) conversion: bool,
     pub(crate) pipeline: wgpu::RenderPipeline,
-    pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) layout: wgpu::BindGroupLayout,
+    pub(crate) textures: arrayvec::ArrayVec<(u32, wgpu::TextureView), SOURCE_TEXTURES>,
+    pub(crate) uniform_binding: u32,
+    pub(crate) uniform: Vec<u8>,
+    pub(crate) sampler: Option<wgpu::BindGroup>,
     pub(crate) output_view: wgpu::TextureView,
-    pub(crate) uniforms: UniformArenaLease,
+    pub(crate) output_size: RenderSize,
+    pub(crate) work: crate::FrameCost,
     pub(crate) uploads: Vec<UploadTexture>,
     pub(crate) external_leases: Vec<Arc<dyn ExternalTextureLease>>,
 }
+
+pub(crate) const SOURCE_TEXTURES: usize = 4;
 
 /// Keeps an imported native texture and its decoder surface alive until the submission that
 /// samples it completes.
@@ -196,35 +203,89 @@ impl PendingSourceWork {
 }
 
 impl SourceWorkTicket<'_> {
-    pub(crate) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub(crate) fn uniform_bytes(&self) -> u64 {
         let work = self.work.as_ref().expect("live source work ticket");
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(work.label),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &work.output_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&work.pipeline);
-        pass.set_bind_group(0, &work.bind_group, &[]);
-        pass.draw(0..3, 0..1);
+        u64::try_from(work.uniform.len()).unwrap_or(u64::MAX)
     }
 
-    pub(crate) fn flush_uniforms(&self, queue: &wgpu::Queue) {
+    pub(crate) fn output_size(&self) -> RenderSize {
         self.work
             .as_ref()
             .expect("live source work ticket")
-            .uniforms
-            .flush(queue);
+            .output_size
+    }
+
+    pub(crate) fn work(&self) -> crate::FrameCost {
+        self.work.as_ref().expect("live source work ticket").work
+    }
+
+    pub(crate) fn encode(
+        &self,
+        renderer: &Renderer,
+        encoder: &mut impl crate::renderer::PassEncoder,
+        uniforms: &mut UniformArenaLease,
+    ) -> Result<(), RenderError> {
+        let work = self.work.as_ref().expect("live source work ticket");
+        let uniform = uniforms.write(&work.uniform)?;
+        let mut entries = arrayvec::ArrayVec::<_, { SOURCE_TEXTURES + 1 }>::new();
+        entries.extend(
+            work.textures
+                .iter()
+                .map(|(binding, view)| wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: wgpu::BindingResource::TextureView(view),
+                }),
+        );
+        entries.push(wgpu::BindGroupEntry {
+            binding: work.uniform_binding,
+            resource: uniforms.dynamic_binding(uniform.size()),
+        });
+        let bind_group = renderer.bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(work.label),
+            layout: &work.layout,
+            entries: &entries,
+        });
+        let offset = uniform.dynamic_offset();
+        encoder.placed_pass(
+            work.work,
+            crate::composite::PixelRect::whole(work.output_size),
+            crate::submission_pilot::PassKind::Conversion.key(work.output_size.pixels()),
+            |encoder, crate::submission_planner::Piece { scissor, first }| {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(work.label),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &work.output_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: if first {
+                                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                            } else {
+                                wgpu::LoadOp::Load
+                            },
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if let Some(scissor) = scissor {
+                    if scissor.area() == 0 {
+                        return;
+                    }
+                    pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+                }
+                pass.set_pipeline(&work.pipeline);
+                pass.set_bind_group(0, &bind_group, &[offset]);
+                if let Some(sampler) = &work.sampler {
+                    pass.set_bind_group(crate::bind_group::SAMPLER_GROUP, sampler, &[]);
+                }
+                pass.draw(0..3, 0..1);
+            },
+        );
+        Ok(())
     }
 
     pub(crate) fn has_no_staged_signals(&self) -> bool {
@@ -252,7 +313,6 @@ impl SourceWorkTicket<'_> {
     pub(crate) fn complete(mut self, renderer: &Renderer, standalone_submission: bool) {
         let work = self.work.take().expect("live source work ticket");
         let work_conversion = work.conversion;
-        work.uniforms.recycle();
         drop(work.uploads);
         if !work.external_leases.is_empty() {
             let leases = work.external_leases;
@@ -584,32 +644,6 @@ impl Renderer {
             encoding,
             self.presentation_filter_samples(),
         );
-        let mut uniforms = self.uniform_buffers.acquire(
-            self.gpu.device(),
-            u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
-        );
-        let uniform = uniforms.write(&uniform_bytes);
-        let bind_group = self
-            .gpu
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("alpha2 RGBA presentation bind group"),
-                layout: &cached.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(source_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&cached.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: uniforms.binding(uniform),
-                    },
-                ],
-            });
         let output_view = output.view().clone();
         Ok(PreparedSourceTexture {
             texture: RenderedTexture::pooled(presentation.output_size, output_format, output),
@@ -617,9 +651,18 @@ impl Renderer {
                 label: "alpha2 RGBA presentation pass",
                 conversion: true,
                 pipeline: cached.pipeline.clone(),
-                bind_group,
+                layout: cached.bind_group_layout.clone(),
+                textures: [(0, source_view.clone())].into_iter().collect(),
+                uniform_binding: 1,
+                uniform: uniform_bytes,
+                sampler: Some(self.linear_sampler.group.clone()),
                 output_view,
-                uniforms,
+                output_size: presentation.output_size,
+                work: conversion_work(
+                    presentation,
+                    self.presentation_filter_samples(),
+                    RGBA_SAMPLE_COST,
+                ),
                 uploads: inputs,
                 external_leases: Vec::new(),
             })),
@@ -636,14 +679,20 @@ impl Renderer {
             return false;
         };
         let mut encoder = self.command_encoder("alpha2 source presentation encoder");
-        ticket.encode(&mut encoder);
-        ticket.flush_uniforms(self.gpu.queue());
+        let mut uniforms = self
+            .uniform_buffers
+            .acquire(self.gpu.device(), ticket.uniform_bytes());
+        if ticket.encode(self, &mut encoder, &mut uniforms).is_err() {
+            return false;
+        }
+        uniforms.flush(self.gpu.queue());
         if !ticket.prepare_submission() || ticket.flush_submission().is_err() {
             return false;
         }
         if self.submit([encoder.finish()]).is_err() {
             return false;
         }
+        uniforms.recycle();
         ticket.complete(self, true);
         true
     }
@@ -687,29 +736,15 @@ impl Renderer {
                             wgpu::BindGroupLayoutEntry {
                                 binding: 1,
                                 visibility: wgpu::ShaderStages::FRAGMENT,
-                                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                                count: None,
-                            },
-                            wgpu::BindGroupLayoutEntry {
-                                binding: 2,
-                                visibility: wgpu::ShaderStages::FRAGMENT,
                                 ty: wgpu::BindingType::Buffer {
                                     ty: wgpu::BufferBindingType::Uniform,
-                                    has_dynamic_offset: false,
+                                    has_dynamic_offset: true,
                                     min_binding_size: None,
                                 },
                                 count: None,
                             },
                         ],
                     });
-            let sampler = self.gpu.device().create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("alpha2 RGBA presentation sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
             let shader = self
                 .gpu
                 .device()
@@ -722,7 +757,10 @@ impl Renderer {
                     .device()
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("alpha2 RGBA presentation pipeline layout"),
-                        bind_group_layouts: &[Some(&bind_group_layout)],
+                        bind_group_layouts: &[
+                            Some(&bind_group_layout),
+                            Some(&self.linear_sampler.layout),
+                        ],
                         immediate_size: 0,
                     });
             let pipeline =
@@ -752,7 +790,6 @@ impl Renderer {
             CachedSampledPipeline {
                 bind_group_layout,
                 pipeline,
-                sampler,
             }
         })
     }
@@ -965,6 +1002,22 @@ impl Renderer {
         Ok((prepared, diagnostics))
     }
 
+    pub(crate) fn prepare_pilot_conversion(
+        &self,
+        planes: GpuVideoPlanes<'_>,
+        size: RenderSize,
+    ) -> Result<PreparedSourceTexture, RenderError> {
+        self.prepare_gpu_yuv_presented_inner(
+            planes,
+            None,
+            SourcePresentation::identity(size),
+            None,
+            PlaneStorage::Unorm8,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn prepare_gpu_yuv_presented_inner(
         &self,
@@ -1008,58 +1061,33 @@ impl Renderer {
             storage.code_scale(planes.format),
             self.presentation_filter_samples(),
         );
-        let mut uniforms = self.uniform_buffers.acquire(
-            self.gpu.device(),
-            u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
-        );
-        let uniform = uniforms.write(&uniform_bytes);
-        let bind_group = self
-            .gpu
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("alpha2 YUV bind group"),
-                layout: &cached.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(planes.y),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(planes.chroma),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(
-                            planes.v.unwrap_or(planes.chroma),
-                        ),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&cached.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: uniforms.binding(uniform),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        // An opaque format reads no alpha; any plane fills the slot.
-                        resource: wgpu::BindingResource::TextureView(
-                            alpha_plane.unwrap_or(planes.y),
-                        ),
-                    },
-                ],
-            });
+        let textures = [
+            (0, planes.y),
+            (1, planes.chroma),
+            (2, planes.v.unwrap_or(planes.chroma)),
+            (4, alpha_plane.unwrap_or(planes.y)),
+        ]
+        .into_iter()
+        .map(|(binding, view)| (binding, view.clone()))
+        .collect();
         Ok(PreparedSourceTexture {
             texture: RenderedTexture::pooled(presentation.output_size, output_format, output),
             pending: Some(PendingSourceWork::new(SourceWork {
                 label: "alpha2 YUV conversion pass",
                 conversion: true,
                 pipeline: cached.pipeline.clone(),
-                bind_group,
+                layout: cached.bind_group_layout.clone(),
+                textures,
+                uniform_binding: 3,
+                uniform: uniform_bytes,
+                sampler: Some(self.linear_sampler.group.clone()),
                 output_view,
-                uniforms,
+                output_size: presentation.output_size,
+                work: conversion_work(
+                    presentation,
+                    self.presentation_filter_samples(),
+                    yuv_sample_cost(planes.format),
+                ),
                 uploads,
                 external_leases,
             })),
@@ -1135,7 +1163,7 @@ impl Renderer {
         self.quality_controls().max_filter_samples as f32
     }
 
-    /// Bindings: Y, U or UV, V and alpha planes of `sample_type`, the sampler, and the uniform.
+    /// Bindings: Y, U or UV, V planes of `sample_type`, the uniform, and the alpha plane.
     fn yuv_bind_group_layout(&self, sample_type: wgpu::TextureSampleType) -> wgpu::BindGroupLayout {
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -1158,20 +1186,14 @@ impl Renderer {
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
+                            has_dynamic_offset: true,
                             min_binding_size: None,
                         },
                         count: None,
                     },
-                    texture(5),
+                    texture(4),
                 ],
             })
     }
@@ -1201,7 +1223,10 @@ impl Renderer {
                     .device()
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("alpha2 YUV pipeline layout"),
-                        bind_group_layouts: &[Some(&bind_group_layout)],
+                        bind_group_layouts: &[
+                            Some(&bind_group_layout),
+                            Some(&self.linear_sampler.layout),
+                        ],
                         immediate_size: 0,
                     });
             let pipeline =
@@ -1228,18 +1253,9 @@ impl Renderer {
                         multiview_mask: None,
                         cache: None,
                     });
-            let sampler = self.gpu.device().create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("alpha2 YUV sampler"),
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
             CachedYuvPipeline {
                 bind_group_layout,
                 pipeline,
-                sampler,
             }
         })
     }
@@ -1308,13 +1324,7 @@ fn orientation_uniform(orientation: Orientation) -> u32 {
     orientation.rotation.quarter_turns() | (u32::from(orientation.mirror) << 2)
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-pub(crate) fn presentation_uniform_bytes(
-    source: RenderSize,
-    presentation: SourcePresentation,
-    encoding: PresentedEncoding,
-    max_filter_samples: f32,
-) -> Vec<u8> {
+fn draw_rect(presentation: SourcePresentation) -> [f64; 4] {
     let visible = presentation.visible_rect;
     let sar = f64::from(presentation.sample_aspect_ratio.0)
         / f64::from(presentation.sample_aspect_ratio.1);
@@ -1331,6 +1341,63 @@ pub(crate) fn presentation_uniform_bytes(
     let draw_height = display_height * scale;
     let draw_x = (f64::from(presentation.output_size.width) - draw_width) * 0.5;
     let draw_y = (f64::from(presentation.output_size.height) - draw_height) * 0.5;
+    [draw_x, draw_y, draw_width, draw_height]
+}
+
+/// Mirrors `filter_grid` in yuv-to-linear.wesl and rgba-present.wesl.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn filter_samples(presentation: SourcePresentation, max_filter_samples: f32) -> u64 {
+    let visible = presentation.visible_rect;
+    let (extent_x, extent_y) = if presentation.orientation.rotation.swaps_axes() {
+        (visible.height, visible.width)
+    } else {
+        (visible.width, visible.height)
+    };
+    let [_, _, draw_width, draw_height] = draw_rect(presentation);
+    let wanted = |extent: u32, drawn: f64| {
+        let footprint = f64::from(extent) / drawn;
+        if footprint > 2.0 {
+            (footprint - 0.0001).ceil().clamp(1.0, 8.0)
+        } else {
+            1.0
+        }
+    };
+    let budget = f64::from(max_filter_samples).clamp(1.0, 64.0);
+    let columns = wanted(extent_x, draw_width).min(budget);
+    let rows = wanted(extent_y, draw_height).min((budget / columns).floor().max(1.0));
+    (columns * rows) as u64
+}
+
+const RGBA_SAMPLE_COST: crate::effect_cost::EffectCost =
+    crate::effect_cost::EffectCost::fixed(1, 3);
+
+fn yuv_sample_cost(format: YuvFormat) -> crate::effect_cost::EffectCost {
+    crate::effect_cost::EffectCost::fixed(
+        u64::try_from(format.plane_count()).unwrap_or(u64::MAX),
+        3,
+    )
+}
+
+pub(crate) fn conversion_work(
+    presentation: SourcePresentation,
+    max_filter_samples: f32,
+    sample: crate::effect_cost::EffectCost,
+) -> crate::FrameCost {
+    crate::FrameCost::of(
+        sample.times(filter_samples(presentation, max_filter_samples)),
+        presentation.output_size.pixels(),
+    )
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+pub(crate) fn presentation_uniform_bytes(
+    source: RenderSize,
+    presentation: SourcePresentation,
+    encoding: PresentedEncoding,
+    max_filter_samples: f32,
+) -> Vec<u8> {
+    let visible = presentation.visible_rect;
+    let [draw_x, draw_y, draw_width, draw_height] = draw_rect(presentation);
     let values = [
         presentation.output_size.width as f32,
         presentation.output_size.height as f32,
@@ -1386,21 +1453,7 @@ pub(crate) fn uniform_bytes(
     bytes[88..92].copy_from_slice(&alpha_plane.to_ne_bytes());
     bytes[92..96].copy_from_slice(&alpha_scale.to_ne_bytes());
     let visible = presentation.visible_rect;
-    let sar = f64::from(presentation.sample_aspect_ratio.0)
-        / f64::from(presentation.sample_aspect_ratio.1);
-    let unrotated_width = f64::from(visible.width) * sar;
-    let unrotated_height = f64::from(visible.height);
-    let (display_width, display_height) = if presentation.orientation.rotation.swaps_axes() {
-        (unrotated_height, unrotated_width)
-    } else {
-        (unrotated_width, unrotated_height)
-    };
-    let scale = (f64::from(presentation.output_size.width) / display_width)
-        .min(f64::from(presentation.output_size.height) / display_height);
-    let draw_width = display_width * scale;
-    let draw_height = display_height * scale;
-    let draw_x = (f64::from(presentation.output_size.width) - draw_width) * 0.5;
-    let draw_y = (f64::from(presentation.output_size.height) - draw_height) * 0.5;
+    let [draw_x, draw_y, draw_width, draw_height] = draw_rect(presentation);
     let (chroma_width, chroma_height) = format.chroma_size(source.width, source.height);
     let chroma_size = [chroma_width as f32, chroma_height as f32];
     let factor_x = (1_u32 << format.chroma_shift_x) as f32;

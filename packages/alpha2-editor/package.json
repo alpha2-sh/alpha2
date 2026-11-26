@@ -1,6 +1,6 @@
 {
   "name": "@alpha2-sh/editor",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "Headless Project-based editing sessions and browser adapters for alpha2.",
   "type": "module",
   "license": "MIT",
@@ -19,7 +19,8 @@
   "sideEffects": [
     "./dist/browser/worker-entry.js",
     "./dist/browser/hash-worker-entry.js",
-    "./dist/browser/extensions-worker-entry.js"
+    "./dist/browser/extensions-worker-entry.js",
+    "./dist/browser/extract-worker-entry.js"
   ],
   "files": [
     "dist",
@@ -47,6 +48,10 @@
       "types": "./dist/browser/extensions-worker-entry.d.ts",
       "import": "./dist/browser/extensions-worker-entry.js"
     },
+    "./extract-worker": {
+      "types": "./dist/browser/extract-worker-entry.d.ts",
+      "import": "./dist/browser/extract-worker-entry.js"
+    },
     "./react": {
       "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.js"
@@ -60,11 +65,11 @@
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json"
   },
   "peerDependencies": {
-    "alpha2": "0.6.2",
+    "alpha2": "0.7.0",
     "react": "^19.3.0"
   },
   "devDependencies": {
-    "alpha2": "0.6.2",
+    "alpha2": "0.7.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "@types/react": "19.3.0",

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { collectEmits } from "../dist/extractor.js";
+import { readFile } from "node:fs/promises";
+
+import { collectEmits, schemaProblem } from "../dist/extractor.js";
 
 test("emits the wire can carry are kept in the protocol's form", () => {
   const { emits, out } = collectEmits();
@@ -47,4 +49,19 @@ test("an emit the wire cannot carry throws, naming it, and is not kept", () => {
       (error) => error instanceof TypeError && message.test(error.message),
     );
   assert.deepEqual(emits, []);
+});
+
+test("params are checked alike with and without interface annotations", async () => {
+  const corpus = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../tests/cases/params-schema-corpus.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  for (const { name, params, problem } of corpus.cases)
+    for (const schema of [corpus.schema, corpus.annotated])
+      assert.equal(schemaProblem(schema, params), problem ?? undefined, name);
 });

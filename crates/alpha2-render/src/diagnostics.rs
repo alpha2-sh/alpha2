@@ -69,6 +69,8 @@ pub struct RenderDiagnostics {
     pub uniform_buffers: UniformBufferPoolStats,
     /// Runtime and built-in pipeline cache counts.
     pub pipelines: PipelineCacheStats,
+    /// Bind groups created and reused.
+    pub bind_groups: crate::BindGroupStats,
     /// Pipeline creations and their CPU time; a first draw that compiles shaders stalls its frame.
     pub pipeline_creation: PipelineCreationStats,
     /// Kept graph results: budget, occupancy, hits, misses, invalidations.
@@ -83,8 +85,6 @@ pub struct RenderDiagnostics {
     pub decoder_wait: Duration,
     /// Active filter sample budget, possibly below the request (see [`Self::degradations`]).
     pub max_filter_samples: u32,
-    /// Active temporal subframe count.
-    pub motion_blur_subframes: u32,
     /// Fallbacks applied to the caller's request, such as a reduced filter sample budget.
     pub degradations: Vec<crate::CapabilityDiagnostic>,
     /// Non-source nodes encoded by completed graph executions.
@@ -134,6 +134,11 @@ pub struct GpuSubmissionStats {
     pub max_per_frame: u32,
     /// Longest predicted GPU time of one submission, in milliseconds, among planned frames.
     pub max_predicted_ms: Option<f64>,
+    /// Submissions predicted over the submission budget: passes that could not be cut finer, and
+    /// frames spread past the per-frame submission cap.
+    pub over_budget: u64,
+    /// The submission budget the frames were planned under, in milliseconds.
+    pub budget_ms: Option<f64>,
 }
 
 /// One pipeline creation for tracing.
@@ -162,8 +167,6 @@ pub struct BenchmarkMetadata {
     pub resolution_scale: f32,
     /// Filter sample budget.
     pub max_filter_samples: u32,
-    /// Temporal sample count.
-    pub motion_blur_subframes: u32,
     /// Texture byte budget.
     pub texture_budget_bytes: u64,
 }
@@ -208,6 +211,7 @@ pub(crate) struct ResourceDiagnostics {
     pub(crate) readback_buffers: ReadbackBufferPoolStats,
     pub(crate) uniform_buffers: UniformBufferPoolStats,
     pub(crate) pipelines: PipelineCacheStats,
+    pub(crate) bind_groups: crate::BindGroupStats,
     pub(crate) result_cache: crate::ResultCacheStats,
 }
 
@@ -317,7 +321,6 @@ pub(crate) fn snapshot(
     capabilities: &Capabilities,
     resources: &ResourceDiagnostics,
     max_filter_samples: u32,
-    motion_blur_subframes: u32,
     degradations: Vec<crate::CapabilityDiagnostic>,
 ) -> RenderDiagnostics {
     let state = state
@@ -339,6 +342,7 @@ pub(crate) fn snapshot(
         readback_buffers: resources.readback_buffers,
         uniform_buffers: resources.uniform_buffers,
         pipelines: resources.pipelines,
+        bind_groups: resources.bind_groups,
         pipeline_creation: state.pipeline_creation,
         result_cache: resources.result_cache,
         presented_frames: state.presented_frames,
@@ -346,7 +350,6 @@ pub(crate) fn snapshot(
         repeated_frames: state.repeated_frames,
         decoder_wait: state.decoder_wait,
         max_filter_samples,
-        motion_blur_subframes,
         degradations,
         graph_nodes: state.graph_nodes,
         graph_passes: state.graph_passes,
@@ -399,12 +402,25 @@ pub(crate) fn take_pipeline_creations(state: &SharedDiagnostics) -> Vec<Pipeline
         .collect()
 }
 
-/// Records how one frame was submitted and its longest predicted submission.
+/// Records how one frame was submitted and its submissions' predicted times.
 pub(crate) fn record_frame_plan(
     state: &SharedDiagnostics,
     frame: &crate::FrameSubmissions,
-    max_predicted_ms: Option<f64>,
+    buffer_ms: &[f64],
+    budget_ms: Option<f64>,
 ) {
+    let max_predicted_ms = buffer_ms
+        .iter()
+        .copied()
+        .fold(None, |most: Option<f64>, ms| {
+            Some(most.map_or(ms, |most| most.max(ms)))
+        });
+    let over_budget = budget_ms.map_or(0, |budget| {
+        buffer_ms
+            .iter()
+            .filter(|ms| **ms > budget * OVER_BUDGET_ROUNDING)
+            .count()
+    });
     let mut state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -417,7 +433,13 @@ pub(crate) fn record_frame_plan(
     if let Some(ms) = max_predicted_ms {
         totals.max_predicted_ms = Some(totals.max_predicted_ms.map_or(ms, |most| most.max(ms)));
     }
+    totals.over_budget = totals
+        .over_budget
+        .saturating_add(u64::try_from(over_budget).unwrap_or(u64::MAX));
+    totals.budget_ms = budget_ms.or(totals.budget_ms);
 }
+
+const OVER_BUDGET_ROUNDING: f64 = 1.0 + 1e-9;
 
 /// Submission counts since the last call, then resets them.
 pub(crate) fn take_gpu_submission_stats(state: &SharedDiagnostics) -> GpuSubmissionStats {

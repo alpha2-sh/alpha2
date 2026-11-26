@@ -21,7 +21,7 @@ pub fn apply_edit(project: &str, request: &str) -> Result<web_sys::js_sys::Array
             let code = if failure.code == "INVALID_INPUT" {
                 Code::INVALID_INPUT
             } else {
-                Code::INTERNAL
+                Code::ALPHA2_ERROR
             };
             let error: JsValue = BindingError::new(code, failure.message).into();
             let details = web_sys::js_sys::Object::new();

@@ -31,8 +31,8 @@ impl EffectCatalog for Renderer {
 
 /// Controls a frame runner sets and reads on either renderer.
 pub trait RenderControls {
-    /// Sets the filter sample budget (possibly capped lower) and motion blur subframe count.
-    fn set_quality_controls(&self, max_filter_samples: u32, motion_blur_subframes: u32);
+    /// Sets the filter sample budget (possibly capped lower).
+    fn set_quality_controls(&self, max_filter_samples: u32);
 
     /// Sets the byte budget of pooled pictures kept for reuse.
     fn set_texture_budget_bytes(&self, budget_bytes: u64);
@@ -54,8 +54,8 @@ pub trait RenderControls {
 }
 
 impl RenderControls for Renderer {
-    fn set_quality_controls(&self, max_filter_samples: u32, motion_blur_subframes: u32) {
-        Renderer::set_quality_controls(self, max_filter_samples, motion_blur_subframes);
+    fn set_quality_controls(&self, max_filter_samples: u32) {
+        Renderer::set_quality_controls(self, max_filter_samples);
     }
 
     fn set_texture_budget_bytes(&self, budget_bytes: u64) {

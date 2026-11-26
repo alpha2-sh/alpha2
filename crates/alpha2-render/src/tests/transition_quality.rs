@@ -257,10 +257,7 @@ fn yuv_intermediates_match_srgb_uploads_through_composition() {
                         crate::ColorPolicy::RejectHdr,
                     )
                     .unwrap();
-                    let encoded = crate::encode_linear_rgb(
-                        [linear[0], linear[1], linear[2]],
-                        crate::SdrOutputTransfer::Srgb,
-                    );
+                    let encoded = crate::color::encode_srgb([linear[0], linear[1], linear[2]]);
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let expected = [encoded[0], encoded[1], encoded[2], 1.0]
                         .map(|c| (c * 0.5 * 255.0).round() as u8);

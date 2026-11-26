@@ -33356,7 +33356,380 @@
             "params": { "k": 1 },
             "plugin": {
               "version": "1.0.0",
+              "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "supplied": [
+                {
+                  "name": "model/encoder.onnx",
+                  "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "bytes": 12
+                },
+                {
+                  "name": "vocab",
+                  "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                  "bytes": 12
+                }
+              ]
+            }
+          },
+          "made_from": { "byte_length": 100 }
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-made-by-plugin-without-manifest-hash",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": ["project.data[0].made_by.plugin.manifest_sha256 is required"],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null],
+          "made_by": {
+            "extractor": "com.example.x",
+            "version": 3,
+            "params": { "k": 1 },
+            "plugin": {
+              "version": "1.0.0",
               "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "made_from": { "byte_length": 100 }
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-made-by-plugin-supplied-unsorted",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p has an invalid made_by"],
+    "error": "data set p has an invalid made_by",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null],
+          "made_by": {
+            "extractor": "com.example.x",
+            "version": 3,
+            "params": { "k": 1 },
+            "plugin": {
+              "version": "1.0.0",
+              "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "supplied": [
+                {
+                  "name": "vocab",
+                  "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                  "bytes": 12
+                },
+                {
+                  "name": "model/encoder.onnx",
+                  "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "bytes": 12
+                }
+              ]
+            }
+          },
+          "made_from": { "byte_length": 100 }
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-made-by-plugin-supplied-uppercase-hash",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p has an invalid made_by"],
+    "error": "data set p has an invalid made_by",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null],
+          "made_by": {
+            "extractor": "com.example.x",
+            "version": 3,
+            "params": { "k": 1 },
+            "plugin": {
+              "version": "1.0.0",
+              "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "supplied": [
+                {
+                  "name": "model/encoder.onnx",
+                  "sha256": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+                  "bytes": 12
+                }
+              ]
+            }
+          },
+          "made_from": { "byte_length": 100 }
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-made-by-plugin-supplied-with-path",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": ["project.data[0].made_by.plugin.supplied[0] has unknown field \"path\""],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null],
+          "made_by": {
+            "extractor": "com.example.x",
+            "version": 3,
+            "params": { "k": 1 },
+            "plugin": {
+              "version": "1.0.0",
+              "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "supplied": [
+                {
+                  "name": "model/encoder.onnx",
+                  "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                  "bytes": 12,
+                  "path": "/home/me/encoder.onnx"
+                }
+              ]
             }
           },
           "made_from": { "byte_length": 100 }

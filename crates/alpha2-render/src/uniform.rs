@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::Mutex;
 
-use crate::Shared;
 use crate::retire::{Retired, Retirement};
+use crate::{RenderError, Shared};
 
 /// Bytes per effect parameter in `EffectParams`; every type pads to one 16-byte slot.
 pub(crate) const PARAM_SLOT_BYTES: usize = 16;
@@ -28,13 +28,6 @@ pub(crate) const fn float_uniform_bytes(values: usize) -> u64 {
 // Bounds on what an unusual frame can leave idle; normal frames stay within one capacity's peak.
 const MAX_IDLE_UNIFORM_BUFFERS: usize = 64;
 const MAX_IDLE_UNIFORM_BYTES: u64 = 4 * 1024 * 1024;
-
-pub(crate) fn f32_bytes<const N: usize>(values: [f32; N]) -> Vec<u8> {
-    values
-        .into_iter()
-        .flat_map(f32::to_ne_bytes)
-        .collect::<Vec<_>>()
-}
 
 /// Allocation and retention counters for submission-scoped uniform arenas.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -103,6 +96,14 @@ impl UniformSlice {
     pub(crate) const fn offset(self) -> u64 {
         self.offset
     }
+
+    pub(crate) fn dynamic_offset(self) -> u32 {
+        u32::try_from(self.offset).expect("a uniform arena is smaller than 4 GiB")
+    }
+
+    pub(crate) const fn size(self) -> NonZeroU64 {
+        self.size
+    }
 }
 
 impl UniformBufferPool {
@@ -153,13 +154,15 @@ impl UniformBufferPool {
             state.created = state.created.saturating_add(1);
             drop(state);
             let generation = self.retirement.generation();
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("alpha2 uniform arena"),
+                size: capacity,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.retirement.bind_groups.adopt_buffer(&buffer);
             (
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("alpha2 uniform arena"),
-                    size: capacity,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
+                buffer,
                 vec![0; usize::try_from(capacity).expect("uniform arena fits host indexing")],
                 generation,
             )
@@ -320,35 +323,41 @@ impl UniformBufferPool {
 }
 
 impl UniformArenaLease {
-    pub(crate) fn write(&mut self, contents: &[u8]) -> UniformSlice {
-        let offset = align_up(self.cursor, self.alignment);
-        let size = u64::try_from(contents.len()).expect("uniform contents fit u64");
-        let end = offset.checked_add(size).expect("uniform arena offset");
-        assert!(end <= self.capacity, "uniform arena capacity was reserved");
-        let start = usize::try_from(offset).expect("uniform offset fits host indexing");
-        let end = usize::try_from(end).expect("uniform end fits host indexing");
-        self.bytes[start..end].copy_from_slice(contents);
-        self.cursor = u64::try_from(end).expect("uniform cursor fits u64");
-        UniformSlice {
-            offset,
-            size: NonZeroU64::new(size).expect("uniform binding is non-empty"),
-        }
+    pub(crate) fn write(&mut self, contents: &[u8]) -> Result<UniformSlice, RenderError> {
+        self.write_with(contents.len(), |bytes| {
+            bytes.copy_from_slice(contents);
+            Ok(())
+        })
     }
 
-    /// The arena's first `size` bytes as a dynamic-offset binding.
+    pub(crate) fn write_with(
+        &mut self,
+        size: usize,
+        fill: impl FnOnce(&mut [u8]) -> Result<(), RenderError>,
+    ) -> Result<UniformSlice, RenderError> {
+        let offset = align_up(self.cursor, self.alignment);
+        let end = u64::try_from(size)
+            .ok()
+            .and_then(|size| offset.checked_add(size))
+            .filter(|end| *end <= self.capacity)
+            .ok_or(RenderError::UniformArenaOverrun)?;
+        let size = NonZeroU64::new(end - offset).expect("uniform binding is non-empty");
+        let start = usize::try_from(offset).expect("uniform offset fits host indexing");
+        let end = usize::try_from(end).expect("uniform end fits host indexing");
+        let bytes = &mut self.bytes[start..end];
+        bytes.fill(0);
+        fill(bytes)?;
+        self.cursor = u64::try_from(end).expect("uniform cursor fits u64");
+        Ok(UniformSlice { offset, size })
+    }
+
+    /// The arena's first `size` bytes as a dynamic-offset binding; pass a slice's
+    /// [`UniformSlice::dynamic_offset`] when drawing.
     pub(crate) fn dynamic_binding(&self, size: NonZeroU64) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::Buffer(wgpu::BufferBinding {
             buffer: self.buffer.as_ref().expect("live uniform arena"),
             offset: 0,
             size: Some(size),
-        })
-    }
-
-    pub(crate) fn binding(&self, slice: UniformSlice) -> wgpu::BindingResource<'_> {
-        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-            buffer: self.buffer.as_ref().expect("live uniform arena"),
-            offset: slice.offset,
-            size: Some(slice.size),
         })
     }
 

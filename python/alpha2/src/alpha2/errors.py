@@ -78,12 +78,13 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "PLUGIN_LOAD_FAILED": _PERMANENT,
     "PLUGIN_TRAPPED": _PERMANENT,
     "PLUGIN_LIMIT": ("RESOURCE_LIMIT", "unknown"),
+    "PLUGIN_RESOURCE_INVALID": _PERMANENT,
     "CANCELLED": ("CANCELLED", "unknown"),
     "RESOURCE_LIMIT": ("RESOURCE_LIMIT", "unknown"),
     "GPU_INIT_FAILED": _UNKNOWN,
     "ENCODE_ERROR": _UNKNOWN,
     "ENCODER_BUSY": ("RESOURCE_BUSY", "gpu"),
-    # A caught panic of the host.
+    # A defect in the host or the engine: a caught panic or an internal error.
     "INTERNAL": ("DEFECT", "unknown"),
     "ALPHA2_ERROR": _UNKNOWN,
     "HOST_NOT_FOUND": _PERMANENT,
@@ -153,7 +154,8 @@ class Alpha2HostError(Exception):
     ``exit_code`` and ``signal`` say how a host that ended before answering ended. For
     ``OUTPUT_PUBLISH_FAILED``, ``kept_path`` is where the finished render was kept, for the caller
     to move or remove. For ``RESOURCE_BUSY`` (``ENCODER_BUSY``), :attr:`retry_after_ms` is how long
-    to wait before retrying.
+    to wait before retrying. ``details`` is what the host sent besides the code, such as
+    ``{"slot", "reason"}`` for ``PLUGIN_RESOURCE_INVALID``.
     """
 
     code: str
@@ -162,6 +164,7 @@ class Alpha2HostError(Exception):
     exit_code: int | None
     signal: str | None
     kept_path: str | None
+    details: dict[str, Any] | None
 
     def __init__(
         self,
@@ -175,6 +178,7 @@ class Alpha2HostError(Exception):
         signal: str | None = None,
         has_exit: bool = False,
         kept_path: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -183,6 +187,7 @@ class Alpha2HostError(Exception):
         self.exit_code = exit_code
         self.signal = signal
         self.kept_path = kept_path
+        self.details = details
         self.failure = (
             failure
             if failure is not None

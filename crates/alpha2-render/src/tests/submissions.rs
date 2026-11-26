@@ -53,17 +53,11 @@ fn banded_submission_renders_the_same_bytes_as_one_submission() {
     let size = RenderSize::new(512, 288).expect("size");
     let (whole, planned) = with_watchdog(UNSPLIT_WATCHDOG_MS, || draw(heavy_effect(), size));
     assert_eq!(planned.submissions, 1, "{planned:?}");
-    // A one-millisecond watchdog leaves no budget: the pass is drawn in the most bands.
     alpha2_gpu::set_watchdog_ms(1);
     let banded = std::panic::catch_unwind(|| draw(heavy_effect(), size));
     alpha2_gpu::set_watchdog_ms(0);
     let (banded, split) = banded.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     assert!(planned.predicted_ms.is_some(), "a heavy frame is planned");
-    assert_eq!(
-        split.submissions,
-        crate::submission_planner::MAX_BANDS,
-        "{split:?}"
-    );
     assert!(split.submissions > planned.submissions, "{planned:?}");
     assert_eq!(split.cost, planned.cost);
     assert!(
@@ -316,24 +310,864 @@ fn a_device_rate_seeded_too_high_is_recalibrated_by_the_frames_it_mispredicts() 
 }
 
 #[test]
-fn a_frame_of_more_submissions_than_the_clock_keeps_still_lowers_the_rate() {
+fn a_frame_predicted_past_its_most_submissions_still_lowers_the_rate() {
     let _lock = gpu_test_lock();
     let gpu = own_device();
     let renderer = Renderer::new(gpu.clone());
     let (effect, _) = registered(&renderer, heavy_effect());
-    let size = RenderSize::new(512, 288).expect("size");
+    let size = RenderSize::new(64, 36).expect("size");
     let view = flat_source(&renderer, size);
-    let _ = polled_frame(&renderer, &effect, &view, size);
+    let graph = heavy_chain(&view, &effect, size, 5);
+    let polled = || {
+        let result = renderer.execute_graph(&graph).expect("the graph renders");
+        renderer
+            .gpu
+            .device()
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(renderer.gpu_wait_timeout()),
+            })
+            .expect("the device polls");
+        drop(result);
+        renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions")
+    };
+    let _ = polled();
     gpu.rate().seed(1.0);
-    let banded = with_watchdog(1.0, || polled_frame(&renderer, &effect, &view, size));
-    assert_eq!(
-        banded.submissions,
-        crate::submission_planner::MAX_BANDS,
+    let banded = with_watchdog(1.0, polled);
+    assert!(
+        banded.submissions > 1
+            && banded.submissions <= crate::submission_planner::MAX_FRAME_SUBMISSIONS,
         "{banded:?}"
     );
     assert!(
         gpu.rate().ms_per_unit_pixel() < Some(2.0),
         "{:?}",
         gpu.rate().ms_per_unit_pixel()
+    );
+}
+
+fn heavy_chain<'a>(
+    view: &'a wgpu::TextureView,
+    effect: &crate::EffectId,
+    size: RenderSize,
+    passes: usize,
+) -> RenderGraph<'a> {
+    let mut graph = RenderGraph::new(size);
+    let mut node = graph.add_source(SourceView::from_wgpu(view));
+    for _ in 0..passes {
+        node = graph
+            .add_effect(
+                effect.clone(),
+                node,
+                EffectParams::new(),
+                EffectRuntime::default(),
+            )
+            .expect("dependency exists");
+    }
+    graph.set_output(node).expect("output exists");
+    graph
+}
+
+#[test]
+fn a_frame_under_a_one_millisecond_watchdog_keeps_to_its_most_submissions_and_its_picture() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(own_device());
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let draw = |graph: &RenderGraph<'_>| {
+        let result = renderer.execute_graph(graph).expect("the graph renders");
+        let submissions = renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions");
+        (submissions, read_rgba8(&renderer, &result))
+    };
+    let past_the_most_ms = 2.0
+        * f64::from(crate::submission_planner::MAX_FRAME_SUBMISSIONS)
+        * with_watchdog(1.0, alpha2_gpu::submission_budget_ms);
+    let sizes = [(64, 36), (128, 72), (256, 144), (512, 288), (1024, 576)];
+    let (view, size, whole, whole_picture) = sizes
+        .iter()
+        .enumerate()
+        .find_map(|(index, &(width, height))| {
+            let size = RenderSize::new(width, height).expect("size");
+            let view = flat_source(&renderer, size);
+            let (whole, picture) = with_watchdog(UNSPLIT_WATCHDOG_MS, || {
+                draw(&heavy_chain(&view, &effect, size, 6))
+            });
+            (index + 1 == sizes.len() || whole.predicted_ms.is_some_and(|ms| ms > past_the_most_ms))
+                .then_some((view, size, whole, picture))
+        })
+        .expect("a size");
+    assert_eq!(whole.submissions, 1, "{whole:?}");
+    let graph = heavy_chain(&view, &effect, size, 6);
+    let (capped, capped_picture) = with_watchdog(1.0, || draw(&graph));
+    assert!(
+        capped.submissions > 1
+            && capped.submissions <= crate::submission_planner::MAX_FRAME_SUBMISSIONS,
+        "{capped:?}"
+    );
+    assert!(
+        whole_picture == capped_picture,
+        "the capped frame drew other bytes"
+    );
+}
+
+#[test]
+fn a_loss_after_a_split_frame_whose_submissions_each_ran_briefly_is_not_reported_hung() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let (size, frame_ms) = {
+        let renderer = Renderer::new(gpu.clone());
+        let (effect, _) = registered(&renderer, heavy_effect());
+        let (size, _, frame_ms) =
+            with_watchdog(UNSPLIT_WATCHDOG_MS, || busy_size(&renderer, &effect));
+        (size, frame_ms)
+    };
+    let renderer = Renderer::new(gpu);
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let view = flat_source(&renderer, size);
+    with_watchdog(frame_ms, || {
+        let (frame, _) = exported_frame(&renderer, &effect, &view, size);
+        assert!(
+            frame.submissions >= 4,
+            "a frame that keeps the GPU busy for the whole {frame_ms:.1} ms watchdog is drawn in \
+             {} submission(s): {frame:?}",
+            frame.submissions
+        );
+        let longest = renderer.longest_submission().expect("timed submissions");
+        let classified = renderer.classify_loss(RenderError::GpuWorkDropped);
+        assert!(
+            matches!(classified, RenderError::GpuWorkDropped),
+            "a frame of {} submissions that ran {frame_ms:.1} ms unsplit is reported as {} \
+             submission(s) of {:.1} ms: {classified:?}",
+            frame.submissions,
+            longest.submissions,
+            longest.gpu_ms
+        );
+    });
+}
+
+#[test]
+fn each_submission_of_a_split_frame_names_the_effect_encoded_into_it() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let (first, _) = registered(&renderer, heavy_effect());
+    let (second, _) = registered(
+        &renderer,
+        EffectDef {
+            id: "test.heavy.second".into(),
+            ..heavy_effect()
+        },
+    );
+    let size = RenderSize::new(256, 144).expect("size");
+    let view = flat_source(&renderer, size);
+    let mut graph = RenderGraph::new(size);
+    let input = graph.add_source(SourceView::from_wgpu(&view));
+    let middle = graph
+        .add_effect(
+            first.clone(),
+            input,
+            EffectParams::new(),
+            EffectRuntime::default(),
+        )
+        .expect("dependency exists");
+    let output = graph
+        .add_effect(
+            second.clone(),
+            middle,
+            EffectParams::new(),
+            EffectRuntime::default(),
+        )
+        .expect("dependency exists");
+    graph.set_output(output).expect("output exists");
+    let frame = || {
+        renderer
+            .render_graph_yuv420p(&graph, &[], centred(ColorMetadata::default()))
+            .expect("the frame renders")
+            .wait_ready()
+            .expect("the readback maps");
+        renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions")
+    };
+    let bands = crate::submission_planner::MAX_BANDS;
+    seeded_at(&gpu, frame().cost.unit_pixels(), f64::from(bands * 2 - 8));
+    let frame = frame();
+    let name = |id: &crate::EffectId| vec![format!("{}@{}", id.as_str(), id.version())];
+    let bands = usize::try_from(bands / 2).expect("fits");
+    let kept = renderer.submission_clock.kept_effects();
+    let named: Vec<Vec<String>> = kept
+        [kept.len() - usize::try_from(frame.submissions).expect("fits")..]
+        .iter()
+        .filter(|effects| !effects.is_empty())
+        .cloned()
+        .collect();
+    let second_from = named
+        .iter()
+        .position(|effects| *effects == name(&second))
+        .unwrap_or(named.len());
+    assert!(
+        second_from >= bands
+            && named.len() - second_from >= bands
+            && named[..second_from]
+                .iter()
+                .all(|effects| *effects == name(&first))
+            && named[second_from..]
+                .iter()
+                .all(|effects| *effects == name(&second)),
+        "{frame:?}: {named:?}"
+    );
+}
+
+fn frame_planned_at(
+    gpu: &GpuContext,
+    renderer: &Renderer,
+    graph: &RenderGraph<'_>,
+    budgets: f64,
+) -> (crate::FrameSubmissions, f64, Vec<u8>) {
+    planned_at(gpu, renderer, budgets, || {
+        let result = renderer.execute_graph(graph).expect("the graph renders");
+        let submissions = renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions");
+        (submissions, read_rgba8(renderer, &result))
+    })
+}
+
+fn planned_at<T>(
+    gpu: &GpuContext,
+    renderer: &Renderer,
+    budgets: f64,
+    draw: impl Fn() -> (crate::FrameSubmissions, T),
+) -> (crate::FrameSubmissions, f64, T) {
+    let unit_pixels = draw().0.cost.unit_pixels();
+    seeded_at(gpu, unit_pixels, budgets);
+    let piloted_ms = draw()
+        .0
+        .predicted_ms
+        .expect("a frame over the planning threshold is planned");
+    let watchdog_ms = f64::from(alpha2_gpu::watchdog_ms());
+    let wanted_ms = budgets * alpha2_gpu::submission_budget_ms();
+    seeded_at(gpu, unit_pixels, budgets);
+    with_watchdog(
+        (watchdog_ms * piloted_ms / wanted_ms).max(watchdog_ms),
+        || {
+            let _ = renderer.take_gpu_submission_stats();
+            let (submissions, drawn) = draw();
+            let longest = renderer
+                .take_gpu_submission_stats()
+                .max_predicted_ms
+                .expect("a frame over the planning threshold is planned");
+            (
+                submissions,
+                longest / alpha2_gpu::submission_budget_ms(),
+                drawn,
+            )
+        },
+    )
+}
+
+fn seeded_at(gpu: &GpuContext, unit_pixels: f64, budgets: f64) {
+    let budget = alpha2_gpu::submission_budget_ms();
+    gpu.rate()
+        .seed(budgets * budget / unit_pixels / alpha2_gpu::MARGIN);
+}
+
+const OVER_ROUNDING: f64 = 1.0 + 1e-9;
+
+fn assert_within_the_budget(longest_budgets: f64, planned: crate::FrameSubmissions, what: &str) {
+    assert!(
+        longest_budgets <= OVER_ROUNDING,
+        "{what} went in {} submission(s), the longest predicted at {longest_budgets:.2} budgets: \
+         {planned:?}",
+        planned.submissions
+    );
+}
+
+fn yuv_source(
+    renderer: &Renderer,
+    size: RenderSize,
+    output: RenderSize,
+) -> crate::PreparedSourceTexture {
+    let (width, height) = (size.width as usize, size.height as usize);
+    let y = (0..width * height)
+        .map(|index| u8::try_from(16 + (index % width) * 200 / width).unwrap_or(16))
+        .collect::<Vec<_>>();
+    let u = vec![96_u8; width / 2 * height / 2];
+    let v = vec![160_u8; width / 2 * height / 2];
+    renderer
+        .prepare_yuv420p_presented(
+            Yuv420Frame {
+                y: &y,
+                u: &u,
+                v: &v,
+                y_stride: size.width,
+                chroma_stride: size.width / 2,
+                size,
+                alpha: 1.0,
+                color: Some(ColorMetadata::default()),
+            },
+            SourcePresentation {
+                visible_rect: alpha2_media::Rect {
+                    x: 0,
+                    y: 0,
+                    width: size.width,
+                    height: size.height,
+                },
+                ..SourcePresentation::identity(output)
+            },
+            ColorPolicy::RejectHdr,
+        )
+        .expect("prepared YUV source")
+        .0
+}
+
+fn converted_frame(
+    renderer: &Renderer,
+    source: RenderSize,
+    output: RenderSize,
+    convert_in_frame: bool,
+) -> (crate::FrameSubmissions, Vec<u8>) {
+    let (texture, pending) = yuv_source(renderer, source, output).into_parts();
+    let pending = pending.expect("the conversion is pending");
+    if !convert_in_frame {
+        assert!(renderer.submit_pending_source(&pending));
+    }
+    let mut graph = RenderGraph::new(output);
+    let input = graph.add_source(SourceView::from_wgpu(texture.view()));
+    let composite = graph
+        .add_composite(vec![GraphLayer {
+            source: input,
+            visual: visual([1.0, 1.0], 1.0),
+            blend_mode: BlendMode::Normal,
+        }])
+        .expect("source exists");
+    graph.set_output(composite).expect("output exists");
+    let result = renderer
+        .render_graph(&graph, &[&pending])
+        .expect("the frame renders");
+    let submissions = renderer
+        .take_frame_submissions()
+        .expect("the frame's submissions");
+    (submissions, read_rgba8(renderer, &result))
+}
+
+#[test]
+fn source_conversion_is_charged_to_the_frame_that_runs_it() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let (converted_before, _) = converted_frame(&renderer, size, size, false);
+    let (converted_in_frame, _) = converted_frame(&renderer, size, size, true);
+    assert!(
+        converted_in_frame.cost.unit_pixels() > converted_before.cost.unit_pixels(),
+        "a frame that also converts its source is charged {converted_in_frame:?}, the same frame \
+         without the conversion {converted_before:?}"
+    );
+}
+
+#[test]
+fn a_pack_is_charged_to_the_frame_it_packs() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let view = flat_source(&renderer, size);
+    let (effect, _) = registered(
+        &renderer,
+        runtime_tint_effect(
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
+        ),
+    );
+    let graph = effect_graph(&view, &effect, size);
+    drop(renderer.execute_graph(&graph).expect("the graph renders"));
+    let unpacked = renderer
+        .take_frame_submissions()
+        .expect("the frame's submissions");
+    renderer
+        .render_graph_yuv420p(&graph, &[], centred(ColorMetadata::default()))
+        .expect("the frame renders")
+        .wait_ready()
+        .expect("the readback maps");
+    let packed = renderer
+        .take_frame_submissions()
+        .expect("the frame's submissions");
+    assert!(
+        packed.cost.unit_pixels() > unpacked.cost.unit_pixels(),
+        "a packed frame is charged {packed:?}, the same frame unpacked {unpacked:?}"
+    );
+}
+
+#[test]
+fn a_layout_pack_is_charged_its_passes_and_plane_copies() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let view = flat_source(&renderer, size);
+    let (effect, _) = registered(
+        &renderer,
+        runtime_tint_effect(
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
+        ),
+    );
+    let graph = effect_graph(&view, &effect, size);
+    drop(renderer.execute_graph(&graph).expect("the graph renders"));
+    let unpacked = renderer
+        .take_frame_submissions()
+        .expect("the frame's submissions");
+    let half = renderer.intermediate_format() == wgpu::TextureFormat::Rgba16Float;
+    for name in ["yuva420p", "p010le", "yuv422p10le", "yuva444p10le"] {
+        let layout = alpha2_media::PixelLayout::from_ffmpeg_name(name).expect("layout");
+        if layout.bit_depth == alpha2_media::BitDepth::Ten && !half {
+            continue;
+        }
+        renderer
+            .render_graph_layout_readback(
+                &graph,
+                &[],
+                centred(ColorMetadata::default()),
+                layout,
+                None,
+            )
+            .expect("the frame renders")
+            .wait_ready()
+            .expect("the readback maps");
+        let packed = renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions");
+        let mut expected = unpacked.cost;
+        expected.add_cost(crate::readback::layout_pack_work(size, layout));
+        assert_eq!(
+            packed.cost.unit_pixels(),
+            expected.unit_pixels(),
+            "{name}: packed {packed:?}, unpacked {unpacked:?}"
+        );
+    }
+}
+
+#[test]
+fn a_layout_pack_writes_its_uniform_into_the_frames_arena() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 32).expect("size");
+    let view = flat_source(&renderer, size);
+    let (effect, _) = registered(
+        &renderer,
+        runtime_tint_effect(
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
+        ),
+    );
+    let graph = effect_graph(&view, &effect, size);
+    let leased = || {
+        let stats = renderer.diagnostics().uniform_buffers;
+        stats.created + stats.reused
+    };
+    let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuva420p").expect("layout");
+    let before = leased();
+    renderer
+        .render_graph_layout_readback(&graph, &[], centred(ColorMetadata::default()), layout, None)
+        .expect("the frame renders")
+        .wait_ready()
+        .expect("the readback maps");
+    assert_eq!(leased() - before, 1);
+    let plan = graph.compile().expect("plan");
+    let prepared = renderer.prepare_frame(&graph, &plan.order);
+    let capacity =
+        |pack| prepared.uniform_capacity(&[], &plan.order, pack, renderer.uniform_alignment());
+    assert!(
+        capacity(crate::prepared_frame::FramePack::Layout(layout))
+            >= capacity(crate::prepared_frame::FramePack::Nothing)
+                + crate::readback::LAYOUT_PACK_UNIFORM_BYTES
+    );
+}
+
+#[test]
+fn a_frame_whose_conversions_pass_the_planning_threshold_is_planned() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let source = RenderSize::new(2048, 2048).expect("size");
+    let output = RenderSize::new(512, 512).expect("size");
+    let (planned, _) = converted_frame(&renderer, source, output, true);
+    let (unplanned, _) = converted_frame(&renderer, source, output, false);
+    assert!(
+        planned.predicted_ms.is_some() && unplanned.predicted_ms.is_none(),
+        "with its conversion {planned:?}, without {unplanned:?}"
+    );
+}
+
+#[test]
+fn a_frame_cut_after_its_conversions_draws_what_one_submission_draws() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let source = RenderSize::new(2048, 2048).expect("size");
+    let output = RenderSize::new(512, 512).expect("size");
+    let (whole, _) = with_watchdog(UNSPLIT_WATCHDOG_MS, || {
+        converted_frame(&renderer, source, output, true)
+    });
+    assert_eq!(whole.submissions, 1, "{whole:?}");
+    let (_, whole_picture) = converted_frame(&renderer, source, output, true);
+    let (cut, longest, cut_picture) = planned_at(&gpu, &renderer, 8.0, || {
+        converted_frame(&renderer, source, output, true)
+    });
+    assert!(cut.submissions >= 8, "{cut:?}");
+    assert_within_the_budget(longest, cut, "a frame predicted at eight budgets");
+    assert!(
+        whole_picture == cut_picture,
+        "the cut frame drew other bytes"
+    );
+}
+
+fn layered_graph<'a>(
+    views: &'a [wgpu::TextureView],
+    layers: &[LayerTransform],
+    size: RenderSize,
+) -> RenderGraph<'a> {
+    let mut graph = RenderGraph::new(size);
+    let sources = views
+        .iter()
+        .map(|view| graph.add_source(SourceView::from_wgpu(view)))
+        .collect::<Vec<_>>();
+    let layers = layers
+        .iter()
+        .enumerate()
+        .map(|(index, visual)| GraphLayer {
+            source: sources[index % sources.len()],
+            visual: *visual,
+            blend_mode: BlendMode::Normal,
+        })
+        .collect();
+    let output = graph.add_composite(layers).expect("sources exist");
+    graph.set_output(output).expect("output exists");
+    graph
+}
+
+fn layer_sources(renderer: &Renderer, size: RenderSize) -> [wgpu::TextureView; 2] {
+    [
+        flat_source(renderer, size),
+        rgba_texture(renderer, [200, 40, 90, 255])
+            .create_view(&wgpu::TextureViewDescriptor::default()),
+    ]
+}
+
+#[test]
+fn a_composite_predicted_past_the_budget_is_cut_into_submissions_under_it() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(512, 288).expect("size");
+    let views = layer_sources(&renderer, size);
+    let graph = layered_graph(&views, &[visual([1.0, 1.0], 0.5); 16], size);
+    let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+    let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, 8.0);
+    assert_within_the_budget(
+        longest,
+        planned,
+        "sixteen whole-frame layers at eight budgets",
+    );
+    assert!(whole == cut, "the cut composite drew other bytes");
+}
+
+#[test]
+fn a_composite_batch_past_the_budget_is_drawn_in_bands_of_the_same_picture() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(1920, 1080).expect("size");
+    let views = layer_sources(&renderer, size);
+    let small = |x: f32, y: f32, turn: f32| LayerTransform {
+        position: [x, y],
+        rotation_degrees: turn,
+        ..visual([0.3, 0.4], 0.7)
+    };
+    let graph = layered_graph(
+        &views,
+        &[
+            small(0.3, 0.3, 10.0),
+            visual([1.0, 1.0], 0.5),
+            small(0.55, 0.6, -20.0),
+            small(0.6, 0.45, 35.0),
+        ],
+        size,
+    );
+    let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+    let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, 12.0);
+    assert!(planned.submissions >= 12, "{planned:?}");
+    assert_within_the_budget(longest, planned, "three batches at twelve budgets");
+    assert!(whole == cut, "the banded batches drew other bytes");
+}
+
+#[test]
+fn a_composite_is_charged_for_the_pixels_and_samples_its_layers_take() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(256, 144).expect("size");
+    let views = layer_sources(&renderer, size);
+    let minified = [rgba_image_texture(
+        &renderer,
+        RenderSize::new(2048, 1152).expect("size"),
+        &vec![128; 2048 * 1152 * 4],
+    )
+    .create_view(&wgpu::TextureViewDescriptor::default())];
+    let cost = |views: &[wgpu::TextureView], layer: LayerTransform| {
+        drop(
+            renderer
+                .execute_graph(&layered_graph(views, &[layer], size))
+                .expect("the composite renders"),
+        );
+        renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions")
+            .cost
+            .unit_pixels()
+    };
+    let whole = cost(&views, visual([1.0, 1.0], 0.5));
+    let quarter = cost(&views, visual([0.5, 0.5], 0.5));
+    let sampled = cost(&minified, visual([1.0, 1.0], 0.5));
+    assert!(
+        quarter < whole && whole < sampled,
+        "a quarter-frame layer is charged {quarter}, a whole-frame one {whole}, a whole-frame one \
+         minified eight times {sampled}"
+    );
+}
+
+fn vector_graph(
+    items: &[alpha2_geometry::EvaluatedItem],
+    size: RenderSize,
+) -> RenderGraph<'static> {
+    let scene = alpha2_geometry::build_scene(
+        items,
+        alpha2_geometry::CanvasSize::new(size.width, size.height),
+    );
+    let mut graph = RenderGraph::new(size);
+    let node = graph.add_vector(Arc::new(scene));
+    graph.set_output(node).expect("output exists");
+    graph
+}
+
+fn whole_canvas_fills(fills: u8) -> Vec<alpha2_geometry::EvaluatedItem> {
+    (0..fills)
+        .flat_map(|index| {
+            [
+                super::vector::rectangle(0.5, 0.5, 1.0, 1.0),
+                super::vector::fill(super::vector::solid(
+                    f32::from(index) / f32::from(fills),
+                    0.5,
+                    0.25,
+                    0.5,
+                )),
+            ]
+        })
+        .collect()
+}
+
+#[test]
+fn a_vector_scene_predicted_past_the_budget_is_cut_into_submissions_under_it() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(3840, 2160).expect("size");
+    let graph = vector_graph(&whole_canvas_fills(4), size);
+    let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+    let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, 8.0);
+    assert_within_the_budget(longest, planned, "a vector scene at eight budgets");
+    assert!(whole == cut, "the cut scene drew other bytes");
+}
+
+#[test]
+fn a_vector_scene_cut_between_and_inside_its_draws_draws_the_same_picture() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(1920, 1080).expect("size");
+    let ellipse = |x: f64, turn: f64| {
+        alpha2_geometry::EvaluatedItem::Geometry(alpha2_geometry::EvaluatedGeometry::Ellipse {
+            center: alpha2_geometry::kurbo::Point::new(x, 0.5),
+            size: alpha2_geometry::kurbo::Vec2::new(0.6, 0.35),
+            rotation_degrees: turn,
+        })
+    };
+    let faded = |items| {
+        super::vector::group(
+            items,
+            alpha2_geometry::EvaluatedTransform {
+                opacity: 0.6,
+                ..alpha2_geometry::EvaluatedTransform::default()
+            },
+        )
+    };
+    let mut items = whole_canvas_fills(3);
+    items.push(faded(vec![
+        ellipse(0.4, 20.0),
+        super::vector::fill(super::vector::gradient(
+            2,
+            [0.1, 0.2],
+            [0.9, 0.7],
+            alpha2_model::Spread::Pad,
+        )),
+        faded(vec![
+            ellipse(0.6, -35.0),
+            super::vector::fill(super::vector::solid(0.2, 0.7, 0.9, 0.8)),
+        ]),
+    ]));
+    items.push(ellipse(0.5, 60.0));
+    items.push(super::vector::fill(super::vector::gradient(
+        3,
+        [0.5, 0.5],
+        [0.4, 0.0],
+        alpha2_model::Spread::Reflect,
+    )));
+    for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {
+        let mut graph = vector_graph(&items, size);
+        graph.set_blend_space(space);
+        let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+        let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, 24.0);
+        assert!(planned.submissions >= 24, "{space:?}: {planned:?}");
+        assert_within_the_budget(longest, planned, "a scene of groups at twenty-four budgets");
+        assert!(whole == cut, "{space:?}: the cut scene drew other bytes");
+    }
+}
+
+#[test]
+fn a_vector_scene_is_charged_for_what_it_draws() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(64, 64).expect("size");
+    let cost = |items: &[alpha2_geometry::EvaluatedItem]| {
+        let mut graph = vector_graph(items, size);
+        graph.set_blend_space(BlendSpace::SrgbEncoded);
+        drop(renderer.execute_graph(&graph).expect("the scene renders"));
+        renderer
+            .take_frame_submissions()
+            .expect("the frame's submissions")
+            .cost
+            .unit_pixels()
+    };
+    let one = cost(&whole_canvas_fills(1));
+    let many = cost(&whole_canvas_fills(64));
+    let corner = cost(&[
+        super::vector::rectangle(0.125, 0.125, 0.25, 0.25),
+        super::vector::fill(super::vector::solid(0.5, 0.5, 0.25, 0.5)),
+    ]);
+    assert!(
+        corner < one && one < many,
+        "a fill of a sixteenth of the canvas is charged {corner} unit pixels, one of the whole \
+         canvas {one}, sixty-four of it {many}"
+    );
+}
+
+#[test]
+fn a_pass_past_the_most_bands_is_cut_across_too_and_not_submitted_over_the_budget() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let size = RenderSize::new(512, 288).expect("size");
+    let view = flat_source(&renderer, size);
+    let graph = effect_graph(&view, &effect, size);
+    let (_, _, whole) = frame_planned_at(&gpu, &renderer, &graph, 0.5);
+    let past_the_bands = 1.25 * f64::from(crate::submission_planner::MAX_BANDS);
+    let (planned, longest, cut) = frame_planned_at(&gpu, &renderer, &graph, past_the_bands);
+    assert_within_the_budget(
+        longest,
+        planned,
+        &format!("a pass predicted at {past_the_bands} budgets"),
+    );
+    assert!(whole == cut, "the tiles drew other bytes than the one pass");
+}
+
+#[test]
+fn a_planned_frame_pilots_its_composite_vector_conversion_and_pack_work() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let size = RenderSize::new(3840, 2160).expect("size");
+    let (texture, pending) = yuv_source(&renderer, size, size).into_parts();
+    let pending = pending.expect("the conversion is pending");
+    let mut graph = RenderGraph::new(size);
+    let input = graph.add_source(SourceView::from_wgpu(texture.view()));
+    let shapes = graph.add_vector(Arc::new(alpha2_geometry::build_scene(
+        &whole_canvas_fills(1),
+        alpha2_geometry::CanvasSize::new(size.width, size.height),
+    )));
+    let output = graph
+        .add_composite(vec![
+            GraphLayer {
+                source: input,
+                visual: visual([1.0, 1.0], 1.0),
+                blend_mode: BlendMode::Normal,
+            },
+            GraphLayer {
+                source: shapes,
+                visual: visual([1.0, 1.0], 0.5),
+                blend_mode: BlendMode::Normal,
+            },
+        ])
+        .expect("sources exist");
+    graph.set_output(output).expect("output exists");
+    renderer
+        .render_graph_yuv420p(&graph, &[&pending], centred(ColorMetadata::default()))
+        .expect("the frame renders")
+        .wait_ready()
+        .expect("the readback maps");
+    for kind in [
+        crate::submission_pilot::PassKind::Composite,
+        crate::submission_pilot::PassKind::Vector,
+        crate::submission_pilot::PassKind::Conversion,
+        crate::submission_pilot::PassKind::Pack,
+    ] {
+        assert!(
+            gpu.rate().pass_rate(kind.key(size.pixels())).is_some(),
+            "{kind:?} work of a planned frame was not piloted"
+        );
+    }
+}
+
+#[test]
+fn a_submission_predicted_over_the_budget_is_counted() {
+    let _lock = gpu_test_lock();
+    let gpu = own_device();
+    let renderer = Renderer::new(gpu.clone());
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let size = RenderSize::new(512, 288).expect("size");
+    let view = flat_source(&renderer, size);
+    let graph = effect_graph(&view, &effect, size);
+    let (planned, _, _) = frame_planned_at(&gpu, &renderer, &graph, 8.0);
+    let _ = renderer.execute_graph(&graph).expect("the graph renders");
+    let stats = renderer.take_gpu_submission_stats();
+    assert_eq!((stats.frames, stats.over_budget), (1, 0), "{planned:?}");
+    let most = crate::submission_planner::MAX_FRAME_SUBMISSIONS;
+    seeded_at(&gpu, planned.cost.unit_pixels(), 16.0 * f64::from(most));
+    let _ = renderer.take_gpu_submission_stats();
+    let _ = renderer.execute_graph(&graph).expect("the graph renders");
+    let stats = renderer.take_gpu_submission_stats();
+    assert!(
+        stats.over_budget >= u64::from(most / 2) && stats.max_per_frame <= most,
+        "{stats:?}"
+    );
+    assert_eq!(stats.budget_ms, Some(alpha2_gpu::submission_budget_ms()));
+}
+
+#[test]
+fn a_wait_on_a_split_frame_finds_its_completions_late_only_before_the_ones_it_saw() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(own_device());
+    let (effect, _) = registered(&renderer, heavy_effect());
+    let (size, view, frame_ms) =
+        with_watchdog(UNSPLIT_WATCHDOG_MS, || busy_size(&renderer, &effect));
+    let (frame, _) = with_watchdog(frame_ms, || exported_frame(&renderer, &effect, &view, size));
+    let submissions = usize::try_from(frame.submissions).expect("fits");
+    assert!(submissions >= 4, "{frame:?}");
+    let kept = renderer.submission_clock.kept_seen_as_they_happened();
+    let stamps = &kept[kept.len() - submissions..];
+    assert!(stamps.iter().all(Option::is_some), "{stamps:?}");
+    let first_seen = stamps
+        .iter()
+        .position(|seen| *seen == Some(true))
+        .unwrap_or(submissions);
+    assert!(
+        stamps[first_seen..].iter().all(|seen| *seen == Some(true)),
+        "a completion delivered after one the wait saw was late: {stamps:?}"
     );
 }

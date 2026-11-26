@@ -483,6 +483,7 @@ fn color_box(color: alpha2_media::ColorMetadata) -> Bytes {
         ColorPrimaries::Bt601 => 6,
         ColorPrimaries::Bt709 => 1,
         ColorPrimaries::Bt2020 => 9,
+        ColorPrimaries::DisplayP3 => 12,
     };
     let transfer: u16 = match color.transfer {
         TransferFunction::Bt709 => 1,

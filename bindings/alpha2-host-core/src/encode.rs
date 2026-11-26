@@ -131,6 +131,104 @@ pub trait VideoEncodeBackend: Send {
 
     /// Which form of the rate control the encoder runs.
     fn applied_rate_control(&self) -> AppliedRateControl;
+
+    /// The encoder's pool, when it lends buffers the renderer draws frames into instead of
+    /// taking planes. The default lends none.
+    fn lender(&mut self) -> Option<&mut dyn PoolLender> {
+        None
+    }
+}
+
+/// A buffer of an encoder's input pool lent for one frame. Dropping it unsubmitted gives it and
+/// its place among the encoder's frames in flight back.
+pub struct LentBuffer {
+    surface: usize,
+    generation: u64,
+    most_out: usize,
+    owner: Box<dyn std::any::Any + Send>,
+}
+
+impl std::fmt::Debug for LentBuffer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LentBuffer")
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LentBuffer {
+    /// A lent `surface` (the platform's buffer, such as a `CVPixelBufferRef`) of pool
+    /// `generation`, out of at most `most_out` the encoder has out at once; `owner` holds the
+    /// buffer and is the lender's to take back.
+    #[must_use]
+    pub fn new(
+        surface: *mut std::ffi::c_void,
+        generation: u64,
+        most_out: usize,
+        owner: Box<dyn std::any::Any + Send>,
+    ) -> Self {
+        Self {
+            surface: surface.addr(),
+            generation,
+            most_out,
+            owner,
+        }
+    }
+
+    /// The platform's buffer, valid while this lives.
+    #[must_use]
+    pub fn surface(&self) -> *mut std::ffi::c_void {
+        std::ptr::without_provenance_mut(self.surface)
+    }
+
+    /// The pool it came from: a replaced encoder session has a new pool and a new generation.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The most buffers the encoder has out at once, lent or encoding.
+    #[must_use]
+    pub const fn most_out(&self) -> usize {
+        self.most_out
+    }
+
+    /// What holds the buffer, for the lender that made it.
+    #[must_use]
+    pub fn into_owner(self) -> Box<dyn std::any::Any + Send> {
+        self.owner
+    }
+}
+
+/// What a lend gave.
+#[derive(Debug)]
+pub enum Lend {
+    /// A buffer for the next frame.
+    Buffer(LentBuffer),
+    /// The encoder holds as many frames as it may; take its packets and ask again.
+    Busy,
+}
+
+/// An encoder's input pool lending buffers to render into.
+pub trait PoolLender {
+    /// A buffer for the next frame. A lent buffer counts as in flight from here, so
+    /// [`Self::encode_lent`] never waits.
+    ///
+    /// # Errors
+    /// A failed encoder.
+    fn lend(&mut self) -> Result<Lend, EncodeError>;
+
+    /// Encodes the frame drawn into `buffer`, at `pts`.
+    ///
+    /// # Errors
+    /// A buffer this pool did not lend, or a failed encoder.
+    fn encode_lent(
+        &mut self,
+        pts: i64,
+        buffer: LentBuffer,
+        keyframe: bool,
+    ) -> Result<(), EncodeError>;
 }
 
 /// Opens video encoder sessions.
@@ -653,13 +751,7 @@ impl EncodeSink {
     /// encoder failure as it is; [`EncodeError::Cancelled`] when the token is set while an encoder
     /// is busy; an encoder that takes no frame and gives no packet for 10 s.
     pub fn write_frame(&mut self, index: u64, planes: &[PlaneBuffer]) -> Result<(), EncodeError> {
-        let rate = self.video_config.frame_rate;
-        let pts = i64::try_from(index).unwrap_or(i64::MAX)
-            * i64::from(rate.denominator())
-            * i64::from(self.video.timescale())
-            / i64::from(rate.numerator().max(1));
-        let interval = u64::from(self.video_config.keyframe_interval.max(1));
-        let keyframe = index.is_multiple_of(interval);
+        let (pts, keyframe) = self.frame_timing(index);
         let mut stall = Stall::new(self.stall_limit);
         loop {
             let submitted = self.video.submit(pts, planes, keyframe);
@@ -668,6 +760,52 @@ impl EncodeSink {
                 Submit::Busy => self.wait_busy(&mut stall, true, "video")?,
             }
         }
+        self.video_frames += 1;
+        self.drain(false, false).map(|_| ())
+    }
+
+    fn frame_timing(&self, index: u64) -> (i64, bool) {
+        let rate = self.video_config.frame_rate;
+        let pts = i64::try_from(index).unwrap_or(i64::MAX)
+            * i64::from(rate.denominator())
+            * i64::from(self.video.timescale())
+            / i64::from(rate.numerator().max(1));
+        let interval = u64::from(self.video_config.keyframe_interval.max(1));
+        (pts, index.is_multiple_of(interval))
+    }
+
+    /// A buffer of the video encoder's pool for the next frame, waiting while the encoder is
+    /// busy as [`Self::write_frame`] does.
+    ///
+    /// # Errors
+    /// As [`Self::write_frame`], and [`EncodeError::Adapter`] when the encoder lends no buffers.
+    pub fn lend(&mut self) -> Result<LentBuffer, EncodeError> {
+        let mut stall = Stall::new(self.stall_limit);
+        loop {
+            let lent = self
+                .video
+                .lender()
+                .ok_or_else(|| EncodeError::Adapter("the video encoder lends no buffers".into()))?
+                .lend();
+            match lent.map_err(|error| self.rejected(error))? {
+                Lend::Buffer(buffer) => return Ok(buffer),
+                Lend::Busy => self.wait_busy(&mut stall, true, "video")?,
+            }
+        }
+    }
+
+    /// Encodes frame `index` of the export, drawn into `buffer`, which [`Self::lend`] gave.
+    ///
+    /// # Errors
+    /// As [`Self::write_frame`].
+    pub fn write_lent(&mut self, index: u64, buffer: LentBuffer) -> Result<(), EncodeError> {
+        let (pts, keyframe) = self.frame_timing(index);
+        let encoded = self
+            .video
+            .lender()
+            .ok_or_else(|| EncodeError::Adapter("the video encoder lends no buffers".into()))?
+            .encode_lent(pts, buffer, keyframe);
+        encoded.map_err(|error| self.rejected(error))?;
         self.video_frames += 1;
         self.drain(false, false).map(|_| ())
     }
@@ -731,6 +869,30 @@ impl crate::export::VideoSink for EncodeSink {
 
     fn settle(&mut self) -> Result<(), EncodeError> {
         Self::settle(self)
+    }
+
+    fn lender(&mut self) -> Option<&mut dyn crate::export::SinkLender> {
+        if self.video.lender().is_some() {
+            Some(self)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(feature = "engine")]
+impl crate::export::SinkLender for EncodeSink {
+    fn lend(&mut self) -> Result<LentBuffer, EncodeError> {
+        Self::lend(self)
+    }
+
+    fn write_lent(
+        &mut self,
+        index: u64,
+        _time: alpha2_time::MediaTime,
+        buffer: LentBuffer,
+    ) -> Result<(), EncodeError> {
+        Self::write_lent(self, index, buffer)
     }
 }
 

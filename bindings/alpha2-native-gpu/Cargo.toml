@@ -32,12 +32,18 @@ hwdevice = [
   "alpha2-ffmpeg-bridge/hwdevice",
   "dep:alpha2-gpu",
   "dep:ash",
-  "dep:objc2",
-  "dep:objc2-metal",
   "dep:rsmpeg",
   "dep:wgpu",
   "dep:wgpu-hal",
   "dep:windows",
+  "iosurface-import",
+]
+iosurface-import = [
+  "dep:alpha2-gpu",
+  "dep:objc2",
+  "dep:objc2-metal",
+  "dep:wgpu",
+  "dep:wgpu-hal",
 ]
 ahb-import = [
   "dep:alpha2-gpu",
@@ -69,15 +75,17 @@ alpha2-media.workspace = true
 alpha2-render = { workspace = true, features = ["wgpu-interop"] }
 pollster.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(target_vendor = "apple")'.dependencies]
 alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
 objc2 = { version = "0.6.5", optional = true }
 objc2-metal = { version = "0.3.2", features = ["MTLTexture"], optional = true }
-rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = true }
 wgpu = { workspace = true, optional = true }
 wgpu-hal = { version = "30.0.1", features = ["metal"], optional = true }
 
-[target.'cfg(target_os = "macos")'.dev-dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
+rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
 pollster.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]

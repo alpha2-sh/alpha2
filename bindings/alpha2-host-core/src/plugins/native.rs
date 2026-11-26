@@ -15,16 +15,30 @@ use std::sync::{Mutex, PoisonError};
 use alpha2_engine::extract::AudioInput;
 use alpha2_plugin_abi::{ABI_MAJOR, HostV1, NATIVE_ENTRY, PluginV1};
 
+use alpha2_model::SuppliedFile;
+
+use super::resources::ResourceReader;
 use super::{
     Call, Collected, LogBudget, MAX_FAIL_BYTES, MAX_LOG_BYTES, OutputCap, PluginError, Transport,
     bounded_text, codes,
 };
 
-struct State {
-    collected: Collected,
+/// Where an instance's taken emits, refusals and logs go when another process checks them again.
+pub(super) trait Forward {
+    /// A batch the instance took.
+    fn records(&mut self, batch: &[u8]);
+    /// Why the instance refused an emit of the running call.
+    fn refused(&mut self, reason: &str);
+    /// A diagnostic, cut to its bound.
+    fn log(&mut self, level: u32, message: &[u8]);
+}
+
+pub(super) struct State {
+    pub(super) collected: Collected,
     caps: Vec<OutputCap>,
-    resources: HashMap<String, Vec<u8>>,
+    pub(super) reader: ResourceReader,
     log: LogBudget,
+    forward: Option<Box<dyn Forward>>,
 }
 
 /// Runs a callback's body, answering `failed` instead of letting a panic cross the C boundary.
@@ -32,12 +46,16 @@ fn guarded<T>(failed: T, body: impl FnOnce() -> T) -> T {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).unwrap_or(failed)
 }
 
-pub(super) struct NativeTransport {
+/// A live instance of a native plugin and the host table it calls back through.
+pub(super) struct NativeInstance {
     table: PluginV1,
     instance: *mut c_void,
     // Boxed so the context pointer in the host table stays put; dropped after the instance.
     host: Box<(HostV1, RefCell<State>)>,
 }
+
+/// Runs a native plugin in this process.
+pub(super) struct NativeTransport(NativeInstance);
 
 /// Libraries this process loaded, by artifact SHA-256.
 static LOADED: Mutex<Option<HashMap<String, &'static libloading::Library>>> = Mutex::new(None);
@@ -80,8 +98,17 @@ unsafe fn borrowed<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct AudioBlock {
+    pub(super) start: i64,
+    pub(super) start_sample: i64,
+    pub(super) frames: u32,
+    pub(super) rate: u32,
+    pub(super) channels: u32,
+}
+
 /// # Safety
-/// `context` is the `RefCell<State>` [`NativeTransport::new`] put in the host table.
+/// `context` is the `RefCell<State>` [`NativeInstance::new`] put in the host table.
 unsafe fn state<'a>(context: *mut c_void) -> &'a RefCell<State> {
     // SAFETY: as documented; the box outlives every call.
     unsafe { &*context.cast::<RefCell<State>>() }
@@ -92,9 +119,22 @@ unsafe extern "C" fn emit(context: *mut c_void, records: *const u8, len: usize) 
     let (state, batch) = unsafe { (state(context), borrowed(records, len)) };
     guarded(alpha2_plugin_abi::status::FAILED, || {
         let State {
-            collected, caps, ..
+            collected,
+            caps,
+            forward,
+            ..
         } = &mut *state.borrow_mut();
-        collected.emit(batch, caps)
+        let refused_before = collected.refusal.is_some();
+        let status = collected.emit(batch, caps);
+        if let Some(forward) = forward {
+            if status == alpha2_plugin_abi::status::OK {
+                forward.records(batch);
+                collected.records.clear();
+            } else if let Some(reason) = collected.refusal.as_deref().filter(|_| !refused_before) {
+                forward.refused(reason);
+            }
+        }
+        status
     })
 }
 
@@ -107,16 +147,41 @@ unsafe extern "C" fn resource(
     // SAFETY: the ABI's rules for the context and the name, borrowed for the call.
     let (state, name) = unsafe { (state(context), borrowed(name, name_len)) };
     guarded(std::ptr::null(), || {
-        let state = state.borrow();
+        let mut state = state.borrow_mut();
         match std::str::from_utf8(name)
             .ok()
-            .and_then(|name| state.resources.get(name))
+            .and_then(|name| state.reader.bytes(name))
         {
             Some(bytes) if !len.is_null() => {
-                // SAFETY: the plugin passes a writable length; the bytes live until the instance
-                // is destroyed, since resources are never replaced.
+                // SAFETY: the plugin passes a writable length; the reader keeps the bytes until
+                // the instance is destroyed.
                 unsafe { len.write(bytes.len()) };
                 bytes.as_ptr()
+            }
+            _ => std::ptr::null(),
+        }
+    })
+}
+
+unsafe extern "C" fn resource_path(
+    context: *mut c_void,
+    name: *const u8,
+    name_len: usize,
+    len: *mut usize,
+) -> *const u8 {
+    // SAFETY: the ABI's rules for the context and the name, borrowed for the call.
+    let (state, name) = unsafe { (state(context), borrowed(name, name_len)) };
+    guarded(std::ptr::null(), || {
+        let mut state = state.borrow_mut();
+        match std::str::from_utf8(name)
+            .ok()
+            .and_then(|name| state.reader.path(name))
+        {
+            Some(path) if !len.is_null() => {
+                // SAFETY: the plugin passes a writable length; the reader keeps the path until
+                // the instance is destroyed.
+                unsafe { len.write(path.len()) };
+                path.as_ptr()
             }
             _ => std::ptr::null(),
         }
@@ -137,7 +202,7 @@ unsafe extern "C" fn fail(context: *mut c_void, message: *const u8, len: usize) 
     });
 }
 
-unsafe extern "C" fn log(context: *mut c_void, _level: u32, message: *const u8, len: usize) {
+unsafe extern "C" fn log(context: *mut c_void, level: u32, message: *const u8, len: usize) {
     // SAFETY: the ABI's rules for the context and the message, borrowed for the call; only the
     // kept prefix is read.
     let (state, message) = unsafe {
@@ -146,7 +211,13 @@ unsafe extern "C" fn log(context: *mut c_void, _level: u32, message: *const u8, 
             borrowed(message, len.min(MAX_LOG_BYTES + 1)),
         )
     };
-    guarded((), || state.borrow_mut().log.log(message));
+    guarded((), || {
+        let State { log, forward, .. } = &mut *state.borrow_mut();
+        match forward {
+            Some(forward) => forward.log(level, &message[..message.len().min(MAX_LOG_BYTES)]),
+            None => log.log(message),
+        }
+    });
 }
 
 // Both tables are a few pointers long.
@@ -201,14 +272,15 @@ pub(super) unsafe fn checked(table: *const PluginV1) -> Result<PluginV1, PluginE
     Ok(unsafe { table.read() })
 }
 
-impl NativeTransport {
+impl NativeInstance {
     /// An instance of the artifact pinned by `sha256`; `prepare` gives the file to load when this
-    /// process has not loaded it yet.
+    /// process has not loaded it yet. With `forward`, taken emits and logs go there too.
     pub(super) fn new(
         sha256: &str,
         prepare: impl FnOnce() -> Result<PathBuf, PluginError>,
-        resources: HashMap<String, Vec<u8>>,
+        reader: ResourceReader,
         caps: Vec<OutputCap>,
+        forward: Option<Box<dyn Forward>>,
     ) -> Result<Self, PluginError> {
         let failed = |why: String| PluginError::new(codes::LOAD_FAILED, why);
         let library = library(sha256, prepare)?;
@@ -232,12 +304,14 @@ impl NativeTransport {
                 resource,
                 fail,
                 log,
+                resource_path,
             },
             RefCell::new(State {
                 collected: Collected::default(),
                 caps,
-                resources,
+                reader,
                 log: LogBudget::default(),
+                forward,
             }),
         ));
         host.0.context = (&raw const host.1).cast_mut().cast();
@@ -253,36 +327,43 @@ impl NativeTransport {
         })
     }
 
-    fn outcome(&self, status: i32) -> Call {
-        self.host.1.borrow_mut().collected.outcome(status)
+    pub(super) fn state(&self) -> &RefCell<State> {
+        &self.host.1
     }
-}
 
-impl Transport for NativeTransport {
-    fn describe(&mut self) -> Result<String, PluginError> {
+    fn start_call(&self) {
+        let mut state = self.host.1.borrow_mut();
+        state.reader.start_call(None);
+        state.collected = Collected::default();
+    }
+
+    pub(super) fn describe(&self) -> Vec<u8> {
         let mut len = 0;
         // SAFETY: `describe` returns static bytes of the length it writes.
-        let bytes = unsafe { borrowed((self.table.describe)(&raw mut len), len) };
-        String::from_utf8(bytes.to_vec()).map_err(|_| {
-            PluginError::new(codes::DESCRIPTOR_MISMATCH, "the descriptor is not UTF-8")
-        })
+        unsafe { borrowed((self.table.describe)(&raw mut len), len) }.to_vec()
     }
 
-    fn begin(&mut self, context: &[u8]) -> Call {
+    pub(super) fn begin(&mut self, context: &[u8]) -> i32 {
+        self.start_call();
         // SAFETY: a live instance; the context is borrowed for the call.
-        let status = unsafe { (self.table.begin)(self.instance, context.as_ptr(), context.len()) };
-        self.outcome(status)
+        unsafe { (self.table.begin)(self.instance, context.as_ptr(), context.len()) }
     }
 
-    fn pass(&mut self, pass: u32, direction: u32) -> Call {
+    pub(super) fn pass(&mut self, pass: u32, direction: u32) -> i32 {
+        self.start_call();
         // SAFETY: a live instance.
-        let status = unsafe { (self.table.pass)(self.instance, pass, direction) };
-        self.outcome(status)
+        unsafe { (self.table.pass)(self.instance, pass, direction) }
     }
 
-    fn video(&mut self, time: i64, width: u32, height: u32, format: u32, data: &[u8]) -> Call {
+    pub(super) fn video(
+        &mut self,
+        time: i64,
+        (width, height, format): (u32, u32, u32),
+        data: &[u8],
+    ) -> i32 {
+        self.start_call();
         // SAFETY: a live instance; the pixels are borrowed for the call.
-        let status = unsafe {
+        unsafe {
             (self.table.video)(
                 self.instance,
                 time,
@@ -292,35 +373,102 @@ impl Transport for NativeTransport {
                 data.as_ptr(),
                 data.len(),
             )
-        };
+        }
+    }
+
+    pub(super) fn audio(&mut self, block: &AudioBlock, samples: &[f32]) -> i32 {
+        let AudioBlock {
+            start,
+            start_sample,
+            frames,
+            rate,
+            channels,
+        } = *block;
+        self.start_call();
+        // SAFETY: a live instance; the samples are borrowed for the call.
+        unsafe {
+            (self.table.audio)(
+                self.instance,
+                start,
+                start_sample,
+                frames,
+                rate,
+                channels,
+                samples.as_ptr(),
+                samples.len(),
+            )
+        }
+    }
+
+    pub(super) fn end(&mut self) -> i32 {
+        self.start_call();
+        // SAFETY: a live instance.
+        unsafe { (self.table.end)(self.instance) }
+    }
+}
+
+impl NativeTransport {
+    pub(super) const fn new(instance: NativeInstance) -> Self {
+        Self(instance)
+    }
+
+    fn outcome(&self, status: i32) -> Call {
+        let mut state = self.0.state().borrow_mut();
+        if let Some(failure) = state.reader.take_failure() {
+            state.collected = Collected::default();
+            return Err(failure.into_call_error());
+        }
+        state.collected.outcome(status)
+    }
+}
+
+impl Transport for NativeTransport {
+    fn describe(&mut self) -> Result<String, PluginError> {
+        String::from_utf8(self.0.describe()).map_err(|_| {
+            PluginError::new(codes::DESCRIPTOR_MISMATCH, "the descriptor is not UTF-8")
+        })
+    }
+
+    fn begin(&mut self, context: &[u8]) -> Call {
+        let status = self.0.begin(context);
+        self.outcome(status)
+    }
+
+    fn pass(&mut self, pass: u32, direction: u32) -> Call {
+        let status = self.0.pass(pass, direction);
+        self.outcome(status)
+    }
+
+    fn video(&mut self, time: i64, width: u32, height: u32, format: u32, data: &[u8]) -> Call {
+        let status = self.0.video(time, (width, height, format), data);
         self.outcome(status)
     }
 
     fn audio(&mut self, block: &AudioInput) -> Call {
-        // SAFETY: a live instance; the samples are borrowed for the call.
-        let status = unsafe {
-            (self.table.audio)(
-                self.instance,
-                block.start.ticks(),
-                block.start_sample,
-                block.frames,
-                block.rate,
-                block.channels,
-                block.samples.as_ptr(),
-                block.samples.len(),
-            )
-        };
+        let status = self.0.audio(
+            &AudioBlock {
+                start: block.start.ticks(),
+                start_sample: block.start_sample,
+                frames: block.frames,
+                rate: block.rate,
+                channels: block.channels,
+            },
+            &block.samples,
+        );
         self.outcome(status)
     }
 
     fn end(&mut self) -> Call {
-        // SAFETY: a live instance.
-        let status = unsafe { (self.table.end)(self.instance) };
+        let status = self.0.end();
         self.outcome(status)
+    }
+
+    fn supplied(&self) -> Vec<SuppliedFile> {
+        self.0.state().borrow().reader.supplied()
     }
 }
 
-impl Drop for NativeTransport {
+impl Drop for NativeInstance {
     fn drop(&mut self) {
         // SAFETY: the instance is live and destroyed once; the library stays loaded.
         unsafe { (self.table.destroy)(self.instance) };

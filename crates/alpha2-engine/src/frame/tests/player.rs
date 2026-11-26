@@ -233,3 +233,21 @@ fn a_frame_built_across_a_clear_is_drawn_again_next_time() {
     );
     assert_eq!(at(8_000), (true, 0));
 }
+
+#[test]
+fn two_players_with_equal_profiles_never_make_each_other_redraw() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
+        .expect("the generator compiles");
+    let project = fade_project(16);
+    let mut first = Player::new(QualityProfile::export()).expect("quality");
+    let mut second = Player::new(QualityProfile::export()).expect("quality");
+    let at = |player: &mut Player| step(player, &project, &renderer, &MissingFrames, 8_000);
+    assert_eq!(at(&mut first), (false, 1));
+    assert_eq!(at(&mut second), (false, 1));
+    for _ in 0..2 {
+        assert_eq!(at(&mut first), (true, 0));
+        assert_eq!(at(&mut second), (true, 0));
+    }
+}

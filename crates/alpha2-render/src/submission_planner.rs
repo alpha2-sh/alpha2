@@ -4,11 +4,16 @@
 //! timeout. Each pass's time is predicted from its cost ([`crate::effect_cost`]), covered pixels
 //! and the device rate ([`alpha2_gpu::GpuRate`]); a pass that would push the command buffer past
 //! [`alpha2_gpu::submission_budget_ms`] starts a new submission, and a single pass over budget
-//! is drawn in scissored horizontal bands, one submission each.
+//! is drawn in scissored pieces, one submission each: horizontal bands, then tiles across them
+//! past [`MAX_BANDS`].
+//!
+//! A frame is at most [`MAX_FRAME_SUBMISSIONS`] submissions; a frame predicted past that gets
+//! longer submissions, spread evenly.
 //!
 //! Frames below [`PLANNING_THRESHOLD_UNIT_PIXELS`] stay one command buffer and need no rate.
 //! Splitting never changes pixels, only when the GPU starts each part.
 
+use crate::composite::PixelRect;
 use crate::effect_cost::{ARITHMETIC_UNITS, EffectCost, FETCH_UNITS, TRANSCENDENTAL_UNITS};
 
 /// Frames at most this cost (64 units per pixel over a megapixel) are not planned; well under a
@@ -18,10 +23,16 @@ pub(crate) const PLANNING_THRESHOLD_UNIT_PIXELS: f64 = 64.0 * 1_048_576.0;
 /// The most bands a pass is drawn in.
 pub(crate) const MAX_BANDS: u32 = 64;
 
-/// Per covered pixel of a composite layer: texture read, minification taps and blend.
-pub(crate) const COMPOSITE_LAYER_COST: EffectCost = EffectCost::fixed(4, 0);
-/// Per covered pixel of a vector scene: coverage and paint reads.
-pub(crate) const VECTOR_COST: EffectCost = EffectCost::fixed(2, 0);
+pub(crate) const MAX_TILE_COLUMNS: u32 = 16;
+
+pub(crate) const MAX_FRAME_SUBMISSIONS: u32 = 128;
+
+const SPREAD_SUBMISSIONS: u32 = MAX_FRAME_SUBMISSIONS / 4 * 3;
+
+const _: () = assert!(
+    MAX_FRAME_SUBMISSIONS as usize <= crate::submission_clock::RECENT_SUBMISSIONS_KEPT,
+    "the submission clock keeps every submission of the latest frame"
+);
 
 /// A frame's predicted cost in unit pixels per kind of work.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -51,6 +62,18 @@ impl FrameCost {
         self.transcendentals += cost.transcendentals as f64 * pixels;
         self.arithmetic += cost.arithmetic as f64 * pixels;
     }
+
+    pub(crate) fn of(cost: EffectCost, pixels: u64) -> Self {
+        let mut charge = Self::default();
+        charge.add(cost, pixels);
+        charge
+    }
+
+    pub(crate) fn add_cost(&mut self, other: Self) {
+        self.fetches += other.fetches;
+        self.transcendentals += other.transcendentals;
+        self.arithmetic += other.arithmetic;
+    }
 }
 
 /// How one frame was submitted, as the renderer planned it.
@@ -68,45 +91,174 @@ pub struct FrameSubmissions {
 pub(crate) struct PassPlacement {
     /// The current command buffer is finished before the pass.
     pub(crate) cut_before: bool,
-    /// Bands the pass is drawn in, each in a command buffer of its own.
-    pub(crate) bands: u32,
+    /// Pieces the pass is drawn in, each in a command buffer of its own.
+    pub(crate) pieces: Pieces,
     pub(crate) pilot: Option<u32>,
 }
 
+/// A pass's region cut into `rows` bands, each cut into `columns` tiles, on even edges so no
+/// 2x2 derivative quad straddles two pieces.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Pieces {
+    pub(crate) rows: u32,
+    pub(crate) columns: u32,
+}
+
+impl Pieces {
+    pub(crate) const ONE: Self = Self {
+        rows: 1,
+        columns: 1,
+    };
+
+    fn within(budgets: f64, region: PixelRect) -> Self {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let needed = budgets.ceil().clamp(1.0, f64::from(u32::MAX)) as u32;
+        let rows = needed.min(MAX_BANDS).min(region.height.div_ceil(2)).max(1);
+        let columns = needed
+            .div_ceil(rows)
+            .min(MAX_TILE_COLUMNS)
+            .min(region.width.div_ceil(2))
+            .max(1);
+        Self {
+            rows: rows.min(needed.div_ceil(columns)),
+            columns,
+        }
+    }
+
+    fn at_most(self, most: u32) -> Self {
+        let most = most.max(1);
+        if self.count() <= most {
+            return self;
+        }
+        let rows = self.rows.min(most);
+        Self {
+            rows,
+            columns: (most / rows).clamp(1, self.columns),
+        }
+    }
+
+    pub(crate) const fn count(self) -> u32 {
+        self.rows.saturating_mul(self.columns)
+    }
+
+    pub(crate) fn rect(self, index: u32, region: PixelRect) -> PixelRect {
+        let (y, height) = even_split(region.y, region.height, index / self.columns, self.rows);
+        let (x, width) = even_split(region.x, region.width, index % self.columns, self.columns);
+        PixelRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct Piece {
+    pub(crate) scissor: Option<PixelRect>,
+    pub(crate) first: bool,
+}
+
+impl Piece {
+    pub(crate) const fn first(scissor: Option<PixelRect>) -> Self {
+        Self {
+            scissor,
+            first: true,
+        }
+    }
+}
+
+fn even_split(start: u32, length: u32, part: u32, parts: u32) -> (u32, u32) {
+    let end = start.saturating_add(length);
+    let edge = |index: u32| -> u32 {
+        if index == 0 {
+            return start;
+        }
+        if index >= parts {
+            return end;
+        }
+        let offset = u64::from(length) * u64::from(index) / u64::from(parts);
+        let edge = start.saturating_add(u32::try_from(offset).unwrap_or(length)) & !1;
+        edge.clamp(start, end)
+    };
+    let first = edge(part);
+    (first, edge(part + 1).saturating_sub(first))
+}
+
 #[derive(Debug)]
-struct Plan {
+pub(crate) struct SubmissionPlan {
     rate: std::sync::Arc<alpha2_gpu::GpuRate>,
     ms_per_unit_pixel: f64,
     budget_ms: f64,
+    predicted_ms: f64,
+    pass_rates: Vec<(alpha2_gpu::PassKey, f64)>,
+}
+
+impl SubmissionPlan {
+    pub(crate) fn new(
+        rate: std::sync::Arc<alpha2_gpu::GpuRate>,
+        ms_per_unit_pixel: f64,
+        budget_ms: f64,
+        predicted_ms: f64,
+    ) -> Self {
+        Self {
+            rate,
+            ms_per_unit_pixel,
+            budget_ms: budget_ms.max(f64::MIN_POSITIVE),
+            predicted_ms,
+            pass_rates: Vec::new(),
+        }
+    }
+
+    pub(crate) fn predict(
+        &mut self,
+        passes: impl IntoIterator<Item = (FrameCost, Option<alpha2_gpu::PassKey>)>,
+    ) {
+        self.predicted_ms = 0.0;
+        for (work, pass) in passes {
+            let rate = self.planning_rate(pass);
+            if let Some(pass) = pass
+                && !self.pass_rates.iter().any(|(kept, _)| *kept == pass)
+            {
+                self.pass_rates.push((pass, rate));
+            }
+            self.predicted_ms += work.unit_pixels() * rate;
+        }
+    }
+
+    fn planning_rate(&self, pass: Option<alpha2_gpu::PassKey>) -> f64 {
+        pass.and_then(|pass| {
+            self.pass_rates
+                .iter()
+                .find_map(|(kept, rate)| (*kept == pass).then_some(*rate))
+        })
+        .unwrap_or_else(|| self.rate.planning_rate(self.ms_per_unit_pixel, pass))
+    }
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct SubmissionPlanner {
-    plan: Option<Plan>,
+    plan: Option<SubmissionPlan>,
     /// Predicted milliseconds of the command buffer being recorded.
     current_ms: f64,
     /// Predicted milliseconds of each command buffer finished before it.
     finished_ms: Vec<f64>,
+    current_effects: Vec<String>,
+    finished_effects: Vec<Vec<String>>,
+    placed_effect: Option<String>,
     /// Time of each remaining band of a banded pass.
     band_ms: f64,
     cost: FrameCost,
+    placed_ms: f64,
+    device_rated_ms: f64,
     /// Set once a graph was encoded.
     frame: bool,
     pilot_rows: Option<u32>,
 }
 
 impl SubmissionPlanner {
-    pub(crate) fn plan(
-        &mut self,
-        rate: std::sync::Arc<alpha2_gpu::GpuRate>,
-        ms_per_unit_pixel: f64,
-        budget_ms: f64,
-    ) {
-        self.plan = Some(Plan {
-            rate,
-            ms_per_unit_pixel,
-            budget_ms: budget_ms.max(f64::MIN_POSITIVE),
-        });
+    pub(crate) fn plan(&mut self, plan: SubmissionPlan) {
+        self.plan = Some(plan);
     }
 
     pub(crate) const fn mark_frame(&mut self) {
@@ -117,74 +269,137 @@ impl SubmissionPlanner {
         self.pilot_rows = Some(rows);
     }
 
-    /// Charges a pass of `cost` over `pixels` and places it, at the rate measured for `pass` when
-    /// that is slower than the device. A pass that is not `bandable` only gets its own command
-    /// buffer.
+    /// Charges a pass doing `work` and places it, at the rate measured for `pass` when that is
+    /// slower than the device. A pass that is not `bandable` only gets its own command buffer.
     pub(crate) fn pass(
         &mut self,
-        cost: EffectCost,
-        pixels: u64,
+        work: FrameCost,
+        region: PixelRect,
         bandable: bool,
         pass: Option<alpha2_gpu::PassKey>,
     ) -> PassPlacement {
-        self.cost.add(cost, pixels);
+        self.cost.add_cost(work);
         if let (Some(rows), true) = (self.pilot_rows, bandable) {
             return PassPlacement {
                 cut_before: false,
-                bands: 1,
+                pieces: Pieces::ONE,
                 pilot: Some(rows),
             };
         }
         let Some(plan) = &self.plan else {
             return PassPlacement {
                 cut_before: false,
-                bands: 1,
+                pieces: Pieces::ONE,
                 pilot: None,
             };
         };
-        let budget = plan.budget_ms;
-        let rate = plan.rate.planning_rate(plan.ms_per_unit_pixel, pass);
-        #[allow(clippy::cast_precision_loss)]
-        let ms = cost.units() as f64 * pixels as f64 * rate;
-        self.place(ms, budget, bandable)
+        let rate = plan.planning_rate(pass);
+        let ms = work.unit_pixels() * rate;
+        if rate <= plan.ms_per_unit_pixel {
+            self.device_rated_ms += ms;
+        }
+        let unplaced = plan.predicted_ms - self.placed_ms;
+        let spread = if ms <= unplaced {
+            unplaced / f64::from(self.spread_buffers_left())
+        } else {
+            ms / f64::from(self.quarter_buffers_left())
+        };
+        let budget = if spread.is_finite() {
+            plan.budget_ms.max(spread)
+        } else {
+            plan.budget_ms
+        };
+        self.placed_ms += ms;
+        self.place(ms, budget, bandable.then_some(region))
     }
 
-    fn place(&mut self, ms: f64, budget: f64, bandable: bool) -> PassPlacement {
+    fn spread_buffers_left(&self) -> u32 {
+        (self.buffers_unstarted() * SPREAD_SUBMISSIONS / MAX_FRAME_SUBMISSIONS).max(1)
+    }
+
+    fn quarter_buffers_left(&self) -> u32 {
+        (self.buffers_unstarted() / 4).max(1)
+    }
+
+    fn buffers_unstarted(&self) -> u32 {
+        let finished = u32::try_from(self.finished_ms.len()).unwrap_or(u32::MAX);
+        MAX_FRAME_SUBMISSIONS.saturating_sub(finished)
+    }
+
+    fn place(&mut self, ms: f64, budget: f64, region: Option<PixelRect>) -> PassPlacement {
         if ms > budget {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let bands = if bandable {
-                ((ms / budget).ceil() as u32).clamp(1, MAX_BANDS)
-            } else {
-                1
-            };
-            let cut_before = self.current_ms > 0.0;
+            let cut_before = self.current_ms > 0.0 && self.buffers_left() > 0;
             if cut_before {
-                self.finished_ms.push(self.current_ms);
+                self.finish_buffer();
             }
-            self.band_ms = ms / f64::from(bands);
-            self.current_ms = self.band_ms;
+            let pieces = region.map_or(Pieces::ONE, |region| {
+                Pieces::within(ms / budget, region).at_most(self.buffers_left() + 1)
+            });
+            let shared = if cut_before { 0.0 } else { self.current_ms };
+            self.band_ms = ms / f64::from(pieces.count());
+            self.current_ms = shared + self.band_ms;
             return PassPlacement {
                 cut_before,
-                bands,
+                pieces,
                 pilot: None,
             };
         }
-        let cut_before = self.current_ms > 0.0 && self.current_ms + ms > budget;
+        let cut_before =
+            self.current_ms > 0.0 && self.current_ms + ms > budget && self.buffers_left() > 0;
         if cut_before {
-            self.finished_ms.push(self.current_ms);
+            self.finish_buffer();
             self.current_ms = 0.0;
         }
         self.current_ms += ms;
         PassPlacement {
             cut_before,
-            bands: 1,
+            pieces: Pieces::ONE,
             pilot: None,
         }
     }
 
+    fn buffers_left(&self) -> u32 {
+        let started = u32::try_from(self.finished_ms.len() + 1).unwrap_or(u32::MAX);
+        MAX_FRAME_SUBMISSIONS.saturating_sub(started)
+    }
+
     pub(crate) fn next_band(&mut self) {
-        self.finished_ms.push(self.current_ms);
+        self.finish_buffer();
         self.current_ms = self.band_ms;
+        self.name_current_buffer();
+    }
+
+    fn finish_buffer(&mut self) {
+        self.finished_ms.push(self.current_ms);
+        self.finished_effects
+            .push(std::mem::take(&mut self.current_effects));
+    }
+
+    pub(crate) fn name_placed(&mut self, effect: Option<&crate::EffectId>) {
+        let unchanged = match (&self.placed_effect, effect) {
+            (Some(name), Some(effect)) => names(name, effect),
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            self.placed_effect =
+                effect.map(|effect| format!("{}@{}", effect.as_str(), effect.version()));
+        }
+        self.name_current_buffer();
+    }
+
+    fn name_current_buffer(&mut self) {
+        if let Some(effect) = &self.placed_effect
+            && !self.current_effects.contains(effect)
+        {
+            self.current_effects.push(effect.clone());
+        }
+    }
+
+    pub(crate) fn buffer_effects(&self) -> Vec<Vec<String>> {
+        let mut buffers = self.finished_effects.clone();
+        buffers.push(self.current_effects.clone());
+        buffers
     }
 
     pub(crate) const fn is_planned(&self) -> bool {
@@ -197,6 +412,10 @@ impl SubmissionPlanner {
 
     pub(crate) const fn cost(&self) -> FrameCost {
         self.cost
+    }
+
+    pub(crate) const fn device_rated_ms(&self) -> f64 {
+        self.device_rated_ms
     }
 
     pub(crate) fn planned_at(&self) -> Option<(f64, f64)> {
@@ -250,14 +469,9 @@ impl crate::Renderer {
     /// calibrated by the first such frame and again when frames disagree with it. A browser
     /// cannot wait for calibration, so it assumes [`alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL`]
     /// meanwhile.
-    pub(crate) fn plan_submissions(
-        &self,
-        encoder: &mut crate::renderer::RenderEncoder,
-        cost: FrameCost,
-    ) {
-        encoder.planner().mark_frame();
+    pub(crate) fn plan_submissions(&self, cost: FrameCost) -> Option<SubmissionPlan> {
         if cost.unit_pixels() <= PLANNING_THRESHOLD_UNIT_PIXELS {
-            return;
+            return None;
         }
         let rate = self.gpu.rate();
         if rate.begin_calibration() && self.calibrate().is_err() {
@@ -266,11 +480,12 @@ impl crate::Renderer {
         let ms_per_unit_pixel = rate
             .ms_per_unit_pixel()
             .unwrap_or(alpha2_gpu::UNCALIBRATED_MS_PER_UNIT_PIXEL);
-        encoder.planner().plan(
+        Some(SubmissionPlan::new(
             std::sync::Arc::clone(rate),
             ms_per_unit_pixel,
-            f64::from(alpha2_gpu::submission_budget_ms()),
-        );
+            alpha2_gpu::submission_budget_ms(),
+            cost.unit_pixels() * ms_per_unit_pixel,
+        ))
     }
 
     /// Draws the calibration effect [`CALIBRATION_DRAWS`] times at 512x512, one submission each,
@@ -362,28 +577,27 @@ impl crate::Renderer {
     }
 }
 
-/// Scissor rows of band `band` of `bands` over `height` rows. Edges are on even rows so no 2x2
-/// derivative quad straddles two bands.
-pub(crate) fn band_rows(band: u32, bands: u32, height: u32) -> (u32, u32) {
-    let edge = |index: u32| -> u32 {
-        if index >= bands {
-            return height;
-        }
-        let row = u64::from(height) * u64::from(index) / u64::from(bands);
-        u32::try_from(row).unwrap_or(height) & !1
-    };
-    let top = edge(band);
-    (top, edge(band + 1).saturating_sub(top))
+fn names(name: &str, effect: &crate::EffectId) -> bool {
+    name.strip_prefix(effect.as_str())
+        .and_then(|rest| rest.strip_prefix('@'))
+        .is_some_and(|version| version.parse() == Ok(effect.version()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn placed(cut_before: bool, bands: u32) -> PassPlacement {
+    const REGION: PixelRect = PixelRect {
+        x: 0,
+        y: 0,
+        width: 512,
+        height: 288,
+    };
+
+    fn placed(cut_before: bool, rows: u32) -> PassPlacement {
         PassPlacement {
             cut_before,
-            bands,
+            pieces: Pieces { rows, columns: 1 },
             pilot: None,
         }
     }
@@ -396,20 +610,45 @@ mod tests {
             transcendentals: 0,
             arithmetic: 10,
         };
-        assert_eq!(planner.pass(pass, 100, true, None).bands, 1);
+        assert_eq!(
+            planner
+                .pass(FrameCost::of(pass, 100), REGION, true, None)
+                .pieces,
+            Pieces::ONE
+        );
         assert_eq!(planner.buffer_ms(), None);
-        planner.plan(std::sync::Arc::default(), 1.0, 2_500.0);
+        planner.plan(SubmissionPlan::new(
+            std::sync::Arc::default(),
+            1.0,
+            2_500.0,
+            0.0,
+        ));
         // 1000 ms each: two fit, the third starts a new buffer.
-        assert!(!planner.pass(pass, 100, true, None).cut_before);
-        assert!(!planner.pass(pass, 100, true, None).cut_before);
-        assert!(planner.pass(pass, 100, true, None).cut_before);
+        assert!(
+            !planner
+                .pass(FrameCost::of(pass, 100), REGION, true, None)
+                .cut_before
+        );
+        assert!(
+            !planner
+                .pass(FrameCost::of(pass, 100), REGION, true, None)
+                .cut_before
+        );
+        assert!(
+            planner
+                .pass(FrameCost::of(pass, 100), REGION, true, None)
+                .cut_before
+        );
         // 10,000 ms: four bands of 2,500 after a cut.
-        let placement = planner.pass(pass, 1_000, true, None);
+        let placement = planner.pass(FrameCost::of(pass, 1_000), REGION, true, None);
         assert_eq!(placement, placed(true, 4));
-        for _ in 1..placement.bands {
+        for _ in 1..placement.pieces.count() {
             planner.next_band();
         }
-        assert_eq!(planner.pass(pass, 1_000, false, None), placed(true, 1));
+        assert_eq!(
+            planner.pass(FrameCost::of(pass, 1_000), REGION, false, None),
+            placed(true, 1)
+        );
         assert_eq!(
             planner.buffer_ms(),
             Some(vec![
@@ -421,21 +660,96 @@ mod tests {
     }
 
     #[test]
+    fn an_effect_placed_again_after_a_cut_names_the_new_buffer_once() {
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(SubmissionPlan::new(
+            std::sync::Arc::default(),
+            1.0,
+            2_500.0,
+            0.0,
+        ));
+        let pass = EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 10,
+        };
+        let blur = crate::EffectId::from_static("blur", 2);
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, false, None);
+        planner.name_placed(Some(&blur));
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, false, None);
+        planner.name_placed(Some(&blur));
+        let _ = planner.pass(FrameCost::of(pass, 10_000), REGION, false, None);
+        planner.name_placed(Some(&blur));
+        let buffers = planner.buffer_effects();
+        assert!(buffers.len() > 1, "{buffers:?}");
+        for buffer in buffers {
+            assert_eq!(buffer, ["blur@2"]);
+        }
+    }
+
+    #[test]
+    fn effect_names_follow_the_command_buffer_their_pass_is_encoded_into() {
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(SubmissionPlan::new(
+            std::sync::Arc::default(),
+            1.0,
+            2_500.0,
+            0.0,
+        ));
+        let pass = EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 10,
+        };
+        let blur = crate::EffectId::from_static("blur", 2);
+        let grain = crate::EffectId::from_static("grain", 1);
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, true, None);
+        planner.name_placed(Some(&blur));
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, false, None);
+        planner.name_placed(None);
+        let placement = planner.pass(FrameCost::of(pass, 1_000), REGION, true, None);
+        assert_eq!(placement, placed(true, 4));
+        planner.name_placed(Some(&grain));
+        for _ in 1..placement.pieces.count() {
+            planner.next_band();
+        }
+        let _ = planner.pass(FrameCost::of(pass, 100), REGION, true, None);
+        planner.name_placed(Some(&blur));
+        let names = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        assert_eq!(
+            planner.buffer_effects(),
+            vec![
+                names(&["blur@2"]),
+                names(&["grain@1"]),
+                names(&["grain@1"]),
+                names(&["grain@1"]),
+                names(&["grain@1"]),
+                names(&["blur@2"]),
+            ]
+        );
+    }
+
+    #[test]
     fn a_pass_measured_slower_than_the_device_is_banded_at_its_own_rate() {
         let rate = std::sync::Arc::new(alpha2_gpu::GpuRate::default());
         rate.seed(0.5);
         let scattered = alpha2_gpu::PassKey::new(1, 100);
         rate.record_pass_rate(scattered, 5.0);
         let mut planner = SubmissionPlanner::default();
-        planner.plan(rate, 1.0, 2_500.0);
+        planner.plan(SubmissionPlan::new(rate, 1.0, 2_500.0, 0.0));
         let pass = EffectCost {
             fetches: 0,
             transcendentals: 0,
             arithmetic: 10,
         };
-        assert_eq!(planner.pass(pass, 100, true, None), placed(false, 1));
         assert_eq!(
-            planner.pass(pass, 100, true, Some(scattered)),
+            planner.pass(FrameCost::of(pass, 100), REGION, true, None),
+            placed(false, 1)
+        );
+        assert_eq!(
+            planner.pass(FrameCost::of(pass, 100), REGION, true, Some(scattered)),
             placed(true, 4)
         );
     }
@@ -446,28 +760,211 @@ mod tests {
         planner.mark_pilot(6);
         let pass = EffectCost::fixed(1, 0);
         assert_eq!(
-            planner.pass(pass, 100, true, None),
+            planner.pass(FrameCost::of(pass, 100), REGION, true, None),
             PassPlacement {
                 cut_before: false,
-                bands: 1,
+                pieces: Pieces::ONE,
                 pilot: Some(6)
             }
         );
-        assert_eq!(planner.pass(pass, 100, false, None), placed(false, 1));
+        assert_eq!(
+            planner.pass(FrameCost::of(pass, 100), REGION, false, None),
+            placed(false, 1)
+        );
         assert_eq!(planner.buffer_ms(), None);
     }
 
     #[test]
-    fn bands_cover_every_row_once_on_even_edges() {
-        for (bands, height) in [(1, 7), (3, 288), (7, 101), (64, 4320)] {
-            let mut next = 0;
-            for band in 0..bands {
-                let (top, rows) = band_rows(band, bands, height);
-                assert_eq!(top, next);
-                assert_eq!(top % 2, 0);
-                next = top + rows;
+    fn a_pass_past_the_most_bands_is_cut_into_tiles_no_smaller_than_a_quad() {
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(SubmissionPlan::new(
+            std::sync::Arc::default(),
+            1.0,
+            100.0,
+            8_000.0,
+        ));
+        let pass = EffectCost::fixed(0, 0).plus(EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 1,
+        });
+        let placement = planner.pass(FrameCost::of(pass, 80 * 100), REGION, true, None);
+        assert_eq!(
+            placement.pieces,
+            Pieces {
+                rows: 40,
+                columns: 2
             }
-            assert_eq!(next, height);
+        );
+        let tiny = PixelRect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 4,
+        };
+        let placement = planner.pass(FrameCost::of(pass, 1_000 * 100), tiny, true, None);
+        assert_eq!(
+            placement.pieces,
+            Pieces {
+                rows: 2,
+                columns: 3
+            }
+        );
+    }
+
+    #[test]
+    fn a_frame_is_never_cut_into_more_than_its_most_submissions() {
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(SubmissionPlan::new(
+            std::sync::Arc::default(),
+            1.0,
+            1.0,
+            0.0,
+        ));
+        let pass = EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 1,
+        };
+        let mut buffers = 1;
+        for _ in 0..60 {
+            let placement = planner.pass(FrameCost::of(pass, 100), REGION, true, None);
+            buffers += u32::from(placement.cut_before);
+            for _ in 1..placement.pieces.count() {
+                planner.next_band();
+                buffers += 1;
+            }
+        }
+        let placement = planner.pass(FrameCost::of(pass, 3), REGION, false, None);
+        assert!(!placement.cut_before, "a full frame starts no buffer");
+        let ms = planner.buffer_ms().expect("planned");
+        assert_eq!(buffers, MAX_FRAME_SUBMISSIONS);
+        assert_eq!(ms.len(), MAX_FRAME_SUBMISSIONS as usize);
+        assert!((ms.iter().sum::<f64>() - 6_003.0).abs() < 1e-9, "{ms:?}");
+    }
+
+    #[test]
+    fn a_frame_predicted_past_its_most_submissions_is_cut_into_longer_ones_evenly() {
+        let mut planner = SubmissionPlanner::default();
+        let budgets = f64::from(MAX_FRAME_SUBMISSIONS) * 4.0;
+        planner.plan(SubmissionPlan::new(
+            std::sync::Arc::default(),
+            1.0,
+            1.0,
+            budgets,
+        ));
+        let pass = EffectCost {
+            fetches: 0,
+            transcendentals: 0,
+            arithmetic: 1,
+        };
+        for _ in 0..4 {
+            let placement = planner.pass(
+                FrameCost::of(pass, u64::from(MAX_FRAME_SUBMISSIONS)),
+                REGION,
+                true,
+                None,
+            );
+            for _ in 1..placement.pieces.count() {
+                planner.next_band();
+            }
+        }
+        let ms = planner.buffer_ms().expect("planned");
+        let spread = budgets / f64::from(SPREAD_SUBMISSIONS);
+        assert!(ms.len() <= MAX_FRAME_SUBMISSIONS as usize, "{ms:?}");
+        assert!(ms.iter().all(|ms| *ms <= spread * (1.0 + 1e-9)), "{ms:?}");
+    }
+
+    #[test]
+    fn a_frame_whose_passes_measured_slower_than_the_device_is_spread_by_their_planned_rate() {
+        use std::sync::Arc;
+        let rate = Arc::new(alpha2_gpu::GpuRate::default());
+        let key = alpha2_gpu::PassKey::new(7, 100);
+        rate.record_pass_rate(key, 25.0);
+        let pass = FrameCost::of(
+            EffectCost {
+                fetches: 0,
+                transcendentals: 0,
+                arithmetic: 1,
+            },
+            100,
+        );
+        let passes = 64;
+        let mut plan = SubmissionPlan::new(Arc::clone(&rate), 1.0, 1.0, f64::from(passes) * 100.0);
+        plan.predict((0..passes).map(|_| (pass, Some(key))));
+        let planned_ms = plan.predicted_ms;
+        rate.record_pass_rate(key, 100.0);
+        let mut planner = SubmissionPlanner::default();
+        planner.plan(plan);
+        for _ in 0..passes {
+            let placement = planner.pass(pass, REGION, true, Some(key));
+            for _ in 1..placement.pieces.count() {
+                planner.next_band();
+            }
+        }
+        let ms = planner.buffer_ms().expect("planned");
+        let spread = planned_ms / f64::from(SPREAD_SUBMISSIONS);
+        assert!(ms.len() <= MAX_FRAME_SUBMISSIONS as usize, "{}", ms.len());
+        assert!(ms.iter().all(|ms| *ms <= spread * (1.0 + 1e-9)), "{ms:?}");
+    }
+
+    #[test]
+    fn pieces_cover_every_pixel_of_their_region_once_on_even_edges() {
+        for (pieces, region) in [
+            (Pieces::ONE, (0, 0, 7, 7)),
+            (
+                Pieces {
+                    rows: 3,
+                    columns: 1,
+                },
+                (0, 0, 512, 288),
+            ),
+            (
+                Pieces {
+                    rows: 7,
+                    columns: 1,
+                },
+                (0, 0, 64, 101),
+            ),
+            (
+                Pieces {
+                    rows: 64,
+                    columns: 1,
+                },
+                (0, 0, 8, 4320),
+            ),
+            (
+                Pieces {
+                    rows: 4,
+                    columns: 5,
+                },
+                (3, 9, 101, 77),
+            ),
+        ] {
+            let region = PixelRect {
+                x: region.0,
+                y: region.1,
+                width: region.2,
+                height: region.3,
+            };
+            let mut covered = vec![0_u32; (region.width * region.height) as usize];
+            for index in 0..pieces.count() {
+                let piece = pieces.rect(index, region);
+                for (edge, start, end) in [
+                    (piece.x, region.x, region.x + region.width),
+                    (piece.y, region.y, region.y + region.height),
+                    (piece.x + piece.width, region.x, region.x + region.width),
+                    (piece.y + piece.height, region.y, region.y + region.height),
+                ] {
+                    assert!(edge == start || edge == end || edge % 2 == 0, "{piece:?}");
+                }
+                for y in piece.y..piece.y + piece.height {
+                    for x in piece.x..piece.x + piece.width {
+                        covered[((y - region.y) * region.width + x - region.x) as usize] += 1;
+                    }
+                }
+            }
+            assert!(covered.iter().all(|count| *count == 1), "{pieces:?}");
         }
     }
 }

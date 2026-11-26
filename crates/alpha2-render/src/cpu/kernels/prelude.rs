@@ -190,7 +190,8 @@ pub(crate) fn builtin_angle_width(centered: [f32; 2], resolution: [f32; 2]) -> f
 #[inline]
 pub(crate) fn builtin_interval_coverage(value: f32, width: f32) -> f32 {
     let span = width.max(0.000_000_1);
-    (((value + span * 0.5).min(1.0) - (value - span * 0.5).max(0.0)) / span).clamp(0.0, 1.0)
+    let cut = (value + span * 0.5 - 1.0).max(0.0) + (span * 0.5 - value).max(0.0);
+    (1.0 - cut / span).clamp(0.0, 1.0)
 }
 
 /// The gl-transitions coordinates of a shader `uv`: y up.

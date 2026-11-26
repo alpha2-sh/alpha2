@@ -1,12 +1,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::submission_planner::Piece;
 use crate::{
     EffectId, EffectKind, EffectParams, EffectResources, EffectRuntime, GraphError, ParamSpec,
     ParamType, ParamValue, RenderError, RenderGraph, RenderSize, RenderedTexture, Renderer,
-    uniform::{
-        PARAM_SLOT_BYTES, RUNTIME_UNIFORM_WORDS, UniformArenaLease, f32_bytes, param_uniform_bytes,
-    },
+    uniform::{PARAM_SLOT_BYTES, RUNTIME_UNIFORM_WORDS, UniformArenaLease, param_uniform_bytes},
 };
 
 impl Renderer {
@@ -66,14 +65,12 @@ impl Renderer {
     pub(crate) fn encode_effect_pass(
         &self,
         encoder: &mut crate::renderer::RenderEncoder,
+        registered: Option<&crate::Shared<crate::registry::RegisteredEffect>>,
         pass: EffectPass<'_>,
         uniforms: &mut UniformArenaLease,
     ) -> Result<Option<PendingEffectTiming>, RenderError> {
-        let registered = self
-            .effects()
-            .get(pass.id)
-            .ok_or(RenderError::UnknownEffect)?;
-        self.encode_registered_pass(encoder, &registered, pass, uniforms)
+        let registered = registered.ok_or(RenderError::UnknownEffect)?;
+        self.encode_registered_pass(encoder, registered, pass, uniforms)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -85,7 +82,7 @@ impl Renderer {
         uniforms: &mut UniformArenaLease,
     ) -> Result<Option<PendingEffectTiming>, RenderError> {
         let EffectPass {
-            id: _,
+            id,
             kind,
             source_a,
             source_b,
@@ -103,7 +100,7 @@ impl Renderer {
             (EffectKind::Effect | EffectKind::Generator, _) => source_a,
         };
         validate_runtime(runtime)?;
-        let parameter_bytes = encode_params(&registered.definition.params, params)?;
+        validate_params(&registered.definition.params, params)?;
         if resources.iter().any(|(name, _)| {
             !registered
                 .definition
@@ -113,12 +110,15 @@ impl Renderer {
         }) {
             return Err(RenderError::InvalidEffectParams);
         }
-        let parameter_uniform = uniforms.write(&parameter_bytes);
-        let runtime_uniform = uniforms.write(&runtime_bytes(
+        let parameter_uniform = uniforms.write_with(
+            param_uniform_bytes(registered.definition.params.len()),
+            |bytes| encode_params(&registered.definition.params, params, bytes),
+        )?;
+        let runtime_uniform = uniforms.write(bytemuck::cast_slice(&runtime_words(
             size,
             runtime,
             self.quality_controls().max_filter_samples,
-        ));
+        )))?;
         // Held until the bind group is made, whatever another thread registers meanwhile.
         let bound = registered
             .definition
@@ -136,7 +136,8 @@ impl Renderer {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut entries = vec![
+        let mut entries = arrayvec::ArrayVec::<_, { crate::registry::MAX_EFFECT_BINDINGS }>::new();
+        entries.extend([
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::TextureView(source_a),
@@ -146,25 +147,21 @@ impl Renderer {
                 resource: wgpu::BindingResource::TextureView(source_b),
             },
             wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&drawn.sampler),
+                binding: crate::registry::PARAMS_BINDING,
+                resource: uniforms.dynamic_binding(parameter_uniform.size()),
             },
             wgpu::BindGroupEntry {
-                binding: 3,
-                resource: uniforms.binding(parameter_uniform),
+                binding: crate::registry::RUNTIME_BINDING,
+                resource: uniforms.dynamic_binding(runtime_uniform.size()),
             },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: uniforms.binding(runtime_uniform),
-            },
-        ];
+        ]);
         for (index, resource) in bound.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
-                binding: u32::try_from(index).unwrap_or(0) * 2 + 5,
+                binding: crate::registry::resource_binding(index),
                 resource: wgpu::BindingResource::TextureView(&resource.view),
             });
             entries.push(wgpu::BindGroupEntry {
-                binding: u32::try_from(index).unwrap_or(0) * 2 + 6,
+                binding: crate::registry::resource_binding(index) + 1,
                 resource: resource.metadata.as_entire_binding(),
             });
         }
@@ -188,52 +185,41 @@ impl Renderer {
                 resource: wgpu::BindingResource::TextureView(view),
             });
         }
-        let bind_group = self
-            .gpu
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = crate::bind_group::OffsetBindGroup {
+            group: self.bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("alpha2 runtime effect bind group"),
                 layout: &drawn.bind_group_layout,
                 entries: &entries,
-            });
+            }),
+            offsets: [
+                parameter_uniform.dynamic_offset(),
+                runtime_uniform.dynamic_offset(),
+            ],
+        };
         let pixels = u64::from(size.width) * u64::from(size.height);
         let placement = encoder.place_pass(
-            registered.cost,
-            pixels,
+            crate::FrameCost::of(registered.cost, pixels),
+            crate::composite::PixelRect::whole(size),
             true,
             Some(alpha2_gpu::PassKey::new(registered.pass_id, pixels)),
+            Some(id),
         );
-        if let Some(rows) = placement.pilot {
-            encode_pass(
-                encoder,
-                &drawn.pipeline,
-                &bind_group,
-                output,
-                None,
-                Some((0, 0, size.width, rows)),
-            );
-            return Ok(None);
-        }
-        let bands = placement.bands;
-        if bands > 1 {
-            // Bands read only the pass's sources, never its target, so pixels match an unbanded
-            // pass.
-            for band in 0..bands {
-                if band > 0 {
-                    encoder.next_band();
-                }
-                let (top, rows) = crate::submission_planner::band_rows(band, bands, size.height);
-                if rows > 0 {
+        if placement.pilot.is_some() || placement.pieces.count() > 1 {
+            encoder.encode_pieces(
+                placement,
+                crate::composite::PixelRect::whole(size),
+                |encoder, piece| {
                     encode_pass(
                         encoder,
                         &drawn.pipeline,
                         &bind_group,
+                        &self.linear_sampler,
                         output,
                         None,
-                        Some((band, top, size.width, rows)),
+                        piece,
                     );
-                }
-            }
+                },
+            );
             return Ok(None);
         }
         // One reusable probe: a query set per pass exhausts Metal counter buffers, and the failed
@@ -251,9 +237,10 @@ impl Renderer {
             encoder,
             &drawn.pipeline,
             &bind_group,
+            &self.linear_sampler,
             output,
             probe.map(|(_, probe)| &probe.queries),
-            None,
+            Piece::first(None),
         );
         if let Some((_, probe)) = probe {
             encoder.resolve_query_set(&probe.queries, 0..2, &probe.resolve, 0);
@@ -354,14 +341,14 @@ pub(crate) struct EffectPass<'a> {
 pub(crate) fn encode_params(
     schema: &[ParamSpec],
     supplied: &EffectParams,
-) -> Result<Vec<u8>, RenderError> {
+    bytes: &mut [u8],
+) -> Result<(), RenderError> {
     if supplied
         .names()
         .any(|name| !schema.iter().any(|param| param.name == name))
     {
         return Err(RenderError::InvalidEffectParams);
     }
-    let mut bytes = vec![0; param_uniform_bytes(schema.len())];
     for (spec, slot) in schema
         .iter()
         .zip(bytes.as_chunks_mut::<PARAM_SLOT_BYTES>().0)
@@ -369,7 +356,24 @@ pub(crate) fn encode_params(
         let value = supplied.get(&spec.name).unwrap_or(&spec.default);
         encode_value(spec, value, slot)?;
     }
-    Ok(bytes)
+    Ok(())
+}
+
+pub(crate) fn validate_params(
+    schema: &[ParamSpec],
+    supplied: &EffectParams,
+) -> Result<(), RenderError> {
+    if supplied
+        .names()
+        .any(|name| !schema.iter().any(|param| param.name == name))
+    {
+        return Err(RenderError::InvalidEffectParams);
+    }
+    for spec in schema {
+        let value = supplied.get(&spec.name).unwrap_or(&spec.default);
+        encode_value(spec, value, &mut [0; PARAM_SLOT_BYTES])?;
+    }
+    Ok(())
 }
 
 fn encode_value(
@@ -390,14 +394,14 @@ fn encode_value(
         (ParamType::Vec4, ParamValue::Vec4(values))
             if values.iter().all(|value| valid_scalar(spec, *value)) =>
         {
-            output.copy_from_slice(&f32_bytes(*values));
+            output.copy_from_slice(bytemuck::cast_slice(values));
         }
         (ParamType::Color, ParamValue::Color(values))
             if values
                 .iter()
                 .all(|value| value.is_finite() && (0.0..=1.0).contains(value)) =>
         {
-            output.copy_from_slice(&f32_bytes(*values));
+            output.copy_from_slice(bytemuck::cast_slice(values));
         }
         (ParamType::Enum, ParamValue::Enum(value))
             if usize::try_from(*value).is_ok_and(|index| index < spec.enum_values.len()) =>
@@ -435,7 +439,11 @@ pub(crate) fn validate_runtime(runtime: EffectRuntime) -> Result<(), RenderError
 /// budget as floats, then the tick count as two words, low first (`time_ticks()`), and the render
 /// scale in 16.16 fixed point (`render_scale_fixed()`).
 #[allow(clippy::cast_precision_loss)]
-fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u32) -> Vec<u8> {
+fn runtime_words(
+    size: RenderSize,
+    runtime: EffectRuntime,
+    max_filter_samples: u32,
+) -> [u32; RUNTIME_UNIFORM_WORDS] {
     let ticks = runtime.time.ticks().cast_unsigned();
     // Rounded once from the exact quotient.
     #[allow(clippy::cast_possible_truncation)]
@@ -451,15 +459,20 @@ fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u
         0.0,
     ];
     #[allow(clippy::cast_possible_truncation)]
-    let words: [u32; RUNTIME_UNIFORM_WORDS - 8] = [
+    let ticks = [
         ticks as u32,
         (ticks >> 32) as u32,
         render_scale_fixed(runtime.scale),
         0,
     ];
-    let mut bytes = f32_bytes(values);
-    bytes.extend(words.iter().flat_map(|word| word.to_ne_bytes()));
-    bytes
+    let mut words = [0; RUNTIME_UNIFORM_WORDS];
+    for (word, value) in words
+        .iter_mut()
+        .zip(values.map(f32::to_bits).iter().chain(&ticks))
+    {
+        *word = *value;
+    }
+    words
 }
 
 /// `scale` in 16.16 fixed point, as `render_scale_fixed()` gives it.
@@ -468,19 +481,19 @@ pub(crate) fn render_scale_fixed(scale: f32) -> u32 {
     (f64::from(scale) * 65_536.0).round() as u32
 }
 
-/// Encodes one full-target draw, or with `band` (index, top row, width, rows) one band; the
-/// first band clears the target, later ones load it.
 fn encode_pass(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
+    bind_group: &crate::bind_group::OffsetBindGroup<2>,
+    sampler: &crate::bind_group::LinearSampler,
     output: &wgpu::TextureView,
     timestamp_queries: Option<&wgpu::QuerySet>,
-    band: Option<(u32, u32, u32, u32)>,
+    Piece { scissor, first }: Piece,
 ) {
-    let load = match band {
-        Some((index, ..)) if index > 0 => wgpu::LoadOp::Load,
-        _ => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+    let load = if first {
+        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+    } else {
+        wgpu::LoadOp::Load
     };
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("alpha2 runtime effect pass"),
@@ -503,9 +516,10 @@ fn encode_pass(
         multiview_mask: None,
     });
     pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, bind_group, &[]);
-    if let Some((_, top, width, rows)) = band {
-        pass.set_scissor_rect(0, top, width, rows);
+    bind_group.set(&mut pass, 0);
+    sampler.set(&mut pass);
+    if let Some(scissor) = scissor {
+        pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
     }
     pass.draw(0..3, 0..1);
 }

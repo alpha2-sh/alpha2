@@ -2,8 +2,9 @@ use alpha2_media::{
     BitDepth, Chroma, ChromaLocation, ColorMetadata, PixelLayout, PlaneLayout, YuvEncoding,
 };
 
-use super::{Picture, pack};
-use crate::PlaneTarget;
+use super::{Picture, pack_with};
+use crate::layout_pack::Bands;
+use crate::{PlaneTarget, RenderError};
 
 fn layout(chroma: Chroma, bit_depth: BitDepth, alpha: bool) -> PixelLayout {
     PixelLayout {
@@ -15,6 +16,21 @@ fn layout(chroma: Chroma, bit_depth: BitDepth, alpha: bool) -> PixelLayout {
 }
 
 const CENTRED: YuvEncoding = YuvEncoding::new(ColorMetadata::EXPORT, ChromaLocation::Center);
+
+fn pack<R: Fn(usize, &mut [[f32; 4]]) + Sync>(
+    picture: &Picture<'_, R>,
+    encoding: YuvEncoding,
+    layout: PixelLayout,
+    targets: &mut [PlaneTarget<'_>],
+) -> Result<(), RenderError> {
+    pack_with(
+        picture,
+        encoding,
+        layout,
+        targets,
+        &crate::CpuRenderer::new(1).workers as &dyn Bands,
+    )
+}
 
 fn packed(
     width: usize,

@@ -33,7 +33,32 @@ fn main() {
         "interop.rs",
     );
     // docs.rs documents without linking and has no FFmpeg headers to compile against.
-    if env::var_os("CARGO_FEATURE_HWDEVICE").is_none() || docs_rs() {
+    if docs_rs() {
+        return;
+    }
+    if env::var("CARGO_CFG_TARGET_VENDOR").as_deref() == Ok("apple")
+        && env::var_os("CARGO_FEATURE_IOSURFACE_IMPORT").is_some()
+    {
+        compile_c_shim(
+            "alpha2_native_gpu_metal",
+            &["c/metal.m"],
+            &["include".into()],
+            &[],
+            &["-fobjc-arc"],
+            "failed to compile native Metal helper",
+        );
+        for framework in [
+            "CoreFoundation",
+            "CoreMedia",
+            "CoreVideo",
+            "IOSurface",
+            "Metal",
+            "VideoToolbox",
+        ] {
+            println!("cargo:rustc-link-lib=framework={framework}");
+        }
+    }
+    if env::var_os("CARGO_FEATURE_HWDEVICE").is_none() {
         return;
     }
     emit_ffmpeg_dev_rpath();
@@ -50,26 +75,6 @@ fn main() {
             // The Vulkan loader is opened at run time, not linked, so hosts without Vulkan still
             // start.
             println!("cargo:rustc-link-lib=dl");
-        }
-        "macos" => {
-            compile_c_shim(
-                "alpha2_native_gpu_metal",
-                &["c/metal.m"],
-                &["include".into()],
-                &[],
-                &["-fobjc-arc"],
-                "failed to compile native Metal helper",
-            );
-            for framework in [
-                "CoreFoundation",
-                "CoreMedia",
-                "CoreVideo",
-                "IOSurface",
-                "Metal",
-                "VideoToolbox",
-            ] {
-                println!("cargo:rustc-link-lib=framework={framework}");
-            }
         }
         "windows" => {
             compile_c_shim(

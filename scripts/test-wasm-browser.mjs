@@ -27,7 +27,7 @@ import {
   perfCases,
   videoImportCases,
 } from "./lib/wasm-browser/cases.mjs";
-import { page } from "./lib/wasm-browser/page.mjs";
+import { IMPORTS, page } from "./lib/wasm-browser/page.mjs";
 import { runCases } from "./lib/wasm-browser/run-cases.mjs";
 
 const root = resolve(import.meta.dirname, "..");
@@ -71,10 +71,35 @@ if (!existsSync(join(root, "packages/alpha2/wasm/alpha2_wasm_bg.wasm"))) {
 // Plugin cases load every plugin crate packed for the browser, wasm only, at the path it has
 // under plugins/.
 if (names.some((name) => name.startsWith("plugin-"))) {
+  const metadata = spawnSync(
+    "cargo",
+    [
+      "metadata",
+      "--no-deps",
+      "--format-version",
+      "1",
+      "--manifest-path",
+      join(root, "plugins", "Cargo.toml"),
+    ],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (metadata.status !== 0) {
+    process.stdout.write("FAIL cargo metadata of plugins/ failed\n");
+    process.exit(1);
+  }
+  const nativeOnly = new Set(
+    JSON.parse(metadata.stdout)
+      .packages.filter(
+        (crate) => crate.metadata?.["alpha2-plugin"]?.wasm === false,
+      )
+      .map((crate) => resolve(crate.manifest_path, "..")),
+  );
   const browserPlugins = ["first-party", "fixtures"].flatMap((group) =>
     readdirSync(join(root, "plugins", group))
-      .filter((name) =>
-        existsSync(join(root, "plugins", group, name, "descriptor.json")),
+      .filter(
+        (name) =>
+          existsSync(join(root, "plugins", group, name, "descriptor.json")) &&
+          !nativeOnly.has(join(root, "plugins", group, name)),
       )
       .map((name) => join(group, name)),
   );
@@ -128,13 +153,30 @@ const server = createServer(async (request, response) => {
     response.end(page(body(), videoImportCases.has(name)));
     return;
   }
-  const path = servedFile(root, url.pathname);
+  const WORKER_MODULES = "/worker-modules";
+  const workerModule = url.pathname.startsWith(`${WORKER_MODULES}/`);
+  const path = servedFile(
+    root,
+    workerModule ? url.pathname.slice(WORKER_MODULES.length) : url.pathname,
+  );
   if (path === null) {
     response.writeHead(403).end();
     return;
   }
   try {
-    const bytes = await readFile(path);
+    let bytes = await readFile(path);
+    if (workerModule && /\.m?js$/.test(path))
+      bytes = Buffer.from(
+        bytes
+          .toString("utf8")
+          .replace(
+            /(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^"'./][^"']*)\2/g,
+            (whole, keyword, quote, specifier) =>
+              Object.hasOwn(IMPORTS, specifier)
+                ? `${keyword}${quote}${WORKER_MODULES}${IMPORTS[specifier]}${quote}`
+                : whole,
+          ),
+      );
     const type = {
       ".wasm": "application/wasm",
       ".js": "text/javascript",
@@ -145,6 +187,22 @@ const server = createServer(async (request, response) => {
       ".webm": "video/webm",
     }[path.slice(path.lastIndexOf("."))];
     response.setHeader("content-type", type ?? "application/octet-stream");
+    const range = /^bytes=(\d+)-(\d+)$/.exec(request.headers.range ?? "");
+    if (range) {
+      const first = Number(range[1]);
+      const last = Math.min(Number(range[2]), bytes.length - 1);
+      if (first > last) {
+        response
+          .writeHead(416, { "content-range": `bytes */${bytes.length}` })
+          .end();
+        return;
+      }
+      response.writeHead(206, {
+        "content-range": `bytes ${first}-${last}/${bytes.length}`,
+      });
+      response.end(bytes.subarray(first, last + 1));
+      return;
+    }
     response.end(bytes);
   } catch {
     response.writeHead(404).end();

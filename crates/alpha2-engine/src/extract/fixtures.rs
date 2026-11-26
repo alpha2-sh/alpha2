@@ -40,6 +40,8 @@ pub fn digest_descriptor(input: InputSpec) -> Descriptor {
             channels: vec!["hi".to_owned(), "lo".to_owned()],
             interpolation: Some(DataInterpolation::Hold),
             suggest: None,
+            label: None,
+            description: None,
         }],
     }
 }

@@ -34,6 +34,9 @@ pub struct FrameMeasurement {
     pub measured_ms: f64,
     /// Milliseconds the plan predicted.
     pub predicted_ms: f64,
+    /// The part of `predicted_ms` planned at the device rate; the rest was planned at passes'
+    /// own measured rates.
+    pub device_rated_ms: f64,
     /// The device rate the frame was planned at.
     pub planned_ms_per_unit_pixel: f64,
     /// The submission budget the frame was planned under, in milliseconds.
@@ -168,12 +171,16 @@ impl GpuRate {
         self.state().calibrating = false;
     }
 
-    /// Folds in a measured frame. Any trust lowers the rate by at most a tenth per frame, never
-    /// below the floor; an exact span over the prediction raises it to [`MARGIN`] times the
-    /// measurement.
+    /// Folds in a measured frame, its work planned at passes' own rates counted at their
+    /// prediction, so only the rest moves the device rate. Any trust lowers the rate by at most a
+    /// tenth per frame, never below the floor; an exact span over the prediction raises it to
+    /// [`MARGIN`] times the measurement.
     pub fn observe(&self, frame: FrameMeasurement) {
-        let measured = frame.measured_ms / frame.predicted_ms * frame.planned_ms_per_unit_pixel;
-        if !(measured.is_finite() && measured >= 0.0 && frame.predicted_ms > 0.0) {
+        let device_predicted_ms = frame.device_rated_ms.clamp(0.0, frame.predicted_ms);
+        let pass_rated_ms = frame.predicted_ms - device_predicted_ms;
+        let device_measured_ms = (frame.measured_ms - pass_rated_ms).max(0.0);
+        let measured = device_measured_ms / (device_predicted_ms / frame.planned_ms_per_unit_pixel);
+        if !(measured.is_finite() && measured >= 0.0 && device_predicted_ms > 0.0) {
             return;
         }
         let mut state = self.state();
@@ -184,7 +191,7 @@ impl GpuRate {
             state.ms_per_unit_pixel =
                 Some((rate * SLOWEST_FALL_PER_FRAME).max(measured).max(floor));
         } else if frame.trust == SpanTrust::Exact
-            && frame.measured_ms > frame.predicted_ms
+            && device_measured_ms > device_predicted_ms
             && frame.measured_ms >= frame.budget_ms * RAISING_SHARE_OF_BUDGET
         {
             state.ms_per_unit_pixel = Some(MARGIN * measured);
@@ -237,6 +244,7 @@ mod tests {
         FrameMeasurement {
             measured_ms,
             predicted_ms,
+            device_rated_ms: predicted_ms,
             planned_ms_per_unit_pixel: predicted_ms,
             budget_ms: 1_000.0,
             trust,
@@ -281,6 +289,32 @@ mod tests {
         );
         rate.observe(frame(400.0, 2.0, SpanTrust::Exact));
         assert_eq!(rate.ms_per_unit_pixel(), Some(800.0));
+    }
+
+    #[test]
+    fn only_the_work_planned_at_the_device_rate_moves_it() {
+        let rate = GpuRate::default();
+        rate.seed(1.0);
+        let piloted = |measured_ms| FrameMeasurement {
+            device_rated_ms: 100.0,
+            ..frame(measured_ms, 400.0, SpanTrust::Exact)
+        };
+        rate.observe(piloted(700.0));
+        assert_eq!(
+            rate.ms_per_unit_pixel(),
+            Some(3200.0),
+            "the device-rated 100 ms ran 400 ms"
+        );
+        let all_piloted = FrameMeasurement {
+            device_rated_ms: 0.0,
+            ..frame(4_000.0, 400.0, SpanTrust::Exact)
+        };
+        rate.observe(all_piloted);
+        assert_eq!(
+            rate.ms_per_unit_pixel(),
+            Some(3200.0),
+            "a frame of piloted work leaves the device rate"
+        );
     }
 
     #[test]

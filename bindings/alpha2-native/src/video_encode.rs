@@ -9,6 +9,7 @@ use crate::convert::{
 };
 use crate::encode::{EncodeStageTimings, timed};
 use crate::partial::{OutputTarget, PartialOutput, PublishReport, SeekNeed};
+use crate::video_backend::VideoReceiveError;
 use alpha2_ffmpeg_bridge::OutputFile;
 use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
 use alpha2_media::{
@@ -137,7 +138,7 @@ pub struct NativeVideoEncodeSink {
     pub(crate) partial: PartialOutput,
     /// How the finished file was published.
     pub(crate) published: Option<PublishReport>,
-    pub(crate) encoder: crate::video_backend::VideoEncoderBackend,
+    pub(crate) encoder: crate::video_backend::TaggedVideoEncoder,
     pub(crate) stream_index: i32,
     pub(crate) encoder_time_base: AVRational,
     /// One frame in `encoder_time_base`.
@@ -309,18 +310,21 @@ impl NativeVideoEncodeSink {
                     .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
                     self.partial.wrote(bytes)?;
                 }
-                Err(RsmpegError::EncoderDrainError) if !flushing => return Ok(()),
-                Err(RsmpegError::EncoderFlushedError | RsmpegError::EncoderDrainError)
-                    if flushing =>
-                {
+                Err(VideoReceiveError::Codec(RsmpegError::EncoderDrainError)) if !flushing => {
                     return Ok(());
                 }
-                Err(error) => {
+                Err(VideoReceiveError::Codec(
+                    RsmpegError::EncoderFlushedError | RsmpegError::EncoderDrainError,
+                )) if flushing => {
+                    return Ok(());
+                }
+                Err(VideoReceiveError::Codec(error)) => {
                     return Err(encode_adapter_error_at(
                         "video encoder packet drain failed",
                         error,
                     ));
                 }
+                Err(VideoReceiveError::Filter(error)) => return Err(error),
             }
         }
     }

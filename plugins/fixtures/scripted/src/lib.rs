@@ -9,6 +9,16 @@
 //! that many times with one interval of `quiet`. As a native library, `park_thread: true` starts a
 //! thread at `begin` that runs the library's code until the process exits. `log` (`text`, `lines`)
 //! makes `begin` log `text` that many times, and `fail_message` sets the `fail_at` message.
+//! `path` names a resource whose path, as the host hands it out, `end` emits as a word of
+//! `words`, or `none` when the host gives none.
+//!
+//! As a native library, for isolation tests: a delivery index in `segv_at` makes that delivery
+//! write through a null pointer, in `write_input_at` write into its frame, in `sleep_at` sleep
+//! for good, and in `print_at` print to standard output first; `spawn_at` (`delivery`,
+//! `pid_file`, `then`) starts a long-lived process, writes its id to `pid_file`, then sleeps for
+//! good, or with `then` `abort` or `return` does that. `report` names a file `begin` writes this
+//! process's id and open descriptors to, and `stderr_lines` makes `begin` write that many lines to
+//! standard error.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
 use serde_json::Value;
@@ -23,7 +33,13 @@ pub struct Scripted {
     spin_at: Option<u64>,
     hog_at: Option<u64>,
     abort_at: Option<u64>,
+    segv_at: Option<u64>,
+    write_input_at: Option<u64>,
+    sleep_at: Option<u64>,
+    print_at: Option<u64>,
+    spawn_at: Option<(u64, String, String)>,
     resource: Option<String>,
+    path: Option<String>,
     flood: Option<(u64, bool)>,
     delivered: u64,
 }
@@ -64,6 +80,66 @@ fn flood(calls: u64, ignore_refusal: bool) -> Result<(), Error> {
 #[cfg(not(target_arch = "wasm32"))]
 fn flood(_calls: u64, _ignore_refusal: bool) -> Result<(), Error> {
     Err("flood runs only as wasm".into())
+}
+
+/// Sleeps until the process ends.
+fn sleep_for_good() -> ! {
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+}
+
+/// Starts a process that lives about a minute and writes its id to `pid_file`.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_long_lived(pid_file: &str) -> Result<(), Error> {
+    let mut command = if cfg!(windows) {
+        let mut command = std::process::Command::new("ping");
+        command.args(["-n", "60", "127.0.0.1"]);
+        command
+    } else {
+        let mut command = std::process::Command::new("sleep");
+        command.arg("60");
+        command
+    };
+    let child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| Error::from(error.to_string()))?;
+    std::fs::write(pid_file, child.id().to_string()).map_err(|error| error.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_long_lived(_pid_file: &str) -> Result<(), Error> {
+    Err("spawn_at runs only as a native library".into())
+}
+
+/// Writes this process's id and its open descriptors, one per line, to `path`.
+#[cfg(not(target_arch = "wasm32"))]
+fn report(path: &str) -> Result<(), Error> {
+    let directory = if cfg!(target_os = "linux") {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    let mut descriptors = std::fs::read_dir(directory)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i32>().ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    descriptors.sort_unstable();
+    let lines = std::iter::once(std::process::id().to_string())
+        .chain(descriptors.iter().map(ToString::to_string))
+        .collect::<Vec<_>>();
+    std::fs::write(path, lines.join("\n")).map_err(|error| error.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn report(_path: &str) -> Result<(), Error> {
+    Err("report runs only as a native library".into())
 }
 
 /// A thread that wakes every millisecond in this library's code, after `destroy` too.
@@ -129,6 +205,17 @@ impl Extractor for Scripted {
         if context.params.get("park_thread") == Some(&Value::Bool(true)) {
             park_thread()?;
         }
+        if let Some(path) = context.params.get("report").and_then(Value::as_str) {
+            report(path)?;
+        }
+        for line in 0..context
+            .params
+            .get("stderr_lines")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+        {
+            eprintln!("{line:08} {}", "e".repeat(91));
+        }
         if let Some(log) = context.params.get("log") {
             let text = log.get("text").and_then(Value::as_str).unwrap_or_default();
             for _ in 0..log.get("lines").and_then(Value::as_u64).unwrap_or(1) {
@@ -157,7 +244,30 @@ impl Extractor for Scripted {
             spin_at: index("spin_at"),
             hog_at: index("hog_at"),
             abort_at: index("abort_at"),
+            segv_at: index("segv_at"),
+            write_input_at: index("write_input_at"),
+            sleep_at: index("sleep_at"),
+            print_at: index("print_at"),
+            spawn_at: context.params.get("spawn_at").and_then(|spawn| {
+                Some((
+                    spawn.get("delivery")?.as_u64()?,
+                    spawn.get("pid_file")?.as_str()?.to_owned(),
+                    spawn
+                        .get("then")
+                        .and_then(Value::as_str)
+                        .unwrap_or("sleep")
+                        .to_owned(),
+                ))
+            }),
             resource,
+            path: context
+                .params
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|name| {
+                    host.resource_path(name)
+                        .map_or_else(|| "none".to_owned(), |path| path.display().to_string())
+                }),
             flood: context.params.get("flood").map(|flood| {
                 (
                     flood.get("calls").and_then(Value::as_u64).unwrap_or(0),
@@ -171,7 +281,7 @@ impl Extractor for Scripted {
         })
     }
 
-    fn video(&mut self, _frame: &Frame<'_>, out: &mut Emitter) -> Result<(), Error> {
+    fn video(&mut self, frame: &Frame<'_>, out: &mut Emitter) -> Result<(), Error> {
         let delivery = self.delivered;
         self.delivered += 1;
         assert!(
@@ -185,8 +295,34 @@ impl Extractor for Scripted {
                 .unwrap_or_else(|| format!("scripted failure at delivery {delivery}"))
                 .into());
         }
+        if self.print_at == Some(delivery) {
+            println!("text a runtime prints to standard output at delivery {delivery}");
+        }
         if self.abort_at == Some(delivery) {
             std::process::abort();
+        }
+        if self.segv_at == Some(delivery) {
+            // SAFETY: not sound by design: the write faults and the process ends there.
+            unsafe {
+                std::ptr::write_volatile(std::hint::black_box(std::ptr::null_mut::<u8>()), 1);
+            };
+        }
+        if self.write_input_at == Some(delivery) {
+            // SAFETY: not sound by design: the frame is borrowed read-only from the host.
+            unsafe { frame.data.as_ptr().cast_mut().write_volatile(1) };
+        }
+        if self.sleep_at == Some(delivery) {
+            sleep_for_good();
+        }
+        if let Some((_, pid_file, then)) =
+            self.spawn_at.as_ref().filter(|(at, _, _)| *at == delivery)
+        {
+            spawn_long_lived(pid_file)?;
+            match then.as_str() {
+                "abort" => std::process::abort(),
+                "return" => {}
+                _ => sleep_for_good(),
+            }
         }
         if self.spin_at == Some(delivery) {
             loop {
@@ -214,6 +350,9 @@ impl Extractor for Scripted {
     fn end(&mut self, out: &mut Emitter) -> Result<(), Error> {
         if let Some(text) = &self.resource {
             out.word("words", 0, 1, text, None);
+        }
+        if let Some(path) = &self.path {
+            out.word("words", 1, 2, path, None);
         }
         self.at_end.iter().try_for_each(|item| emit(out, item))
     }

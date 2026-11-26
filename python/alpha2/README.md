@@ -246,12 +246,20 @@ with alpha2.HostClient() as client:
   `plugin={"manifest": ..., "sha256": ...}` and no extractor. The host fetches the manifest (an
   `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact
   sandboxed. A plugin that is refused, does not load, traps or runs past its limits fails with a
-  `PLUGIN_*` code.
+  `PLUGIN_*` code; the error's `details` carries what the host sent with it, such as
+  `{"slot", "reason"}` for `PLUGIN_RESOURCE_INVALID`.
+- A plugin whose manifest declares resource slots takes the user's own files, such as a model
+  already on disk: `"supplied"` in `plugin=` maps a slot to a path (relative paths resolve against
+  the working directory). The data records the files the plugin read by name and SHA-256 in
+  `made_by["plugin"]["supplied"]`.
 - `HostClient(plugins={...})` decides what the client's hosts allow: `"mode"` (`"off"`, `"wasm"`
   by default, or `"native"`), `"origins"` (`"none"` or the `https:` origins manifests and files
-  may come from) and `"root"` (the directory local manifests must lie under, or `"none"`). Only
-  under `"mode": "native"` does a request's `"allow_native": True` let a native artifact run,
-  with the host's rights.
+  may come from), `"root"` (the directory local manifests must lie under, or `"none"`),
+  `"isolation"` (`"process"` by default: a native artifact runs in a worker process per run, so a
+  crash or a hang fails the request and not the host; or `"in-process"`) and `"resource_root"`
+  (where supplied files may lie: `"none"` by default, `"any"` or a directory). Only under
+  `"mode": "native"` does a request's `"allow_native": True` let a native artifact run, with the
+  host's rights.
 
 ## Apply data with edit operations
 

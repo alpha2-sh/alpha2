@@ -266,6 +266,12 @@ export const MAX_SHAPE_DEPTH = 32;
 /** Mirrors `alpha2_model::MAX_SHAPE_ITEMS`. */
 export const MAX_SHAPE_ITEMS = 1024;
 
+/** Mirrors `alpha2_model::MAX_SUPPLIED_FILES`. */
+export const MAX_SUPPLIED_FILES = 1024;
+
+/** Mirrors `alpha2_model::MAX_SUPPLIED_NAME_BYTES`. */
+export const MAX_SUPPLIED_NAME_BYTES = 512;
+
 /** Mirrors `alpha2_model::MAX_SVG_DOCUMENT_BYTES`. */
 export const MAX_SVG_DOCUMENT_BYTES = 33554432;
 
@@ -413,6 +419,7 @@ export const COLOR_PRIMARIES_VALUES: readonly ColorPrimaries[] = [
   "bt601",
   "bt709",
   "bt2020",
+  "display_p3",
 ];
 
 /** Every {@link ColorRange}, in the model's order. */
@@ -1282,7 +1289,7 @@ export interface ColorPipeline {
 /**
  * RGB primary chromaticities a source or export declares.
  */
-export type ColorPrimaries = "bt601" | "bt709" | "bt2020";
+export type ColorPrimaries = "bt601" | "bt709" | "bt2020" | "display_p3";
 
 /**
  * Nominal encoded component range.
@@ -2552,6 +2559,14 @@ export interface MadeByPlugin {
    */
   readonly artifact_sha256: string;
   /**
+   * SHA-256 of the manifest's bytes, 64 lowercase hex digits; it covers the pinned resources.
+   */
+  readonly manifest_sha256: string;
+  /**
+   * The slot files the run read, sorted by name; at most `MAX_SUPPLIED_FILES`.
+   */
+  readonly supplied?: readonly SuppliedFile[];
+  /**
    * The package's semantic version.
    */
   readonly version: string;
@@ -3806,6 +3821,25 @@ export interface Subpath {
    * The vertices, in order.
    */
   readonly vertices: readonly PathVertex[];
+}
+
+/**
+ * A file of a resource slot that a plugin run read, by name and content, never by path.
+ */
+export interface SuppliedFile {
+  /**
+   * Its length in bytes.
+   */
+  readonly bytes: number;
+  /**
+   * The resource name the plugin read it by, `<slot>` or `<slot>/<relative path>`; at most
+   * `MAX_SUPPLIED_NAME_BYTES` bytes.
+   */
+  readonly name: string;
+  /**
+   * SHA-256 of its bytes, as 64 lowercase hexadecimal digits.
+   */
+  readonly sha256: string;
 }
 
 /**

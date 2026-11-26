@@ -1,12 +1,13 @@
 use std::time::Duration;
 use web_time::Instant;
 
+use crate::prepared_frame::FramePack;
 use crate::yuv::SourceWorkTicket;
 use crate::{
     GraphError, PendingSourceWork, RenderError, RenderGraph, RenderedTexture, Renderer,
     Yuv420pReadback,
 };
-use alpha2_media::YuvEncoding;
+use alpha2_media::{PixelLayout, YuvEncoding};
 
 /// Where one frame's graph construction and submission spent its time.
 ///
@@ -89,15 +90,15 @@ impl Renderer {
     ) -> Result<RenderedTexture, RenderError> {
         // Held past the tickets, which revert to pending if the frame fails.
         let frame = self.frame_lock.hold();
-        let mut command_encoder = self.command_encoder("alpha2 frame encoder");
         let source_work = begin_source_work(&frame, sources);
-        for work in &source_work {
-            work.encode(&mut command_encoder);
-        }
-        let graph_work = self
-            .encode_graph(graph, &mut command_encoder)
+        let start = self
+            .prepare_graph(graph, &source_work, FramePack::Nothing)
             .map_err(GraphError::into_render_error)?;
-        stage_source_submissions(self.gpu.queue(), &source_work)?;
+        let mut command_encoder = self.command_encoder("alpha2 frame encoder");
+        let graph_work = self
+            .encode_graph(start, graph, &mut command_encoder, &source_work, None)
+            .map_err(GraphError::into_render_error)?;
+        stage_source_submissions(&source_work)?;
         graph_work.flush_uniforms(self.gpu.queue());
         // A rejected submission returns before anything of the frame is kept.
         self.submit([command_encoder.finish()])?;
@@ -123,7 +124,13 @@ impl Renderer {
         sources: &[&PendingSourceWork],
         encoding: YuvEncoding,
     ) -> Result<Yuv420pReadback, RenderError> {
-        self.render_graph_yuv420p_measured(graph, sources, encoding, None)
+        self.render_graph_readback_measured(
+            graph,
+            sources,
+            encoding,
+            ReadbackKind::PackedYuv420p,
+            None,
+        )
     }
 
     /// [`Renderer::render_graph_yuv420p`] that also writes every span after `graph_build` to
@@ -138,7 +145,39 @@ impl Renderer {
         encoding: YuvEncoding,
         timings: &mut FrameSubmitTimings,
     ) -> Result<Yuv420pReadback, RenderError> {
-        self.render_graph_yuv420p_measured(graph, sources, encoding, Some(timings))
+        self.render_graph_readback_measured(
+            graph,
+            sources,
+            encoding,
+            ReadbackKind::PackedYuv420p,
+            Some(timings),
+        )
+    }
+
+    /// Renders a graph and packs the result into `layout`'s planes on the GPU for
+    /// [`Yuv420pReadback::finish_into_planes`], in one command buffer with its sources' pending
+    /// work.
+    ///
+    /// With `timings`, also writes every span after `graph_build` to them and samples the frame's
+    /// GPU time ([`Renderer::take_frame_gpu_times`]).
+    ///
+    /// # Errors
+    /// As [`Self::render_graph_yuv420p`] and [`Self::begin_layout_readback`].
+    pub fn render_graph_layout_readback(
+        &self,
+        graph: &RenderGraph<'_>,
+        sources: &[&PendingSourceWork],
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        timings: Option<&mut FrameSubmitTimings>,
+    ) -> Result<Yuv420pReadback, RenderError> {
+        self.render_graph_readback_measured(
+            graph,
+            sources,
+            encoding,
+            ReadbackKind::Layout(layout),
+            timings,
+        )
     }
 
     /// [`Renderer::render_graph_yuv420p_timed`] packing into caller-owned NV12 plane textures
@@ -158,33 +197,36 @@ impl Renderer {
         let mut clock = StageClock::start(true);
         let mut collected = FrameSubmitTimings::default();
         let frame = self.frame_lock.hold();
-        let mut command_encoder = self.command_encoder("alpha2 render and NV12 pack encoder");
         self.check_submitted_work()?;
         let source_work = begin_source_work(&frame, sources);
-        for work in &source_work {
-            work.encode(&mut command_encoder);
-        }
+        let start = self
+            .prepare_graph(graph, &source_work, FramePack::Nv12)
+            .map_err(GraphError::into_render_error)?;
+        let mut command_encoder = self.command_encoder("alpha2 render and NV12 pack encoder");
         let sample = self
             .frame_gpu_timer()
             .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
-        if let Some(sample) = &sample {
-            sample.graph_start(&mut command_encoder);
-        }
-        let graph_work = self
-            .encode_graph(graph, &mut command_encoder)
+        let mut graph_work = self
+            .encode_graph(
+                start,
+                graph,
+                &mut command_encoder,
+                &source_work,
+                sample.as_ref(),
+            )
             .map_err(GraphError::into_render_error)?;
         if let Some(sample) = &sample {
             sample.graph_end(&mut command_encoder);
         }
-        let pack =
-            self.encode_nv12_pack(graph_work.texture(), planes, encoding, &mut command_encoder)?;
+        let (output, uniforms) = graph_work.output_and_uniforms();
+        self.encode_nv12_pack_into(output, planes, encoding, &mut command_encoder, uniforms)?;
         if let Some(sample) = &sample {
             sample.pack_end(&mut command_encoder);
         }
         // No readback, so the canary goes in a buffer of its own.
         let (canary_buffer, canary) = self.canaries.encode_own(&self.gpu, &mut command_encoder)?;
         collected.command_encode = clock.lap();
-        stage_source_submissions(self.gpu.queue(), &source_work)?;
+        stage_source_submissions(&source_work)?;
         collected.source_acquire = clock.lap();
         graph_work.flush_uniforms(self.gpu.queue());
         let command_buffer = command_encoder.finish();
@@ -196,7 +238,6 @@ impl Renderer {
         }
         self.submission_canaries
             .track(&self.gpu, canary_buffer, canary);
-        drop(pack);
         collected.queue_lock_wait = submitted.timings.queue_lock_wait;
         collected.queue_submit = submitted.timings.queue_submit;
         collected.lease_retire = submitted.lease_retire;
@@ -211,47 +252,72 @@ impl Renderer {
         Ok(())
     }
 
-    fn render_graph_yuv420p_measured(
+    fn render_graph_readback_measured(
         &self,
         graph: &RenderGraph<'_>,
         sources: &[&PendingSourceWork],
         encoding: YuvEncoding,
+        readback: ReadbackKind,
         timings: Option<&mut FrameSubmitTimings>,
     ) -> Result<Yuv420pReadback, RenderError> {
         let measure = timings.is_some();
         let mut clock = StageClock::start(measure);
         let mut collected = FrameSubmitTimings::default();
         let frame = self.frame_lock.hold();
-        let mut command_encoder =
-            self.command_encoder("alpha2 render and YUV420P readback encoder");
         let source_work = begin_source_work(&frame, sources);
-        for work in &source_work {
-            work.encode(&mut command_encoder);
-        }
+        let start = self
+            .prepare_graph(
+                graph,
+                &source_work,
+                match readback {
+                    ReadbackKind::PackedYuv420p => FramePack::Yuv420p,
+                    ReadbackKind::Layout(layout) => FramePack::Layout(layout),
+                },
+            )
+            .map_err(GraphError::into_render_error)?;
+        let mut command_encoder = self.command_encoder(match readback {
+            ReadbackKind::PackedYuv420p => "alpha2 render and YUV420P readback encoder",
+            ReadbackKind::Layout(_) => "alpha2 render and layout readback encoder",
+        });
         // Only an export's timed frames are sampled.
         let sample = measure
             .then(|| self.frame_gpu_timer())
             .flatten()
             .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
-        if let Some(sample) = &sample {
-            sample.graph_start(&mut command_encoder);
-        }
-        let graph_work = self
-            .encode_graph(graph, &mut command_encoder)
+        let mut graph_work = self
+            .encode_graph(
+                start,
+                graph,
+                &mut command_encoder,
+                &source_work,
+                sample.as_ref(),
+            )
             .map_err(GraphError::into_render_error)?;
         if let Some(sample) = &sample {
             sample.graph_end(&mut command_encoder);
         }
-        let readback_work =
-            self.encode_yuv420p_readback(graph_work.texture(), encoding, &mut command_encoder)?;
+        let (output, uniforms) = graph_work.output_and_uniforms();
+        let readback_work = match readback {
+            ReadbackKind::Layout(layout) => {
+                EncodedReadback::Layout(Box::new(self.encode_layout_readback(
+                    output,
+                    encoding,
+                    layout,
+                    &mut command_encoder,
+                    uniforms,
+                )?))
+            }
+            ReadbackKind::PackedYuv420p => EncodedReadback::Yuv420p(Box::new(
+                self.encode_yuv420p_readback(output, encoding, &mut command_encoder, uniforms)?,
+            )),
+        };
         if let Some(sample) = &sample {
             sample.pack_end(&mut command_encoder);
         }
         collected.command_encode = clock.lap();
-        stage_source_submissions(self.gpu.queue(), &source_work)?;
+        stage_source_submissions(&source_work)?;
         collected.source_acquire = clock.lap();
         graph_work.flush_uniforms(self.gpu.queue());
-        readback_work.flush_uniforms(self.gpu.queue());
         let command_buffer = command_encoder.finish();
         // Finishing the encoder and flushing uniforms count as command encoding.
         collected.command_encode = collected.command_encode.saturating_add(clock.lap());
@@ -264,12 +330,20 @@ impl Renderer {
         collected.lease_retire = submitted.lease_retire;
         // The submission timed itself; discard this lap.
         let _ = clock.lap();
-        let readback = self.complete_yuv420p_readback(
-            readback_work,
-            #[cfg(not(target_arch = "wasm32"))]
-            submitted.submission,
-            false,
-        );
+        let readback = match readback_work {
+            EncodedReadback::Yuv420p(work) => self.complete_yuv420p_readback(
+                *work,
+                #[cfg(not(target_arch = "wasm32"))]
+                submitted.submission,
+                false,
+            ),
+            EncodedReadback::Layout(work) => self.complete_layout_readback(
+                *work,
+                #[cfg(not(target_arch = "wasm32"))]
+                submitted.submission,
+                false,
+            ),
+        };
         for work in source_work {
             work.complete(self, false);
         }
@@ -283,13 +357,22 @@ impl Renderer {
     }
 }
 
-/// Flushes source uniforms and stages external textures' native waits and signals on the
-/// submission about to sample them.
+#[derive(Copy, Clone)]
+enum ReadbackKind {
+    PackedYuv420p,
+    Layout(PixelLayout),
+}
+
+enum EncodedReadback {
+    Yuv420p(Box<crate::readback::EncodedYuv420pReadback>),
+    Layout(Box<crate::readback::EncodedLayoutReadback>),
+}
+
+/// Stages external textures' native waits and signals on the submission about to sample them.
 ///
 /// Every graph submission must run this before `queue.submit`, or a decoder surface could be
 /// sampled before it is waited on and transitioned out of its decode layout.
 pub(crate) fn stage_source_submissions(
-    queue: &wgpu::Queue,
     source_work: &[SourceWorkTicket<'_>],
 ) -> Result<(), RenderError> {
     debug_assert!(
@@ -299,7 +382,6 @@ pub(crate) fn stage_source_submissions(
         "a source lease carried a staged native signal into the next frame"
     );
     for work in source_work {
-        work.flush_uniforms(queue);
         if !work.prepare_submission() {
             return Err(RenderError::ExternalTextureSync(None));
         }

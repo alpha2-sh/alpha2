@@ -37,14 +37,15 @@ pub enum VideoDecodeMode {
     Software,
 }
 
-/// How decoded video frames reach the renderer.
+/// How video frames move between the platform's codecs and the renderer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
 pub enum VideoFrameMode {
-    /// Hardware-decoded frames stay on the GPU when the GPU renderer's device imports them;
-    /// otherwise frames are copied into memory.
+    /// Hardware-decoded frames stay on the GPU when the GPU renderer's device imports them, and
+    /// on iOS exported frames are rendered into the encoder's pixel buffers; otherwise frames
+    /// are copied through memory.
     #[default]
     Auto,
-    /// Frames are always copied into memory, as on devices without the import.
+    /// Frames are always copied through memory both ways, as on devices without the import.
     Cpu,
 }
 
@@ -221,6 +222,7 @@ impl Progress {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map(|reason| Alpha2Error::Failed {
+                details: None,
                 code: "PROGRESS_CALLBACK_FAILED".into(),
                 reason: format!("the progress callback failed: {reason}"),
             })
@@ -883,7 +885,7 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(30))
             .expect("the outcome settles");
         match outcome {
-            Err(Alpha2Error::Failed { code, reason }) => {
+            Err(Alpha2Error::Failed { code, reason, .. }) => {
                 assert_eq!(code, "INTERNAL");
                 assert!(reason.contains("the backend broke"), "{reason}");
             }
@@ -1092,7 +1094,7 @@ mod tests {
         for (at, name) in [(1, "first"), (u64::MAX, "last")] {
             let (output, outcome) = export_with(Arc::new(FailsAt(at)), name);
             match outcome {
-                Err(Alpha2Error::Failed { code, reason }) => {
+                Err(Alpha2Error::Failed { code, reason, .. }) => {
                     assert_eq!(code, "PROGRESS_CALLBACK_FAILED", "{name}");
                     assert!(reason.contains("progress callback"), "{reason}");
                     assert!(reason.contains("the app broke"), "{reason}");

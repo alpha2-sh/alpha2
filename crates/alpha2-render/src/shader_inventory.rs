@@ -4,8 +4,8 @@
 //! naga accepts can still fail in a browser.
 
 use alpha2_shaders::{
-    CANVAS_PRESENT_WGSL, COMPOSITE_WGSL, FULLSCREEN_TEXTURE_QUAD_WGSL, READBACK_PACK_WGSL,
-    RGB_TO_YUV420_WGSL, RGBA_PRESENT_WGSL, YUV_REPACK_WGSL, YUV_TO_LINEAR_WGSL,
+    CANVAS_PRESENT_WGSL, COMPOSITE_WGSL, FULLSCREEN_TEXTURE_QUAD_WGSL, LAYOUT_PACK_WGSL,
+    READBACK_PACK_WGSL, RGB_TO_YUV420_WGSL, RGBA_PRESENT_WGSL, YUV_REPACK_WGSL, YUV_TO_LINEAR_WGSL,
     YUV16_TO_LINEAR_WGSL,
 };
 
@@ -27,6 +27,7 @@ pub fn builtin_wgsl_modules() -> Vec<(String, String)> {
         ("canvas-present", CANVAS_PRESENT_WGSL),
         ("fullscreen-quad", FULLSCREEN_TEXTURE_QUAD_WGSL),
         ("composite", COMPOSITE_WGSL),
+        ("layout-pack", LAYOUT_PACK_WGSL),
         ("readback-pack", READBACK_PACK_WGSL),
         ("rgba-present", RGBA_PRESENT_WGSL),
         ("rgb-to-yuv420", RGB_TO_YUV420_WGSL),

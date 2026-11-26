@@ -179,7 +179,7 @@ impl std::error::Error for LutParseError {}
 #[derive(Debug)]
 pub(crate) struct RegisteredEffectResource {
     pub(crate) kind: EffectResourceKind,
-    pub(crate) _texture: wgpu::Texture,
+    pub(crate) texture: wgpu::Texture,
     pub(crate) view: wgpu::TextureView,
     pub(crate) metadata: wgpu::Buffer,
 }
@@ -254,15 +254,19 @@ impl Renderer {
                 contents: &metadata_bytes,
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        self.effect_resources_mut().insert(
+        let bind_groups = &self.retirement.bind_groups;
+        bind_groups.adopt_texture(&texture);
+        bind_groups.adopt_buffer(&metadata);
+        let replaced = self.effect_resources_mut().insert(
             id,
             crate::Shared::new(RegisteredEffectResource {
                 kind: EffectResourceKind::Lut3d,
-                _texture: texture,
+                texture,
                 view,
                 metadata,
             }),
         );
+        self.forget_effect_resources(replaced);
         // Results reference resources by id, and its pixels may have changed.
         self.clear_result_cache_for(crate::CacheInvalidation::EffectResources);
         Ok(())
@@ -270,16 +274,19 @@ impl Renderer {
 
     /// Removes one uploaded resource, clearing cached results; returns whether it existed.
     pub fn unregister_effect_resource(&self, id: &str) -> bool {
-        let removed = self.effect_resources_mut().remove(id).is_some();
-        if removed {
+        let removed = self.effect_resources_mut().remove(id);
+        let existed = removed.is_some();
+        self.forget_effect_resources(removed);
+        if existed {
             self.clear_result_cache_for(crate::CacheInvalidation::EffectResources);
         }
-        removed
+        existed
     }
 
     /// Removes all uploaded effect resources and clears the cached results.
     pub fn clear_effect_resources(&self) {
-        self.effect_resources_mut().clear();
+        let removed = std::mem::take(&mut *self.effect_resources_mut());
+        self.forget_effect_resources(removed.into_values());
         self.clear_result_cache_for(crate::CacheInvalidation::EffectResources);
     }
 
@@ -292,6 +299,20 @@ impl Renderer {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
             .cloned()
+    }
+
+    fn forget_effect_resources(
+        &self,
+        resources: impl IntoIterator<Item = crate::Shared<RegisteredEffectResource>>,
+    ) {
+        for resource in resources {
+            self.retirement
+                .bind_groups
+                .release_texture(&resource.texture);
+            self.retirement
+                .bind_groups
+                .release_buffer(&resource.metadata);
+        }
     }
 
     fn effect_resources_mut(&self) -> std::sync::RwLockWriteGuard<'_, EffectResourceRegistry> {

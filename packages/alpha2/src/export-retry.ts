@@ -7,7 +7,8 @@
  *
  * - `DEVICE_HUNG`, or a GPU loss recurring at the same frame, is never retried on the GPU; it moves
  *   to the CPU renderer when available, else stops.
- * - Memory exhaustion steps down to a smaller profile.
+ * - Memory exhaustion steps down to a smaller profile, then GPU memory exhaustion moves to the CPU
+ *   renderer when the client allows it.
  * - An encode failure retries once with the software video encoder when available.
  * - `RESOURCE_BUSY` retries unchanged after the longer of its `retryAfterMs` and the backoff.
  * - `DEFECT` (an engine panic or wasm trap) retries once, unchanged and at once, on a fresh worker
@@ -212,15 +213,26 @@ export function decideRetry(
   if (!isRetryableFailure(failure))
     return stop(`${failure.code} at ${failure.phase} is not helped by a retry`);
   if (!attemptsLeft) return stop(`all ${maxAttempts} attempts failed`);
-  if (MEMORY.has(failure.code))
-    return smaller
-      ? retry(
-          `${failure.code}: retrying with less in flight (${smaller.name})`,
-          { profile: smaller },
-        )
-      : stop(
-          `${failure.code} with the smallest profile (${last.profile.name}): nothing left to reduce`,
-        );
+  if (MEMORY.has(failure.code)) {
+    if (smaller)
+      return retry(
+        `${failure.code}: retrying with less in flight (${smaller.name})`,
+        { profile: smaller },
+      );
+    if (
+      failure.code === "OUT_OF_MEMORY" &&
+      failure.resource === "gpu" &&
+      last.renderer === "gpu" &&
+      options.cpuRenderer === true
+    )
+      return retry(
+        `${failure.code} with the smallest profile (${last.profile.name}): the GPU cannot hold the export; retrying on the CPU renderer`,
+        { renderer: "cpu" },
+      );
+    return stop(
+      `${failure.code} with the smallest profile (${last.profile.name}): nothing left to reduce`,
+    );
+  }
   if (failure.phase === "encode" && last.videoEncoder === "default") {
     if (options.softwareVideoEncoder !== false)
       return retry(

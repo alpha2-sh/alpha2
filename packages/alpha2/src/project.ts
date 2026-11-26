@@ -34,8 +34,10 @@ import { BUILTIN_EFFECT_RULES } from "./generated/builtin-effects.js";
 import { dataProblems } from "./project-data.js";
 import { shortestFloat32 } from "./float32.js";
 export {
+  bindableProperties,
   dataReferences,
   describeDataReference,
+  type BindableProperty,
   type DataOwner,
   type DataReference,
 } from "./project-data.js";

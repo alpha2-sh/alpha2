@@ -23,8 +23,8 @@ use alpha2_host_core::stills::{decode_still, still_format};
 use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends, VideoStream};
 use alpha2_host_core::{DecodePolicy, ProjectAudioRequest};
 use alpha2_media::{
-    AudioBlock, AudioBlockSink, CancelToken, ColorMetadata, Container, EncodeError, OutputPixels,
-    QualityLevel, SourceId, SpeakerLayout,
+    AudioBlock, AudioBlockSink, CancelToken, Container, EncodeError, OutputPixels, QualityLevel,
+    SourceId, SpeakerLayout,
 };
 use alpha2_model::{MediaKind, MediaSource, Project};
 use alpha2_render::{CpuRenderer, Renderer};
@@ -90,6 +90,7 @@ impl From<Alpha2Error> for Failure {
 
 pub(crate) fn failed(code: &str, reason: impl Into<String>) -> Alpha2Error {
     Alpha2Error::Failed {
+        details: None,
         code: code.into(),
         reason: reason.into(),
     }
@@ -332,7 +333,7 @@ fn attempt(
             QualityLevel::default(),
         )
         .map_err(|error| Alpha2Error::invalid(error.to_string()))?,
-        color: ColorMetadata::EXPORT,
+        color: exporter.encoding().color,
         keyframe_interval: u32::try_from(alpha2_host_core::encode_policy::keyframe_interval(rate))
             .unwrap_or(1),
         software,
@@ -422,11 +423,14 @@ fn attempt(
     if let Some(gpu_frames) = gpu_frames {
         sources = sources.with_surface_import(Arc::clone(&gpu_frames.import));
     }
+    let mut targets = gpu_frames
+        .and_then(GpuFrames::encoder_targets)
+        .filter(|_| !withheld_targets());
     let mut frames = 0;
     export_video(
         &snapshot,
         &mut exporter,
-        drawing.as_export(),
+        (drawing.as_export(), targets.as_deref_mut()),
         &mut texts,
         &mut sources,
         &mut sink,
@@ -462,6 +466,8 @@ fn attempt(
     let decode_diagnostics = layer_diagnostics(sources.dropped_layers());
     drop(sources);
     let surface_frames = drawing.gpu_frames().map_or(0, GpuFrames::imported);
+    let surface_fallbacks = drawing.gpu_frames().map_or(0, GpuFrames::fallbacks);
+    let in_place = drawing.gpu_frames().map_or(0, GpuFrames::rendered_in_place);
     sink.finish().map_err(encode)?;
     partial.finish(&job.cancel).map_err(encode)?;
     let report = json!({
@@ -476,6 +482,8 @@ fn attempt(
         "renderer": drawing.name(),
         "gpuUnavailable": drawing.gpu_unavailable(),
         "surfaceFrames": surface_frames,
+        "surfaceFallbacks": surface_fallbacks,
+        "framesRenderedInPlace": in_place,
         "decodeDiagnostics": decode_diagnostics,
         "frames": frames,
         "width": size.width,
@@ -485,6 +493,23 @@ fn attempt(
         output_path: request.output_path.clone(),
         report_json: report.to_string(),
     })
+}
+
+#[cfg(test)]
+fn withheld_targets() -> bool {
+    hooks::WITHHOLD_TARGETS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(not(test))]
+const fn withheld_targets() -> bool {
+    false
+}
+
+#[cfg(test)]
+pub(crate) mod hooks {
+    use std::sync::atomic::AtomicBool;
+
+    pub(crate) static WITHHOLD_TARGETS: AtomicBool = AtomicBool::new(false);
 }
 
 /// Waits while the session is paused; [`Alpha2Error::Aborted`] once the export is cancelled.
@@ -1198,7 +1223,7 @@ mod tests {
         });
         let (output, outcome) = export_with(&encoders, "audio", &wav);
         assert!(
-            matches!(&outcome, Err(Alpha2Error::Failed { code, reason })
+            matches!(&outcome, Err(Alpha2Error::Failed { code, reason, .. })
                 if code == "ENCODE_FAILED" && reason.contains("audio session")),
             "{outcome:?}"
         );

@@ -1205,7 +1205,7 @@ pub(crate) fn open_video_encoder(
     request: &VideoEncoderOpenRequest<'_>,
 ) -> Result<
     (
-        crate::video_backend::VideoEncoderBackend,
+        crate::video_backend::TaggedVideoEncoder,
         NativeVideoEncoderSelection,
     ),
     EncodeError,
@@ -1213,7 +1213,10 @@ pub(crate) fn open_video_encoder(
     let (candidates, refused) =
         video_encoder_candidates_and_refusals(request.config.codec, request.requested_name)?;
     match open_first_video_encoder(request, candidates) {
-        Ok((backend, selection)) => Ok((backend, with_probe_refusals(selection, refused))),
+        Ok((backend, selection)) => Ok((
+            crate::video_backend::TaggedVideoEncoder::new(backend, request.config.color)?,
+            with_probe_refusals(selection, refused),
+        )),
         // Probe refusals come first; a busy one among them decides the class.
         Err(EncodeError::EncodersRefused {
             message,

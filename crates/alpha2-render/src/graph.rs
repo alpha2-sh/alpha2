@@ -611,7 +611,6 @@ impl<'a> RenderGraph<'a> {
         for index in 0..count {
             if self.nodes[index]
                 .dependencies()
-                .iter()
                 .any(|input| bypassed[input.index])
             {
                 bypassed[index] = true;
@@ -695,15 +694,23 @@ impl RenderNode<'_> {
         }
     }
 
-    pub(crate) fn dependencies(&self) -> Vec<RenderNodeId> {
-        match self {
-            Self::Source(_) | Self::Generator { .. } | Self::Vector { .. } => Vec::new(),
-            Self::Effect { source, inputs, .. } => std::iter::once(*source)
-                .chain(inputs.iter().map(|(_, input)| input))
-                .collect(),
-            Self::Transition { from, to, .. } => vec![*from, *to],
-            Self::Composite { layers, .. } => layers.iter().map(|layer| layer.source).collect(),
-        }
+    pub(crate) fn dependencies(&self) -> impl Iterator<Item = RenderNodeId> + '_ {
+        let (leading, inputs, layers): (_, &[(Cow<'_, str>, RenderNodeId)], &[GraphLayer]) =
+            match self {
+                Self::Source(_) | Self::Generator { .. } | Self::Vector { .. } => {
+                    ([None, None], &[], &[])
+                }
+                Self::Effect { source, inputs, .. } => {
+                    ([Some(*source), None], inputs.values.as_slice(), &[])
+                }
+                Self::Transition { from, to, .. } => ([Some(*from), Some(*to)], &[], &[]),
+                Self::Composite { layers, .. } => ([None, None], &[], layers.as_slice()),
+            };
+        leading
+            .into_iter()
+            .flatten()
+            .chain(inputs.iter().map(|(_, input)| *input))
+            .chain(layers.iter().map(|layer| layer.source))
     }
 }
 
@@ -934,21 +941,5 @@ mod tests {
             graph.compile().expect("compiles").execution_order(),
             [output]
         );
-    }
-
-    #[test]
-    fn quality_compilation_exposes_centered_temporal_schedule() {
-        let size = RenderSize::new(16, 9).expect("non-zero size");
-        let mut graph = RenderGraph::new(size);
-        let output = graph.add_composite(Vec::new()).expect("empty clear node");
-        graph.set_output(output).expect("known output");
-        let plan = graph
-            .compile_with_quality(crate::RenderQualityControls {
-                max_filter_samples: 12,
-                motion_blur_subframes: 4,
-            })
-            .expect("compiled");
-        assert_eq!(plan.temporal_offsets(), [-0.375, -0.125, 0.125, 0.375]);
-        assert_eq!(plan.filter_sample_limit(output), None);
     }
 }

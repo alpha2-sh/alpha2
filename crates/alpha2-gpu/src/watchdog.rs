@@ -52,8 +52,8 @@ pub fn hung_threshold_ms() -> u32 {
 
 /// An eighth of the watchdog per submission, leaving room for other work on the GPU.
 #[must_use]
-pub fn submission_budget_ms() -> u32 {
-    watchdog_ms() / 8
+pub fn submission_budget_ms() -> f64 {
+    f64::from(watchdog_ms()) / 8.0
 }
 
 #[cfg(test)]
@@ -63,7 +63,9 @@ mod tests {
         super::set_watchdog_ms(4_000);
         assert_eq!(super::watchdog_ms(), 4_000);
         assert_eq!(super::hung_threshold_ms(), 2_000);
-        assert_eq!(super::submission_budget_ms(), 500);
+        assert_eq!(super::submission_budget_ms(), 500.0);
+        super::set_watchdog_ms(2);
+        assert_eq!(super::submission_budget_ms(), 0.25);
         super::set_watchdog_ms(0);
         assert!(super::watchdog_ms() > 0);
     }

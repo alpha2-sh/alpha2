@@ -8,8 +8,8 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use alpha2_engine::extract::{
-    AudioInput, Delivery, Direction, Emit, ExtractRequest, ExtractSession, Need, PassProgress,
-    SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
+    AudioInput, Delivery, Direction, Emit, ExtractRequest, ExtractSession, FramePlace, Need,
+    PassProgress, SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
 };
 use alpha2_host_core::host_frames::Attachment;
 use alpha2_media::CancelToken;
@@ -376,7 +376,12 @@ struct TimelineFrames<'a> {
 }
 
 impl TimelineFrames<'_> {
-    fn frame(&mut self, time: MediaTime, size: u32) -> Result<SuppliedFrame, String> {
+    fn frame(
+        &mut self,
+        time: MediaTime,
+        size: u32,
+        place: Option<&mut FramePlace<'_>>,
+    ) -> Result<SuppliedFrame, String> {
         let (width, height) = alpha2_engine::extract::delivered_size(self.canvas, size);
         let project = crate::host::still_project(
             &self.project,
@@ -401,7 +406,23 @@ impl TimelineFrames<'_> {
             .ok_or_else(|| "a still drew nothing".to_owned())?;
         let decoder = png::Decoder::new(std::io::Cursor::new(png.bytes));
         let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
-        let mut rgba = vec![0; reader.output_buffer_size().ok_or("an oversized still")?];
+        let len = reader.output_buffer_size().ok_or("an oversized still")?;
+        let packed = u64::from(width) * u64::from(height) * 4;
+        let fits = reader.output_color_type() == (png::ColorType::Rgba, png::BitDepth::Eight)
+            && (reader.info().width, reader.info().height) == (width, height)
+            && u64::try_from(len).ok() == Some(packed);
+        if let Some(buffer) = place.filter(|_| fits).and_then(|place| place.buffer(len)) {
+            reader
+                .next_frame(buffer)
+                .map_err(|error| error.to_string())?;
+            return Ok(SuppliedFrame {
+                pts: time,
+                width,
+                height,
+                rgba: Vec::new(),
+            });
+        }
+        let mut rgba = vec![0; len];
         let info = reader
             .next_frame(&mut rgba)
             .map_err(|error| error.to_string())?;
@@ -422,9 +443,25 @@ impl Supplier for HostSupplier<'_> {
                 .timeline
                 .as_mut()
                 .ok_or_else(|| "no timeline renderer".to_owned())?
-                .frame(*time, *size)
+                .frame(*time, *size, None)
                 .map(Some),
             _ => self.reader.frame(need),
+        }
+    }
+
+    fn frame_into(
+        &mut self,
+        need: &Need,
+        place: &mut FramePlace<'_>,
+    ) -> Result<Option<SuppliedFrame>, String> {
+        match need {
+            Need::TimelineFrame { time, size, .. } => self
+                .timeline
+                .as_mut()
+                .ok_or_else(|| "no timeline renderer".to_owned())?
+                .frame(*time, *size, Some(place))
+                .map(Some),
+            _ => self.reader.frame_into(need, place),
         }
     }
 
@@ -554,7 +591,7 @@ pub fn handle(
             run_plugin(
                 session,
                 &mut supplier,
-                (plugin.is_native(), plugin),
+                (!plugin.calls_are_bounded(), plugin),
                 out,
                 &request_id,
                 &cancel,
@@ -575,7 +612,7 @@ pub fn handle(
             set.made_from.clone_from(&original);
         }
         if let (Some(plugin), Some(made_by)) = (&plugin, set.made_by.as_mut()) {
-            made_by.plugin = Some(plugin.made_by().clone());
+            made_by.plugin = Some(plugin.made_by());
         }
     }
     let total = started.elapsed();
@@ -592,7 +629,19 @@ fn plugin_error(error: alpha2_host_core::plugins::PluginError) -> HostError {
     if error.code == alpha2_host_core::plugins::CANCELLED {
         return HostError::new(error.code, crate::protocol::cancelled(error.message));
     }
-    HostError::new(error.code, error.message)
+    let mut host = HostError::new(error.code, error.message);
+    host.details = error.details.map(Value::Object);
+    host
+}
+
+/// Whether `error` is a refusal by the resource root the operator set.
+fn resource_root_refusal(error: &alpha2_host_core::plugins::PluginError) -> bool {
+    error
+        .details
+        .as_ref()
+        .and_then(|details| details.get("policy"))
+        .and_then(Value::as_str)
+        == Some("resource_root")
 }
 
 /// Fetches and checks the manifest, then loads the artifact the request picks within the
@@ -606,6 +655,15 @@ fn load_plugin(
     use alpha2_host_core::plugins;
     let operator = options.plugins;
     operator.allows_plugins().map_err(plugin_error)?;
+    if let Some((slot, path)) = plugin.supplied.iter().find(|(_, path)| !path.is_absolute()) {
+        return Err(HostError::new(
+            "INVALID_REQUEST",
+            format!(
+                "plugin.supplied.{slot} is not an absolute path: {}",
+                path.display()
+            ),
+        ));
+    }
     let download = crate::plugin_fetch::https();
     let (text, base) =
         crate::plugin_fetch::manifest(&plugin.manifest, &plugin.sha256, &*download, operator)
@@ -616,6 +674,8 @@ fn load_plugin(
         force_wasm: plugin.force_wasm,
         memory_bytes: options.plugin_memory_bytes,
         call_deadline: options.plugin_call_deadline,
+        resource_root: operator.resource_root.clone(),
+        isolation: operator.isolation().map_err(plugin_error)?,
     };
     let mut fetcher = crate::plugin_fetch::Fetcher::new(
         base,
@@ -625,14 +685,30 @@ fn load_plugin(
     )
     .with_cancel(cancel.clone());
     plugins::load(
-        &manifest,
-        request.params.clone(),
+        plugins::LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: &plugin.sha256,
+            params: &request.params,
+            supplied: &plugin.supplied,
+        },
         &policy,
         &mut fetcher,
         cancel,
     )
     .map_err(|error| {
-        if error.code == plugins::codes::NATIVE_REFUSED && plugin.allow_native {
+        if resource_root_refusal(&error) {
+            let message = match &operator.resource_root {
+                plugins::ResourceRoot::Dir(root) => format!(
+                    "{}; this host was started with --plugin-resource-root {}",
+                    error.message,
+                    root.display()
+                ),
+                _ => "this host was started without --plugin-resource-root, so a request may \
+                      not fill a resource slot"
+                    .to_owned(),
+            };
+            plugins::PluginError { message, ..error }
+        } else if error.code == plugins::codes::NATIVE_REFUSED && plugin.allow_native {
             plugins::PluginError::new(
                 error.code,
                 format!(
@@ -656,30 +732,33 @@ fn extract_media_step() {
 fn run_plugin(
     mut session: ExtractSession,
     supplier: &mut dyn Supplier,
-    (native, extractor): (bool, &mut dyn alpha2_engine::extract::Extractor),
+    (unbounded, extractor): (bool, &mut dyn alpha2_engine::extract::Extractor),
     out: &Responder,
     request_id: &str,
     cancel: &CancelToken,
 ) -> Result<Vec<alpha2_model::DataSet>, HostError> {
-    use alpha2_engine::extract::{Emitter, ExtractorError, PassInfo};
-    // A native call is watched as the request's work; a wasm call ends at its own deadline.
+    use alpha2_engine::extract::{DriveError, Emitter, ExtractorError, PassInfo};
     let call = || {
-        if native {
+        if unbounded {
             crate::heartbeat::request_step(crate::heartbeat::RequestSide::Plugin, "plugin call");
             None
         } else {
             crate::heartbeat::request_idle()
         }
     };
-    let failed = |error: ExtractorError| match error.code {
-        Some(code @ alpha2_host_core::plugins::CANCELLED) => {
-            HostError::new(code, crate::protocol::cancelled(error.message))
-        }
-        Some(code) => HostError::new(code, error.message),
-        None => HostError::new(
-            "EXTRACTOR_FAILED",
-            format!("the extractor failed: {}", error.message),
-        ),
+    let failed = |error: ExtractorError| {
+        let mut failure = match error.code {
+            Some(code @ alpha2_host_core::plugins::CANCELLED) => {
+                HostError::new(code, crate::protocol::cancelled(error.message))
+            }
+            Some(code) => HostError::new(code, error.message),
+            None => HostError::new(
+                "EXTRACTOR_FAILED",
+                format!("the extractor failed: {}", error.message),
+            ),
+        };
+        failure.details = error.details.map(Value::Object);
+        failure
     };
     let internal = |error: SessionError| HostError::new("INTERNAL", error.to_string());
     let called = call();
@@ -697,10 +776,12 @@ fn run_plugin(
             Step::Need(need) => match &need {
                 Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
                     extract_media_step();
-                    match supplier.frame(&need).map_err(HostError::classify)? {
-                        Some(frame) => session.supply_video(frame).map_err(internal)?,
-                        None => session.supply_end().map_err(internal)?,
-                    }
+                    alpha2_engine::extract::supply_frame(&mut session, &need, extractor, supplier)
+                        .map_err(|error| match error {
+                            DriveError::Supplier(error) => HostError::classify(error),
+                            DriveError::Session(error) => internal(error),
+                            other => HostError::new("INTERNAL", other.to_string()),
+                        })?;
                 }
                 Need::SourceAudio { .. } | Need::TimelineAudio { .. } => {
                     extract_media_step();

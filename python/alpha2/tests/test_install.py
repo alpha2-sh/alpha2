@@ -845,4 +845,4 @@ def test_extraction_never_restores_archive_owners(tmp_path: Path) -> None:
     install_module._extract(archive, destination)
     for path in (destination / "top", destination / "top" / "file"):
         assert path.stat().st_uid == os.getuid()
-        assert path.stat().st_gid == os.getgid()
+        assert path.stat().st_gid == destination.stat().st_gid

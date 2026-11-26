@@ -17,9 +17,11 @@ pub struct Renderer {
     pub(crate) upload_textures: crate::Shared<crate::pool::UploadTexturePool>,
     /// Device memory budget in bytes, 0 when unknown.
     pub(crate) gpu_memory_budget: std::sync::atomic::AtomicU64,
+    requested_texture_budget: std::sync::atomic::AtomicU64,
     pub(crate) readback_buffers: crate::Shared<crate::pool::ReadbackBufferPool>,
     pub(crate) uniform_buffers: crate::Shared<crate::uniform::UniformBufferPool>,
     pub(crate) retirement: crate::Shared<crate::retire::Retirement>,
+    pub(crate) linear_sampler: crate::bind_group::LinearSampler,
     pub(crate) pipelines: crate::pipeline::PipelineCache,
     pub(crate) diagnostics: crate::diagnostics::SharedDiagnostics,
     pub(crate) quality: Mutex<QualityState>,
@@ -177,20 +179,67 @@ impl RenderEncoder {
         &mut self.planner
     }
 
-    /// Charges a pass to the plan and places it, finishing the command buffer first when the plan
-    /// says so.
+    /// Charges a pass doing `work` to the plan and places it, finishing the command buffer first
+    /// when the plan says so; `effect` names the pass in each command buffer it is encoded into.
     pub(crate) fn place_pass(
         &mut self,
-        cost: crate::effect_cost::EffectCost,
-        pixels: u64,
+        work: crate::FrameCost,
+        region: crate::composite::PixelRect,
         bandable: bool,
         pass: Option<alpha2_gpu::PassKey>,
+        effect: Option<&crate::EffectId>,
     ) -> crate::submission_planner::PassPlacement {
-        let placement = self.planner.pass(cost, pixels, bandable, pass);
+        let placement = self.planner.pass(work, region, bandable, pass);
+        self.apply(placement, effect);
+        placement
+    }
+
+    pub(crate) fn apply(
+        &mut self,
+        placement: crate::submission_planner::PassPlacement,
+        effect: Option<&crate::EffectId>,
+    ) {
         if placement.cut_before {
             self.cut();
         }
-        placement
+        self.planner.name_placed(effect);
+    }
+
+    pub(crate) fn encode_pieces(
+        &mut self,
+        placement: crate::submission_planner::PassPlacement,
+        region: crate::composite::PixelRect,
+        mut encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
+    ) {
+        use crate::submission_planner::Piece;
+        if let Some(rows) = placement.pilot {
+            let rows = crate::composite::PixelRect {
+                height: rows.min(region.height),
+                ..region
+            };
+            encode(&mut self.encoder, Piece::first(Some(rows)));
+            return;
+        }
+        let pieces = placement.pieces;
+        if pieces.count() <= 1 {
+            encode(&mut self.encoder, Piece::first(None));
+            return;
+        }
+        for index in 0..pieces.count() {
+            if index > 0 {
+                self.next_band();
+            }
+            let scissor = pieces.rect(index, region);
+            if index == 0 || scissor.area() > 0 {
+                encode(
+                    &mut self.encoder,
+                    Piece {
+                        scissor: Some(scissor),
+                        first: index == 0,
+                    },
+                );
+            }
+        }
     }
 
     pub(crate) fn next_band(&mut self) {
@@ -208,6 +257,59 @@ impl RenderEncoder {
         let done = std::mem::replace(&mut self.encoder, next);
         self.finished.push(done.finish());
     }
+}
+
+pub(crate) trait PassEncoder {
+    fn commands(&mut self) -> &mut wgpu::CommandEncoder;
+
+    fn placed_pass(
+        &mut self,
+        work: crate::FrameCost,
+        region: crate::composite::PixelRect,
+        pass: alpha2_gpu::PassKey,
+        encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
+    );
+
+    fn place_whole(&mut self, work: crate::FrameCost);
+}
+
+impl PassEncoder for RenderEncoder {
+    fn commands(&mut self) -> &mut wgpu::CommandEncoder {
+        &mut self.encoder
+    }
+
+    fn placed_pass(
+        &mut self,
+        work: crate::FrameCost,
+        region: crate::composite::PixelRect,
+        pass: alpha2_gpu::PassKey,
+        encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
+    ) {
+        let placement = self.place_pass(work, region, true, Some(pass), None);
+        self.encode_pieces(placement, region, encode);
+    }
+
+    fn place_whole(&mut self, work: crate::FrameCost) {
+        self.place_pass(work, crate::composite::PixelRect::EMPTY, false, None, None);
+    }
+}
+
+impl PassEncoder for wgpu::CommandEncoder {
+    fn commands(&mut self) -> &mut wgpu::CommandEncoder {
+        self
+    }
+
+    fn placed_pass(
+        &mut self,
+        _work: crate::FrameCost,
+        _region: crate::composite::PixelRect,
+        _pass: alpha2_gpu::PassKey,
+        mut encode: impl FnMut(&mut wgpu::CommandEncoder, crate::submission_planner::Piece),
+    ) {
+        encode(self, crate::submission_planner::Piece::first(None));
+    }
+
+    fn place_whole(&mut self, _work: crate::FrameCost) {}
 }
 
 #[derive(Debug)]
@@ -231,10 +333,9 @@ impl LossClassifier {
             RenderError::GpuWorkDropped
             | RenderError::GpuDeviceLost
             | RenderError::GpuTimeout
-            | RenderError::ExternalTextureSync(Some(alpha2_media::GpuFault::DeviceLost)) => self
-                .0
-                .hung()
-                .map_or(error, |report| crate::canary::hung_error(&report)),
+            | RenderError::ExternalTextureSync(Some(alpha2_media::GpuFault::DeviceLost)) => {
+                self.0.hung().map_or(error, |report| report.hung_error())
+            }
             error => error,
         }
     }
@@ -244,10 +345,17 @@ impl LossClassifier {
     pub fn longest_submission(&self) -> Option<crate::SubmissionReport> {
         self.0.longest()
     }
+
+    /// The recent submission that makes [`Self::classify`] report a loss as hung, if any.
+    #[must_use]
+    pub fn hung_submission(&self) -> Option<crate::SubmissionReport> {
+        self.0.hung()
+    }
 }
 
 struct SubmittedBuffers {
     index: wgpu::SubmissionIndex,
+    earlier: Vec<(wgpu::SubmissionIndex, u64)>,
     timings: SubmitTimings,
     sequences: std::ops::Range<u64>,
     first: (web_time::Instant, crate::submission_clock::Recorded),
@@ -261,15 +369,13 @@ pub(crate) struct MeasuredSubmit {
     pub(crate) lease_retire: Duration,
 }
 
-/// Quality controls consumed by graph compilation and pass execution.
+/// Quality controls consumed by pass execution.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct RenderQualityControls {
     /// Maximum samples for filter effects and layer minification. Analytic edge coverage stays
     /// on even with a one-sample budget.
     pub max_filter_samples: u32,
-    /// Temporal samples used by motion-aware runners.
-    pub motion_blur_subframes: u32,
 }
 
 impl RenderQualityControls {
@@ -281,7 +387,6 @@ impl Default for RenderQualityControls {
     fn default() -> Self {
         Self {
             max_filter_samples: Self::MAX_FILTER_SAMPLES,
-            motion_blur_subframes: 1,
         }
     }
 }
@@ -298,7 +403,6 @@ impl QualityState {
         Self {
             applied: RenderQualityControls {
                 max_filter_samples: requested.max_filter_samples.min(limit),
-                ..requested
             },
             requested_filter_samples: requested.max_filter_samples,
         }
@@ -306,6 +410,10 @@ impl QualityState {
 }
 
 impl Renderer {
+    pub(crate) fn uniform_alignment(&self) -> u64 {
+        u64::from(self.limits.min_uniform_buffer_offset_alignment.max(1))
+    }
+
     pub(crate) fn validate_size(&self, size: RenderSize) -> Result<(), RenderError> {
         RenderSize::new(size.width, size.height)?;
         let maximum = self.limits.max_texture_dimension_2d;
@@ -346,18 +454,25 @@ impl Renderer {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             }));
+        retirement.bind_groups.adopt_texture(empty_input.texture());
+        let linear_sampler =
+            crate::bind_group::LinearSampler::new(gpu.device(), &retirement.bind_groups);
+        let textures = crate::Shared::new(crate::pool::TexturePool::new(crate::Shared::clone(
+            &retirement,
+        )));
+        let requested_texture_budget =
+            std::sync::atomic::AtomicU64::new(textures.stats().budget_bytes);
         Self {
             gpu,
             blend_space: BlendSpace::default(),
             effects: std::sync::RwLock::default(),
             effect_resources: std::sync::RwLock::default(),
-            textures: crate::Shared::new(crate::pool::TexturePool::new(crate::Shared::clone(
-                &retirement,
-            ))),
+            textures,
             upload_textures: crate::Shared::new(crate::pool::UploadTexturePool::new(
                 crate::Shared::clone(&retirement),
             )),
             gpu_memory_budget: std::sync::atomic::AtomicU64::new(0),
+            requested_texture_budget,
             readback_buffers: crate::Shared::new(crate::pool::ReadbackBufferPool::new(
                 crate::Shared::clone(&retirement),
             )),
@@ -366,6 +481,7 @@ impl Renderer {
                 crate::Shared::clone(&retirement),
             )),
             retirement,
+            linear_sampler,
             pipelines: crate::pipeline::PipelineCache::default(),
             diagnostics: Arc::new(Mutex::new(crate::diagnostics::DiagnosticsState::default())),
             quality: Mutex::new(QualityState::new(filter_sample_limit)),
@@ -414,8 +530,9 @@ impl Renderer {
 
     /// GPU time of the export frames sampled since the last call, then resets the totals.
     ///
-    /// Every eighth frame of [`Self::render_graph_nv12_timed`] or
-    /// [`Self::render_graph_yuv420p_timed`] is timed and read back later without waiting.
+    /// Every eighth frame of [`Self::render_graph_nv12_timed`], of
+    /// [`Self::render_graph_yuv420p_timed`] or of a timed [`Self::render_graph_layout_readback`] is
+    /// timed and read back later without waiting.
     ///
     /// # Errors
     /// The device has no timestamp queries.
@@ -448,6 +565,13 @@ impl Renderer {
         );
         self.gpu_errors = reports;
         self
+    }
+
+    pub(crate) fn forget_after_reported_errors(&self) {
+        if self.gpu_errors.take_unhandled() {
+            self.clear_result_cache_for(crate::CacheInvalidation::GpuError);
+            self.forget_untrusted_resources();
+        }
     }
 
     /// Drops pooled resources after the GPU reported an error that may involve them.
@@ -499,11 +623,18 @@ impl Renderer {
         self.submission_clock.longest()
     }
 
+    /// The recent submission that makes [`Self::classify_loss`] report a loss as hung, if any.
+    #[must_use]
+    pub fn hung_submission(&self) -> Option<crate::SubmissionReport> {
+        self.submission_clock.hung()
+    }
+
     /// Classifies `error` using this renderer's submission times.
     ///
     /// A device loss or timeout becomes [`RenderError::GpuDeviceHung`] when a recent submission
-    /// ran for at least half the GPU watchdog ([`alpha2_gpu::hung_threshold_ms`]). Other errors
-    /// pass through.
+    /// ran for at least half the GPU watchdog ([`alpha2_gpu::hung_threshold_ms`]), or submissions
+    /// completed together did and ran more than [`alpha2_gpu::MARGIN`] times their predicted
+    /// time. Other errors pass through.
     #[must_use]
     pub fn classify_loss(&self, error: RenderError) -> RenderError {
         self.loss_classifier().classify(error)
@@ -609,11 +740,7 @@ impl Renderer {
     ///
     /// Open it before acquiring the frame's targets so a failed allocation is the frame's error.
     pub(crate) fn command_encoder(&self, label: &'static str) -> RenderEncoder {
-        if self.gpu_errors.take_unhandled() {
-            // The browser reported an error for earlier work; cached results may be bad.
-            self.clear_result_cache_for(crate::CacheInvalidation::GpuError);
-            self.forget_untrusted_resources();
-        }
+        self.forget_after_reported_errors();
         // Wait for other frames before opening any scope of this one.
         let frame = self.frame_lock.hold();
         // Open first so nothing the encoder uses can be destroyed under it.
@@ -637,6 +764,14 @@ impl Renderer {
             scope,
             frame,
         }
+    }
+
+    pub(crate) fn bind_group(&self, descriptor: &wgpu::BindGroupDescriptor<'_>) -> wgpu::BindGroup {
+        self.retirement.bind_groups.create(
+            self.gpu.device(),
+            descriptor,
+            self.retirement.submitted_frames(),
+        )
     }
 
     /// Defers destruction of released pool resources until the returned scope is dropped.
@@ -664,12 +799,22 @@ impl Renderer {
         let mut frames = Vec::new();
         let mut planners = Vec::new();
         for commands in commands {
-            command_buffers.extend(commands.buffers.into_iter().map(|buffer| (buffer, None)));
+            command_buffers.extend(
+                commands
+                    .buffers
+                    .into_iter()
+                    .map(|buffer| (buffer, None, Vec::new())),
+            );
             if let Some(buffer_ms) = commands.planner.buffer_ms() {
                 let first = command_buffers.len() - buffer_ms.len();
                 for (slot, ms) in command_buffers[first..].iter_mut().zip(buffer_ms) {
                     slot.1 = Some(ms);
                 }
+            }
+            let buffer_effects = commands.planner.buffer_effects();
+            let first = command_buffers.len() - buffer_effects.len();
+            for (slot, effects) in command_buffers[first..].iter_mut().zip(buffer_effects) {
+                slot.2 = effects;
             }
             planners.push(commands.planner);
             errors.push(commands.errors);
@@ -683,6 +828,7 @@ impl Renderer {
         self.note_frame_submissions(&planners, &submitted);
         let SubmittedBuffers {
             index,
+            earlier,
             timings,
             sequences,
             first: (_, first),
@@ -709,7 +855,8 @@ impl Renderer {
                 index,
                 Arc::clone(&self.submission_clock),
                 sequences.end - 1,
-            ),
+            )
+            .after(earlier),
             sequences,
             queue_idle,
             timings,
@@ -721,53 +868,65 @@ impl Renderer {
     /// can be preempted between them. Every submission is timed for loss classification.
     fn submit_buffers(
         &self,
-        buffers: Vec<(wgpu::CommandBuffer, Option<f64>)>,
+        buffers: Vec<(wgpu::CommandBuffer, Option<f64>, Vec<String>)>,
         measure: bool,
         watch_previous: bool,
     ) -> SubmittedBuffers {
-        let submit =
-            |buffers: Vec<wgpu::CommandBuffer>, predicted_ms: Option<f64>, watch_previous: bool| {
-                let (index, timings) = if measure {
-                    self.gpu.submit_timed(buffers)
-                } else {
-                    (self.gpu.submit(buffers), SubmitTimings::default())
-                };
-                let at = web_time::Instant::now();
-                let recorded = self
-                    .submission_clock
-                    .record(at, predicted_ms, watch_previous);
-                let sequence = recorded.sequence;
-                let clock = Arc::clone(&self.submission_clock);
-                self.gpu.on_submitted_work_done(move || {
-                    let as_it_happens = clock.sees_as_it_happens(sequence);
-                    clock.complete(sequence, web_time::Instant::now(), as_it_happens);
-                });
-                (index, timings, sequence, (at, recorded))
+        let submit = |buffers: Vec<wgpu::CommandBuffer>,
+                      predicted_ms: Option<f64>,
+                      effects: Vec<String>,
+                      watch_previous: bool| {
+            let (index, timings) = if measure {
+                self.gpu.submit_timed(buffers)
+            } else {
+                (self.gpu.submit(buffers), SubmitTimings::default())
             };
-        if buffers.len() <= 1 || buffers.iter().all(|(_, ms)| ms.is_none()) {
+            let at = web_time::Instant::now();
+            let recorded = self
+                .submission_clock
+                .record(at, predicted_ms, effects, watch_previous);
+            let sequence = recorded.sequence;
+            let clock = Arc::clone(&self.submission_clock);
+            self.gpu.on_submitted_work_done(move || {
+                let as_it_happens = clock.sees_as_it_happens(sequence);
+                clock.complete(sequence, web_time::Instant::now(), as_it_happens);
+            });
+            (index, timings, sequence, (at, recorded))
+        };
+        if buffers.len() <= 1 || buffers.iter().all(|(_, ms, _)| ms.is_none()) {
             let predicted_ms = buffers
                 .iter()
-                .filter_map(|(_, ms)| *ms)
+                .filter_map(|(_, ms, _)| *ms)
                 .reduce(|a, b| a + b);
+            let mut effects: Vec<String> = Vec::new();
+            for effect in buffers.iter().flat_map(|(_, _, effects)| effects) {
+                if !effects.contains(effect) {
+                    effects.push(effect.clone());
+                }
+            }
             let (index, timings, sequence, first) = submit(
-                buffers.into_iter().map(|(buffer, _)| buffer).collect(),
+                buffers.into_iter().map(|(buffer, _, _)| buffer).collect(),
                 predicted_ms,
+                effects,
                 watch_previous,
             );
             return SubmittedBuffers {
                 index,
+                earlier: Vec::new(),
                 timings,
                 sequences: sequence..sequence + 1,
                 first,
             };
         }
         let mut total = SubmitTimings::default();
-        let mut last = None;
+        let mut last: Option<(wgpu::SubmissionIndex, u64)> = None;
+        let mut earlier = Vec::new();
         let mut first = None;
-        for (buffer, predicted_ms) in buffers {
+        for (buffer, predicted_ms, effects) in buffers {
             let (index, timings, sequence, started) = submit(
                 vec![buffer],
                 predicted_ms,
+                effects,
                 watch_previous && first.is_none(),
             );
             total.queue_lock_wait = total
@@ -775,12 +934,13 @@ impl Renderer {
                 .saturating_add(timings.queue_lock_wait);
             total.queue_submit = total.queue_submit.saturating_add(timings.queue_submit);
             first.get_or_insert((sequence, started));
-            last = Some((index, sequence));
+            earlier.extend(last.replace((index, sequence)));
         }
         let (index, last_sequence) = last.expect("at least two buffers");
         let (first_sequence, first) = first.expect("at least two buffers");
         SubmittedBuffers {
             index,
+            earlier,
             timings: total,
             sequences: first_sequence..last_sequence + 1,
             first,
@@ -807,13 +967,8 @@ impl Renderer {
         crate::diagnostics::record_frame_plan(
             &self.diagnostics,
             &report,
-            buffer_ms
-                .iter()
-                .flatten()
-                .copied()
-                .fold(None, |most: Option<f64>, ms| {
-                    Some(most.map_or(ms, |most| most.max(ms)))
-                }),
+            buffer_ms.as_deref().unwrap_or_default(),
+            planner.planned_at().map(|(_, budget_ms)| budget_ms),
         );
         *self
             .last_frame_submissions
@@ -822,6 +977,7 @@ impl Renderer {
         if let (Some(predicted_ms), Some((planned_ms_per_unit_pixel, budget_ms))) =
             (report.predicted_ms, planner.planned_at())
         {
+            let device_rated_ms = planner.device_rated_ms();
             let clock = Arc::clone(&self.submission_clock);
             let rate = Arc::clone(self.gpu.rate());
             let last = submitted.sequences.end - 1;
@@ -838,6 +994,7 @@ impl Renderer {
                 rate.observe(alpha2_gpu::FrameMeasurement {
                     measured_ms: started.elapsed().as_secs_f64() * 1_000.0,
                     predicted_ms,
+                    device_rated_ms,
                     planned_ms_per_unit_pixel,
                     budget_ms,
                     trust,
@@ -941,6 +1098,7 @@ impl Renderer {
         self.readback_buffers.clear();
         self.uniform_buffers.clear();
         self.canaries.clear();
+        self.retirement.bind_groups.clear();
         self.vector_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -949,14 +1107,21 @@ impl Renderer {
         self.retirement.retired_bytes().saturating_sub(before)
     }
 
-    /// Sets the soft byte budget for idle intermediate textures, evicting down to it now.
+    /// Sets the byte budget for idle intermediate textures beyond what recent frames had in use,
+    /// evicting down to it now.
+    ///
+    /// The budget is capped at a quarter of [`Self::gpu_memory_budget`]; a reduction is reported
+    /// as [`crate::CapabilityDiagnostic::TextureBudgetReduced`].
     pub fn set_texture_budget_bytes(&self, budget_bytes: u64) {
+        self.requested_texture_budget
+            .store(budget_bytes, std::sync::atomic::Ordering::Relaxed);
         self.textures
             .set_budget(budget_bytes.min(self.pool_budget_cap()));
     }
 
     /// Records the adapter's memory budget (`None` if unreported) and caps idle pools at a quarter
-    /// of it. Returns whether a pool budget was lowered.
+    /// of it. A frame whose own textures need more than the budget fails before it draws, with
+    /// [`RenderError::FrameExceedsGpuMemory`]. Returns whether a pool budget was lowered.
     pub fn set_gpu_memory_budget(&self, budget_bytes: Option<u64>) -> bool {
         self.gpu_memory_budget.store(
             budget_bytes.unwrap_or(0),
@@ -991,16 +1156,15 @@ impl Renderer {
         self.gpu_memory_budget().map_or(u64::MAX, |bytes| bytes / 4)
     }
 
-    /// Applies filter and temporal sampling controls.
+    /// Applies the filter sample budget.
     ///
-    /// The filter budget is capped at [`Self::filter_sample_limit`]; a reduction is reported as
+    /// The budget is capped at [`Self::filter_sample_limit`]; a reduction is reported as
     /// [`crate::CapabilityDiagnostic::FilterSamplesReduced`]. Kept results are dropped only when
-    /// the applied values change.
-    pub fn set_quality_controls(&self, max_filter_samples: u32, motion_blur_subframes: u32) {
+    /// the applied budget changes.
+    pub fn set_quality_controls(&self, max_filter_samples: u32) {
         let requested = max_filter_samples.max(1);
         let next = RenderQualityControls {
             max_filter_samples: requested.min(self.filter_sample_limit()),
-            motion_blur_subframes: motion_blur_subframes.max(1),
         };
         let mut quality = self
             .quality
@@ -1073,22 +1237,30 @@ impl Renderer {
     }
 
     fn degradations(&self) -> Vec<crate::CapabilityDiagnostic> {
+        let mut degradations = Vec::new();
+        let requested = self
+            .requested_texture_budget
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let applied = self.textures.stats().budget_bytes;
+        if requested > applied {
+            degradations
+                .push(crate::CapabilityDiagnostic::TextureBudgetReduced { requested, applied });
+        }
         let quality = self.quality_state();
         let (requested, applied) = (
             quality.requested_filter_samples,
             quality.applied.max_filter_samples,
         );
         if requested > applied {
-            vec![crate::CapabilityDiagnostic::FilterSamplesReduced { requested, applied }]
-        } else {
-            Vec::new()
+            degradations
+                .push(crate::CapabilityDiagnostic::FilterSamplesReduced { requested, applied });
         }
+        degradations
     }
 
     /// Returns a stable snapshot for telemetry or benchmark output.
     #[must_use]
     pub fn diagnostics(&self) -> crate::RenderDiagnostics {
-        let quality = self.quality_controls();
         crate::diagnostics::snapshot(
             &self.diagnostics,
             self.gpu.capabilities(),
@@ -1098,10 +1270,10 @@ impl Renderer {
                 readback_buffers: self.readback_buffers.stats(),
                 uniform_buffers: self.uniform_buffers.stats(),
                 pipelines: self.pipeline_cache_stats(),
+                bind_groups: self.retirement.bind_groups.stats(),
                 result_cache: self.result_cache_stats(),
             },
-            quality.max_filter_samples,
-            quality.motion_blur_subframes,
+            self.quality_controls().max_filter_samples,
             self.degradations(),
         )
     }

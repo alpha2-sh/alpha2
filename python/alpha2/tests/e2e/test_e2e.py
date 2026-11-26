@@ -116,7 +116,13 @@ def assert_declared_performance(performance: dict[str, Any], path: str) -> None:
         assert performance["gpuEncodeBudget"] is not None
     submissions = performance.get("gpuSubmissions")
     if submissions is not None:
-        assert set(submissions) == {"frames", "splitFrames", "maxPerFrame", "maxPredictedMs"}
+        assert set(submissions) == {
+            "frames",
+            "splitFrames",
+            "maxPerFrame",
+            "maxPredictedMs",
+            "overBudget",
+        }
 
 
 def test_an_openh264_installed_into_the_clients_cache_reaches_the_next_capabilities_and_export(

@@ -1,6 +1,6 @@
 // The extractor contract every surface shares and its pure helpers; imports no media library.
 
-import type { DataSet } from "./generated/project-schema.js";
+import type { DataSet, MadeByPlugin } from "./generated/project-schema.js";
 
 /** What an extractor reads and emits; the same object `describe()` returns on every surface. */
 export interface ExtractorDescriptor {
@@ -23,7 +23,10 @@ export interface ExtractorDescriptor {
         readonly channels?: "mono" | "source";
         readonly block_frames?: number;
       };
-  /** JSON Schema of the request's `params`; checked before the request is sent. */
+  /**
+   * JSON Schema of the request's `params`; checked before the request is sent. Its interface
+   * annotations (`title`, `description`, `default`, `x-alpha2-*`) are not checked.
+   */
   readonly params_schema?: unknown;
   readonly outputs: readonly {
     readonly name: string;
@@ -31,6 +34,10 @@ export interface ExtractorDescriptor {
     readonly channels?: readonly string[];
     readonly interpolation?: "hold" | "linear";
     readonly suggest?: "bind" | "remove_ranges" | "split_at";
+    /** The output's name in an interface: 1 to 80 characters, no control characters. */
+    readonly label?: string;
+    /** What the output holds, for an interface: up to 400 characters, no control characters. */
+    readonly description?: string;
   }[];
 }
 
@@ -136,6 +143,11 @@ export interface Extractor {
   audio?(block: ExtractAudio, out: ExtractEmitter): void | Promise<void>;
   /** Whole-range work (speech recognition) belongs here and may emit anywhere in the range. */
   end?(out: ExtractEmitter): void | Promise<void>;
+  /**
+   * The plugin build that ran, as the data's `made_by.plugin` records it; read once the run has
+   * ended. A plugin's extractor (`LoadedPlugin.extractor`) has it; an app's own has none.
+   */
+  madeByPlugin?(): MadeByPlugin;
 }
 
 /** Progress of one pass; `total` is `null` for source frames, whose count is not known ahead. */
@@ -232,7 +244,8 @@ export function collectEmits(): {
  * Where `value` breaks `schema`, as a path and reason, or `undefined`. Covers the JSON Schema
  * keywords descriptors use, which are `type`, `enum`, `const`, `properties`, `required`,
  * `additionalProperties`, `items`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength` and
- * `maxLength`.
+ * `maxLength`; every other keyword, the interface annotations of `docs/plugin-abi.md` among them,
+ * is ignored.
  */
 export function schemaProblem(
   schema: unknown,

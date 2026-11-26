@@ -1,6 +1,7 @@
-use alpha2_media::{ColorMetadata, ColorPrimaries, TransferFunction};
+use alpha2_media::{ColorMetadata, ColorPrimaries, TransferFunction, YuvEncoding};
 
-use crate::hdr::{HdrToneMap, gamut_matrix, hdr_to_working};
+use crate::RenderError;
+use crate::hdr::{HdrToneMap, gamut_matrix, hdr_to_working, is_working_gamut};
 
 /// A normalized YUV sample and straight alpha value.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -13,15 +14,6 @@ pub struct YuvSample {
     pub v: f32,
     /// Straight alpha.
     pub alpha: f32,
-}
-
-/// SDR transfer used when encoding a render result.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum SdrOutputTransfer {
-    /// IEC sRGB.
-    Srgb,
-    /// BT.709 OETF.
-    Bt709,
 }
 
 /// What happens to an HDR (PQ or HLG) source.
@@ -143,17 +135,17 @@ pub fn convert_yuv_to_linear_rgba(
         }
         _ => {
             let decoded = encoded.map(decode_sdr);
-            if color.primaries == ColorPrimaries::Bt2020 {
+            if is_working_gamut(color.primaries) {
+                decoded
+            } else {
                 // Wide-gamut SDR: convert to BT.709 primaries, clipping out-of-gamut values.
-                gamut_matrix(ColorPrimaries::Bt2020, ColorPrimaries::Bt709).map(|row| {
+                gamut_matrix(color.primaries, ColorPrimaries::Bt709).map(|row| {
                     row.iter()
                         .zip(decoded)
                         .map(|(weight, value)| weight * value)
                         .sum::<f32>()
                         .clamp(0.0, 1.0)
                 })
-            } else {
-                decoded
             }
         }
     };
@@ -165,26 +157,22 @@ pub fn convert_yuv_to_linear_rgba(
     Ok((output, diagnostics))
 }
 
-/// Encodes linear-light RGB for an SDR output target.
-#[must_use]
-pub fn encode_linear_rgb(rgb: [f32; 3], transfer: SdrOutputTransfer) -> [f32; 3] {
+pub(crate) fn check_packable(encoding: YuvEncoding) -> Result<(), RenderError> {
+    let color = encoding.color;
+    if color.is_hdr() || !is_working_gamut(color.primaries) {
+        return Err(RenderError::UnsupportedOutputColor(color));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn encode_srgb(rgb: [f32; 3]) -> [f32; 3] {
     rgb.map(|value| {
         let value = value.clamp(0.0, 1.0);
-        match transfer {
-            SdrOutputTransfer::Srgb => {
-                if value <= 0.003_130_8 {
-                    12.92 * value
-                } else {
-                    1.055 * libm::powf(value, 1.0 / 2.4) - 0.055
-                }
-            }
-            SdrOutputTransfer::Bt709 => {
-                if value < 0.018 {
-                    4.5 * value
-                } else {
-                    1.099 * libm::powf(value, 0.45) - 0.099
-                }
-            }
+        if value <= 0.003_130_8 {
+            12.92 * value
+        } else {
+            1.055 * libm::powf(value, 1.0 / 2.4) - 0.055
         }
     })
 }
@@ -233,6 +221,31 @@ mod tests {
             range,
             dynamic_range: DynamicRange::Sdr,
         }
+    }
+
+    #[test]
+    fn the_packs_take_only_the_working_gamut_and_an_sdr_transfer() {
+        let pack = |primaries, transfer| {
+            check_packable(YuvEncoding::new(
+                ColorMetadata {
+                    primaries,
+                    transfer,
+                    dynamic_range: if matches!(transfer, TransferFunction::Pq) {
+                        DynamicRange::Hdr
+                    } else {
+                        DynamicRange::Sdr
+                    },
+                    ..ColorMetadata::EXPORT
+                },
+                alpha2_media::ChromaLocation::Center,
+            ))
+            .is_ok()
+        };
+        assert!(pack(ColorPrimaries::Bt709, TransferFunction::Bt709));
+        assert!(pack(ColorPrimaries::Bt601, TransferFunction::Srgb));
+        assert!(!pack(ColorPrimaries::Bt2020, TransferFunction::Bt709));
+        assert!(!pack(ColorPrimaries::DisplayP3, TransferFunction::Bt709));
+        assert!(!pack(ColorPrimaries::Bt709, TransferFunction::Pq));
     }
 
     #[test]
@@ -373,8 +386,7 @@ mod tests {
                     ColorPolicy::RejectHdr,
                 )
                 .expect("SDR");
-                let encoded =
-                    encode_linear_rgb([linear[0], linear[1], linear[2]], SdrOutputTransfer::Srgb);
+                let encoded = encode_srgb([linear[0], linear[1], linear[2]]);
                 let expected = (f32::from(code) - 16.0) / 219.0;
                 assert!(
                     encoded

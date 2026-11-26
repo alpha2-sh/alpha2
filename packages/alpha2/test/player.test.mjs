@@ -417,6 +417,8 @@ test("a hung loss recovers on the cpu on a fresh surface", async () => {
     frameIndex: 3,
     timeTicks: 12_000n,
     gpuMs: 1800,
+    measured: true,
+    submissions: 1,
     message: "hung",
   };
   const player = new Alpha2Player(backend, {

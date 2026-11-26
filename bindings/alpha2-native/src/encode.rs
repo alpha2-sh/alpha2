@@ -1,5 +1,6 @@
 //! Muxed A/V and WAV encode sinks.
 
+use crate::video_backend::VideoReceiveError;
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -122,7 +123,7 @@ pub struct NativeAvEncodeSink {
     pub(crate) partial: PartialOutput,
     /// How the finished file was published.
     pub(crate) published: Option<PublishReport>,
-    pub(crate) video_encoder: crate::video_backend::VideoEncoderBackend,
+    pub(crate) video_encoder: crate::video_backend::TaggedVideoEncoder,
     pub(crate) video_stream_index: i32,
     pub(crate) video_encoder_time_base: AVRational,
     /// One frame in `video_encoder_time_base`.
@@ -511,18 +512,21 @@ impl NativeAvEncodeSink {
             });
             match received {
                 Ok(packet) => self.queue_video_packet(packet),
-                Err(RsmpegError::EncoderDrainError) if !flushing => return Ok(()),
-                Err(RsmpegError::EncoderFlushedError | RsmpegError::EncoderDrainError)
-                    if flushing =>
-                {
+                Err(VideoReceiveError::Codec(RsmpegError::EncoderDrainError)) if !flushing => {
                     return Ok(());
                 }
-                Err(error) => {
+                Err(VideoReceiveError::Codec(
+                    RsmpegError::EncoderFlushedError | RsmpegError::EncoderDrainError,
+                )) if flushing => {
+                    return Ok(());
+                }
+                Err(VideoReceiveError::Codec(error)) => {
                     return Err(encode_adapter_error_at(
                         "video encoder packet drain failed",
                         error,
                     ));
                 }
+                Err(VideoReceiveError::Filter(error)) => return Err(error),
             }
         }
     }

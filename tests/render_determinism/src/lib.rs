@@ -29,19 +29,19 @@ use alpha2_render::{
 use alpha2_time::MediaTime;
 
 /// [`graph_hash`] on linux-x64; equals the renderer's own determinism test pin.
-pub const PINNED_GRAPH_HASH: u64 = 4_158_224_015_832_628_688;
+pub const PINNED_GRAPH_HASH: u64 = 2_317_355_044_482_758_383;
 
 /// [`blur_and_stroke_hash`] on linux-x64.
-pub const PINNED_BLUR_AND_STROKE_HASH: u64 = 12_803_358_345_075_414_110;
+pub const PINNED_BLUR_AND_STROKE_HASH: u64 = 12_577_264_159_863_466_608;
 
 /// [`project_hash`] on linux-x64.
-pub const PINNED_PROJECT_HASH: u64 = 8_340_324_065_314_071_693;
+pub const PINNED_PROJECT_HASH: u64 = 10_024_933_701_591_814_599;
 
 /// [`text_fit_hash`] on linux-x64.
-pub const PINNED_TEXT_FIT_HASH: u64 = 2_492_912_094_599_430_155;
+pub const PINNED_TEXT_FIT_HASH: u64 = 13_886_038_456_557_030_929;
 
 /// [`sources_hash`] on linux-x64.
-pub const PINNED_SOURCES_HASH: u64 = 2_463_240_201_688_655_318;
+pub const PINNED_SOURCES_HASH: u64 = 13_512_731_293_498_072_585;
 
 /// Captions, text generators and a layout with fitted font sizes and clamped lines.
 pub const TEXT_FIT_PROJECT_JSON: &str = include_str!("../../cases/text-fit-project.json");
@@ -756,7 +756,7 @@ pub fn project_hash() -> u64 {
         .register_lut3d("grade", &Lut3dData::from_cube(GRADE_CUBE).expect("cube"))
         .expect("lut");
     renderer.set_texture_budget_bytes(quality.texture_budget_bytes);
-    renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+    renderer.set_quality_controls(quality.max_filter_samples);
     let card = |opaque| {
         CpuSource::image(Arc::new(
             CpuImage::from_premultiplied_rgba8(size, &test_card(size, opaque)).expect("card"),

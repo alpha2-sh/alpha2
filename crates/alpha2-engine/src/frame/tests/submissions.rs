@@ -139,12 +139,8 @@ impl FrameProvider for PendingFrame {
     }
 }
 
-#[test]
-fn evaluated_frame_and_yuv_readback_share_one_submission() {
-    let _lock = gpu_test_lock();
-    let renderer = Renderer::new(gpu());
-    let source = SourceId::new("source").expect("valid ID");
-    let frame = FrameDesc {
+fn one_clip_frame(source: &SourceId) -> FrameDesc<'static> {
+    FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         canvas: None,
@@ -170,7 +166,15 @@ fn evaluated_frame_and_yuv_readback_share_one_submission() {
         audio: Vec::new(),
         transitions: Vec::new(),
         captions: Vec::new(),
-    };
+    }
+}
+
+#[test]
+fn evaluated_frame_and_yuv_readback_share_one_submission() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let source = SourceId::new("source").expect("valid ID");
+    let frame = one_clip_frame(&source);
     let size = RenderSize::new(2, 2).expect("even size");
     let input = rgba_image_texture(&renderer, size, &[255, 0, 0, 255].repeat(4));
     let view = input.create_view(&wgpu::TextureViewDescriptor::default());
@@ -223,6 +227,82 @@ fn evaluated_frame_and_yuv_readback_share_one_submission() {
         renderer.diagnostics().frame_submissions,
         missing_before.frame_submissions
     );
+}
+
+#[test]
+fn evaluated_frame_and_layout_readback_share_one_timed_submission() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let source = SourceId::new("source").expect("valid ID");
+    let frame = one_clip_frame(&source);
+    let size = RenderSize::new(2, 2).expect("even size");
+    let input = rgba_image_texture(&renderer, size, &[255, 0, 0, 255].repeat(4));
+    let view = input.create_view(&wgpu::TextureViewDescriptor::default());
+    let provider = SingleFrame {
+        source,
+        texture: &view,
+    };
+    let encoding = centred(ColorMetadata::default());
+    let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuva420p").expect("layout");
+    let packed = |readback: alpha2_render::Yuv420pReadback| {
+        readback.wait_ready().expect("readback maps");
+        let planes = layout.planes(2, 2);
+        let mut memory: Vec<Vec<u8>> = planes
+            .iter()
+            .map(|&(width, rows, bytes)| vec![0; (width * rows * bytes) as usize])
+            .collect();
+        let mut targets: Vec<alpha2_render::PlaneTarget<'_>> = memory
+            .iter_mut()
+            .zip(&planes)
+            .map(|(bytes, &(width, _, size))| {
+                alpha2_render::PlaneTarget::new(bytes, (width * size) as usize)
+            })
+            .collect();
+        readback.finish_into_planes(&mut targets).expect("packs");
+        memory
+    };
+
+    let texture = renderer
+        .render_frame(size, &frame, &provider)
+        .expect("standalone frame renders")
+        .texture
+        .expect("complete frame");
+    let expected = packed(
+        renderer
+            .begin_layout_readback(&texture, encoding, layout)
+            .expect("standalone readback submits"),
+    );
+    let _ = renderer.take_frame_gpu_times();
+    let before = renderer.diagnostics();
+    let mut timings = alpha2_render::FrameSubmitTimings::default();
+    let combined = renderer
+        .render_frame_layout_readback(
+            size,
+            &frame,
+            &provider,
+            encoding,
+            layout,
+            Some(&mut timings),
+        )
+        .expect("combined frame submits");
+    let actual = packed(combined.readback.expect("complete frame has readback"));
+    assert_eq!(actual, expected);
+
+    let after = renderer.diagnostics();
+    assert_eq!(after.frame_submissions - before.frame_submissions, 1);
+    assert_eq!(after.readback_submissions - before.readback_submissions, 0);
+    assert!(
+        timings.queue_submit > std::time::Duration::ZERO,
+        "{timings:?}"
+    );
+    if let Ok(times) = renderer.take_frame_gpu_times() {
+        assert_eq!(times.timed_frames, 1, "{times:?}");
+        assert_eq!(
+            times.sampled_frames + times.flat_frames + times.unread_frames,
+            1,
+            "{times:?}"
+        );
+    }
 }
 
 #[test]

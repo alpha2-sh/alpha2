@@ -30,6 +30,7 @@ wgpu.workspace = true
 half = "2.7.1"
 libm = "0.2.16"
 bytemuck = "1.25.2"
+arrayvec = "0.7.8"
 web-time = "1.1.0"
 serde_json.workspace = true
 

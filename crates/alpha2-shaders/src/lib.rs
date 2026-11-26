@@ -23,6 +23,8 @@ pub const CANVAS_PRESENT_WGSL: &str = built_module!("canvas-present");
 pub const FULLSCREEN_TEXTURE_QUAD_WGSL: &str = built_module!("fullscreen-quad");
 /// Transform and blend one premultiplied RGBA layer over a backdrop.
 pub const COMPOSITE_WGSL: &str = built_module!("composite");
+/// GPU pack of premultiplied RGB intermediates into an output layout's integer YUV planes.
+pub const LAYOUT_PACK_WGSL: &str = built_module!("layout-pack");
 /// GPU quantization from float intermediates into an RGBA8 readback texture.
 pub const READBACK_PACK_WGSL: &str = built_module!("readback-pack");
 /// GPU contain/rotation/premultiplication for browser-imported RGBA frames.

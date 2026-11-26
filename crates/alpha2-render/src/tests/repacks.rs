@@ -147,8 +147,8 @@ fn a_repack_writes_every_decoded_code_into_the_nv12_targets() {
                 }),
                 visible,
                 crate::Nv12PlaneTargets {
-                    luma: &luma_target,
-                    chroma: &chroma_target,
+                    luma: &luma_target.create_view(&wgpu::TextureViewDescriptor::default()),
+                    chroma: &chroma_target.create_view(&wgpu::TextureViewDescriptor::default()),
                 },
                 &mut crate::FrameSubmitTimings::default(),
             )
@@ -184,8 +184,8 @@ fn a_repack_writes_every_decoded_code_into_the_nv12_targets() {
             },
             visible,
             crate::Nv12PlaneTargets {
-                luma: &luma_target,
-                chroma: &chroma_target,
+                luma: &luma_target.create_view(&wgpu::TextureViewDescriptor::default()),
+                chroma: &chroma_target.create_view(&wgpu::TextureViewDescriptor::default()),
             },
             &mut crate::FrameSubmitTimings::default(),
         )
@@ -321,8 +321,8 @@ fn a_repack_refuses_pictures_and_targets_it_cannot_copy_exactly() {
             crate::RepackSource::Cpu(frame),
             visible,
             crate::Nv12PlaneTargets {
-                luma,
-                chroma: &chroma_target,
+                luma: &luma.create_view(&wgpu::TextureViewDescriptor::default()),
+                chroma: &chroma_target.create_view(&wgpu::TextureViewDescriptor::default()),
             },
             &mut crate::FrameSubmitTimings::default(),
         );

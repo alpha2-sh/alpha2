@@ -596,6 +596,13 @@ pub(crate) fn texture_byte_len(size: RenderSize, format: wgpu::TextureFormat) ->
         .saturating_mul(u64::from(block))
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct ReadbackFrame {
+    pub(crate) index: Option<u64>,
+    pub(crate) time: MediaTime,
+    pub(crate) color: alpha2_media::ColorMetadata,
+}
+
 /// Starts mapping an export frame's I420 readback and returns a promise for the frame, with the
 /// staging bytes the readback holds until it settles.
 ///
@@ -611,9 +618,9 @@ pub(crate) fn export_readback_promise(
     loss: alpha2_render::LossClassifier,
     browser_webgpu: bool,
     timeout: std::time::Duration,
-    index: Option<u64>,
-    time: MediaTime,
+    frame: ReadbackFrame,
 ) -> (web_sys::js_sys::Promise, u64) {
+    let ReadbackFrame { index, time, color } = frame;
     // The readback owns its staging buffer, so it can finish on the event loop without keeping
     // the renderer or graph target alive.
     let retained_bytes = readback.staging_bytes();
@@ -677,7 +684,6 @@ pub(crate) fn export_readback_promise(
         }
         let format = readback.pixel_layout().map_or("I420", webcodecs_format);
         let (layout, pixels) = if let Some(pixels) = readback.pixel_layout() {
-            // Other layouts are packed on the CPU into tight planes.
             let (mut memory, layout, offsets) = tight_planes(pixels, size)?;
             readback
                 .finish_into_planes(&mut plane_targets(&mut memory, &offsets))
@@ -720,11 +726,7 @@ pub(crate) fn export_readback_promise(
             &JsValue::from_f64(f64::from(size.height)),
         )?;
         set(&result, "format", &JsValue::from_str(format))?;
-        set(
-            &result,
-            "colorSpace",
-            &video_color_space(alpha2_media::ColorMetadata::EXPORT)?,
-        )?;
+        set(&result, "colorSpace", &video_color_space(color)?)?;
         set(&result, "layout", &layout)?;
         set(&result, "pixels", &pixels)?;
         Ok(result.into())
@@ -922,6 +924,7 @@ pub(crate) fn video_color_space(color: alpha2_media::ColorMetadata) -> Result<Js
         ColorPrimaries::Bt601 => "smpte170m",
         ColorPrimaries::Bt709 => "bt709",
         ColorPrimaries::Bt2020 => "bt2020",
+        ColorPrimaries::DisplayP3 => "smpte432",
     };
     let transfer = match color.transfer {
         TransferFunction::Bt709 => "bt709",
@@ -1050,7 +1053,7 @@ fn readback_failure(
             "DEVICE_LOST" => Code::GPU_DEVICE_LOST,
             "DEVICE_HUNG" => Code::GPU_DEVICE_HUNG,
             "GPU_TIMEOUT" => Code::GPU_TIMEOUT,
-            _ => Code::INTERNAL,
+            _ => Code::ALPHA2_ERROR,
         },
         message,
     );
@@ -1099,7 +1102,7 @@ pub(crate) fn renderer_with_builtins(
     let mut renderer = Renderer::new(gpu).with_gpu_error_reports(health.reports.clone());
     renderer
         .register_builtins()
-        .map_err(|diagnostics| diagnostics_to_js(Code::INTERNAL, diagnostics))?;
+        .map_err(|diagnostics| diagnostics_to_js(Code::ALPHA2_ERROR, diagnostics))?;
     Ok(renderer)
 }
 

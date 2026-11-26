@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use alpha2_host_core::probe_cache::{Keep, KeptAnswers, bounded_kept_probe};
 use alpha2_media::{ColorMetadata, EncodeError};
-use alpha2_native_gpu::{MetalEncoderPlanes, SharedMetalContext};
+use alpha2_native_gpu::SharedMetalContext;
 use alpha2_time::MediaTime;
 use rsmpeg::avcodec::{AVCodec, AVCodecContext};
 use rsmpeg::avutil::{AVFrame, AVHWDeviceContext, AVHWFramesContext, AVRational, av_rescale_q, ra};
@@ -421,7 +421,7 @@ pub(super) struct VideoToolboxEncodeSession {
 pub(super) struct VideoToolboxEncodeInput {
     metal: SharedMetalContext,
     frames: AVHWFramesContext,
-    planes: HashMap<usize, MetalEncoderPlanes>,
+    planes: HashMap<usize, super::Nv12Planes>,
     size: (u32, u32),
     time_base: AVRational,
     color: ColorMetadata,
@@ -472,7 +472,10 @@ impl VideoToolboxEncodeInput {
                     self.size.1
                 )));
             }
-            self.planes.insert(pixel_buffer, planes);
+            self.planes.insert(
+                pixel_buffer,
+                super::Nv12Planes::new(&planes.luma, &planes.chroma),
+            );
         }
         self.stats.acquired = self.stats.acquired.saturating_add(1);
         self.stats.allocated = u64::try_from(self.planes.len()).unwrap_or(u64::MAX);
@@ -499,9 +502,8 @@ impl VideoToolboxEncodeInput {
         }
     }
 
-    pub(super) fn planes(&self, frame: &InputFrame) -> (&wgpu::Texture, &wgpu::Texture) {
-        let planes = &self.planes[&frame.pixel_buffer];
-        (&planes.luma, &planes.chroma)
+    pub(super) fn planes(&self, frame: &InputFrame) -> (&wgpu::TextureView, &wgpu::TextureView) {
+        self.planes[&frame.pixel_buffer].views()
     }
 
     /// Records the submission the encoder must wait for: an empty submission after the pack render,

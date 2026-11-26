@@ -93,7 +93,7 @@ function assertDeclaredPerformance(performance, path) {
       ].every((key) => typeof value[key] === "number"),
     gpuSubmissions: (value) =>
       value === null ||
-      (["frames", "splitFrames", "maxPerFrame"].every((key) =>
+      (["frames", "splitFrames", "maxPerFrame", "overBudget"].every((key) =>
         Number.isSafeInteger(value[key]),
       ) &&
         (value.maxPredictedMs === null ||

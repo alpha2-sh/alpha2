@@ -2,15 +2,74 @@
 
 use std::ffi::c_void;
 
-use alpha2_plugin_abi::{ABI_MAJOR, HostV1, PluginV1};
+use std::mem::offset_of;
+use std::path::PathBuf;
+
+use alpha2_plugin_abi::{ABI_MAJOR, HOST_V1_BASE_BYTES, HostV1, PluginV1};
 
 use crate::{Extractor, Host, Runtime};
 
-// Both tables are a few pointers long.
-#[allow(clippy::cast_possible_truncation)]
-const HOST_BYTES: u32 = size_of::<HostV1>() as u32;
 #[allow(clippy::cast_possible_truncation)]
 const PLUGIN_BYTES: u32 = size_of::<PluginV1>() as u32;
+
+/// `HostV1::resource_path`.
+type ResourcePath = unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut usize) -> *const u8;
+
+/// The host table's entries this build reads: those of the first `/1`, and each appended one the
+/// host's `size` covers.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HostTable {
+    context: *mut c_void,
+    emit: unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32,
+    resource: unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut usize) -> *const u8,
+    fail: unsafe extern "C" fn(*mut c_void, *const u8, usize),
+    log: unsafe extern "C" fn(*mut c_void, u32, *const u8, usize),
+    resource_path: Option<ResourcePath>,
+}
+
+/// Whether a host table of `size` bytes covers the appended entry at `offset`.
+const fn covers(size: usize, offset: usize, entry: usize) -> bool {
+    size >= offset + entry
+}
+
+/// The entries of the host table at `host`, or `None` for another ABI or a table shorter than
+/// the first `/1`'s.
+///
+/// # Safety
+/// A non-null `host` is valid for reads of the `size` bytes it states, at least its header.
+pub(crate) unsafe fn host_table(host: *const HostV1) -> Option<HostTable> {
+    if host.is_null() {
+        return None;
+    }
+    // SAFETY: every `/1` table starts with `abi` and `size`.
+    let (abi, size) = unsafe {
+        (
+            (&raw const (*host).abi).read(),
+            (&raw const (*host).size).read(),
+        )
+    };
+    let size = size as usize;
+    if abi != ABI_MAJOR || size < HOST_V1_BASE_BYTES {
+        return None;
+    }
+    // SAFETY: the table holds at least the first `/1` entries, which are read one by one, and an
+    // appended entry only when `size` covers it.
+    unsafe {
+        Some(HostTable {
+            context: (&raw const (*host).context).read(),
+            emit: (&raw const (*host).emit).read(),
+            resource: (&raw const (*host).resource).read(),
+            fail: (&raw const (*host).fail).read(),
+            log: (&raw const (*host).log).read(),
+            resource_path: covers(
+                size,
+                offset_of!(HostV1, resource_path),
+                size_of::<ResourcePath>(),
+            )
+            .then(|| (&raw const (*host).resource_path).read()),
+        })
+    }
+}
 
 /// The function table for `E`, which [`crate::export_extractor`] puts in a static.
 #[must_use]
@@ -58,21 +117,10 @@ unsafe extern "C" fn describe<E: Extractor>(len: *mut usize) -> *const u8 {
 }
 
 unsafe extern "C" fn create<E: Extractor>(host: *const HostV1) -> *mut c_void {
-    if host.is_null() {
+    // SAFETY: the host passes its table, valid until `destroy`.
+    let Some(table) = (unsafe { host_table(host) }) else {
         return std::ptr::null_mut();
-    }
-    // SAFETY: the host passes its table, valid until `destroy`, which starts with `abi` and `size`.
-    let (abi, size) = unsafe {
-        (
-            (&raw const (*host).abi).read(),
-            (&raw const (*host).size).read(),
-        )
     };
-    if abi != ABI_MAJOR || size < HOST_BYTES {
-        return std::ptr::null_mut();
-    }
-    // SAFETY: the table holds at least this build's `HostV1`.
-    let table = unsafe { host.read() };
     std::panic::catch_unwind(|| Box::into_raw(Box::new(Runtime::<E>::new(Host { table }))))
         .map_or(std::ptr::null_mut(), <*mut Runtime<E>>::cast)
 }
@@ -166,5 +214,16 @@ impl Host {
                 (self.table.resource)(self.table.context, name.as_ptr(), name.len(), &raw mut len);
             (!bytes.is_null()).then(|| borrowed(bytes, len).to_vec())
         }
+    }
+
+    pub(crate) fn read_resource_path(&self, name: &str) -> Option<PathBuf> {
+        let resource_path = self.table.resource_path?;
+        let mut len = 0;
+        // SAFETY: as for `emit`; the returned bytes stay valid until `destroy`.
+        let bytes = unsafe {
+            let bytes = resource_path(self.table.context, name.as_ptr(), name.len(), &raw mut len);
+            (!bytes.is_null()).then(|| borrowed(bytes, len).to_vec())
+        }?;
+        String::from_utf8(bytes).ok().map(PathBuf::from)
     }
 }

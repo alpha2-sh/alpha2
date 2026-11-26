@@ -149,7 +149,7 @@ impl Parity {
         gpu.register_builtins().expect("built-ins register");
         let cpu = CpuRenderer::new(3);
         let quality = gpu.quality_controls();
-        cpu.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+        cpu.set_quality_controls(quality.max_filter_samples);
         Self {
             gpu,
             cpu,

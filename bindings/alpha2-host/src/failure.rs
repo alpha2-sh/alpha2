@@ -299,11 +299,12 @@ pub fn classify_failure(
         | "PLUGIN_UNSUPPORTED_FEATURE"
         | "PLUGIN_LOAD_FAILED"
         | "PLUGIN_TRAPPED"
+        | "PLUGIN_RESOURCE_INVALID"
         // Another export is writing the same output; retrying meets it again until that one ends.
         | "OUTPUT_IN_USE" => return class("INVALID_INPUT", "unknown"),
         // A slow client, or a plugin's server, may answer in time on another attempt.
         "EXTRACTOR_TIMEOUT" | "PLUGIN_FETCH_FAILED" => return class("UNKNOWN", "unknown"),
-        // A caught panic: an engine fault, which a fresh host may not meet again.
+        // A defect (a caught panic or an internal error), which a fresh host may not meet again.
         "INTERNAL" => return class("DEFECT", "unknown"),
         _ => {}
     }

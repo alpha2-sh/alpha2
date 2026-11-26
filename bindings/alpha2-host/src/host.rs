@@ -46,7 +46,7 @@ use alpha2_engine::{
     FramesWithText, QualityProfile, TextTextures,
 };
 use alpha2_gpu::CapabilityTier;
-use alpha2_media::{CancelToken, ColorMetadata, EncodeEvent};
+use alpha2_media::{CancelToken, EncodeEvent};
 use alpha2_model::{MediaFingerprint, MediaKind, Project};
 use alpha2_native::{
     AvEncodeConfig, ExistingOutput, NativeAvEncodeSink, NativeVideoCodec, NativeVideoEncodeSink,
@@ -111,6 +111,7 @@ pub struct HostDevice {
     /// The result-cache budget each rendering request asked for, by its cache scope; the
     /// renderer's budget is their sum.
     cache_budgets: std::sync::Mutex<HashMap<u64, u64>>,
+    reported_texture_budget: std::sync::Mutex<Option<(u64, u64)>>,
     /// Runtime effects and effect resources, held by the requests that use them.
     pub(crate) registrations: crate::registrations::Registrations,
     /// Blocks this device's drop forever when a test asks, as on a device that never goes idle.
@@ -315,6 +316,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -340,6 +342,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -365,6 +368,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -390,6 +394,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -552,6 +557,7 @@ impl Host {
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
             cache_budgets: std::sync::Mutex::default(),
+            reported_texture_budget: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -1150,7 +1156,7 @@ impl Host {
         };
         crate::memory::admit(
             crate::memory::LeastWorkingSet::estimate(
-                (size, self.renderer.intermediate_format(), pixels),
+                (size, pixels),
                 (videos, threads.decoder_threads),
                 largest.bytes,
                 renderer,
@@ -1306,19 +1312,22 @@ impl Host {
         let mut facts = self.failure.facts();
         let mut error = error;
         if let RendererBackend::Gpu(renderer) = &self.renderer {
+            let hung = renderer.hung_submission();
             // A loss the renderer's own long submission explains is hung, whichever step met it.
             if matches!(error.code, "GPU_DEVICE_LOST" | "GPU_TIMEOUT")
-                && let hung @ alpha2_render::RenderError::GpuDeviceHung { .. } =
-                    renderer.classify_loss(alpha2_render::RenderError::GpuDeviceLost)
+                && let Some(report) = &hung
             {
                 error.code = "GPU_DEVICE_HUNG";
-                error.message = format!("{hung} ({})", error.message);
+                error.message = format!("{} ({})", report.hung_error(), error.message);
             }
-            if let Some(longest) = renderer.longest_submission() {
+            let hung = hung.filter(|_| error.code == "GPU_DEVICE_HUNG");
+            if let Some(longest) = hung.or_else(|| renderer.longest_submission()) {
                 facts.insert(
                     "gpuSubmission".to_owned(),
                     json!({
-                        "maxMs": (longest.gpu_ms * 10.0).round() / 10.0,
+                        "gpuMs": (longest.gpu_ms * 10.0).round() / 10.0,
+                        "submissions": longest.submissions,
+                        "measured": longest.measured,
                         "watchdogMs": alpha2_gpu::watchdog_ms(),
                         "frameIndex": longest.frame.and_then(|frame| frame.frame_index),
                         "effects": longest.effects,
@@ -2074,8 +2083,8 @@ impl Host {
             ))
         } else if !pixels.is_yuv420p() {
             Err(crate::gpu_output::GpuOutputRefusal::unavailable(
-                "alpha and 10-bit pictures are packed on the CPU; the GPU-resident path writes \
-                 8-bit 4:2:0",
+                "alpha and 10-bit pictures are read back from integer planes; the GPU-resident \
+                 path writes 8-bit 4:2:0",
             ))
         } else {
             candidate
@@ -2379,7 +2388,7 @@ impl Host {
             .transpose()?;
         let pipeline_limits = export_pipeline_limits(
             size,
-            (self.renderer.intermediate_format(), pixels),
+            pixels,
             self.memory.in_flight_budget(),
             configured_frame_depth(),
             configured_encode_channel_depth(),
@@ -2389,7 +2398,7 @@ impl Host {
             width: size.width,
             height: size.height,
             frame_rate: rate,
-            color: ColorMetadata::EXPORT,
+            color: exporter.encoding().color,
             rate_control: video_rate.control,
             codec: video_codec,
             display: alpha2_native::VideoDisplay::default(),
@@ -3388,6 +3397,32 @@ impl Host {
         })
     }
 
+    fn report_changed_texture_budget(&self, degradations: &[alpha2_render::CapabilityDiagnostic]) {
+        let reduced = degradations
+            .iter()
+            .find_map(|degradation| match degradation {
+                alpha2_render::CapabilityDiagnostic::TextureBudgetReduced {
+                    requested,
+                    applied,
+                } => Some((*requested, *applied)),
+                _ => None,
+            });
+        let mut reported = self
+            .reported_texture_budget
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *reported == reduced {
+            return;
+        }
+        *reported = reduced;
+        if let Some((requested, applied)) = reduced {
+            alpha2_os::diagnostic!(
+                "alpha2-host texture budget: {requested} bytes requested, held to {applied}, a \
+                 quarter of the GPU memory budget"
+            );
+        }
+    }
+
     pub fn response_metadata(&self, render_ms: f64) -> Value {
         let RendererBackend::Gpu(renderer) = &self.renderer else {
             let adapter = self.renderer.adapter();
@@ -3413,6 +3448,7 @@ impl Host {
             });
         };
         let diagnostics = renderer.diagnostics();
+        self.report_changed_texture_budget(&diagnostics.degradations);
         let ffmpeg = ffmpeg_runtime_identity();
         json!({
             "renderMs": render_ms,
@@ -3477,6 +3513,11 @@ impl Host {
                 "highWaterBytes": diagnostics.uniform_buffers.high_water_bytes,
                 "available": diagnostics.uniform_buffers.available,
                 "availableBytes": diagnostics.uniform_buffers.available_bytes,
+            },
+            "bindGroups": {
+                "created": diagnostics.bind_groups.created,
+                "reused": diagnostics.bind_groups.reused,
+                "kept": diagnostics.bind_groups.kept,
             },
             "framesPresented": diagnostics.presented_frames,
             "framesDropped": diagnostics.dropped_frames,

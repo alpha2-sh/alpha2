@@ -44,7 +44,7 @@ pub enum CacheInvalidation {
     Effects,
     /// An effect resource was uploaded, replaced, or removed.
     EffectResources,
-    /// Filter or temporal sampling controls changed.
+    /// The filter sample budget changed.
     Quality,
     /// The caller cleared it.
     Explicit,

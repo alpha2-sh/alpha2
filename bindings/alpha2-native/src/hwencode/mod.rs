@@ -608,9 +608,9 @@ impl HardwareEncodeInput {
         }
     }
 
-    /// The luma and interleaved chroma textures `frame` is packed into.
+    /// Default views of the luma and interleaved chroma textures `frame` is packed into.
     #[must_use]
-    pub fn planes(&self, frame: &InputFrame) -> (&wgpu::Texture, &wgpu::Texture) {
+    pub fn planes(&self, frame: &InputFrame) -> (&wgpu::TextureView, &wgpu::TextureView) {
         match &self.backend {
             #[cfg(target_os = "linux")]
             InputBackend::Vulkan(input) => input.planes(frame),
@@ -847,5 +847,25 @@ impl HardwareEncodeSession {
             #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             SessionBackend::Unsupported(never) => match *never {},
         }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+struct Nv12Planes {
+    luma: wgpu::TextureView,
+    chroma: wgpu::TextureView,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+impl Nv12Planes {
+    fn new(luma: &wgpu::Texture, chroma: &wgpu::Texture) -> Self {
+        Self {
+            luma: luma.create_view(&wgpu::TextureViewDescriptor::default()),
+            chroma: chroma.create_view(&wgpu::TextureViewDescriptor::default()),
+        }
+    }
+
+    const fn views(&self) -> (&wgpu::TextureView, &wgpu::TextureView) {
+        (&self.luma, &self.chroma)
     }
 }

@@ -495,6 +495,9 @@ PATCH
     -x264-params threads=1:sliced-threads=0 \
     -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv \
     h264-bt709-transcode.mp4
+  "${FFMPEG[@]}" -i h264-bt709-transcode.mp4 -map 0:v -c copy \
+    -bsf:v h264_metadata=colour_primaries=6:transfer_characteristics=6:matrix_coefficients=6 \
+    h264-bt709-transcode-vui-bt601.mp4
   # Size and crop change mid-stream with the second SPS in band. A decoder whose surface is the
   # visible size (D3D12VA) cannot hold the second.
   printf "file h264-bt709-transcode.mp4\nfile h264-bt709-crop-left.mp4\n" > .res-change.txt

@@ -169,9 +169,20 @@ export interface PluginHostPolicy {
    * lie under, resolved against `cwd` when relative.
    */
   readonly root?: string;
+  /**
+   * Where a native artifact runs: `process` (the host's default), a worker process per run, so a
+   * crash or a hang fails the request and not the host; `in-process`, inside the host.
+   */
+  readonly isolation?: "process" | "in-process";
+  /**
+   * Where files a request supplies for resource slots may lie: `"none"` (the host's default), no
+   * request fills a slot; `"any"`, anywhere; or a directory, resolved against `cwd` when relative.
+   */
+  readonly resourceRoot?: string;
 }
 
 const PLUGIN_MODES = ["off", "wasm", "native"];
+const PLUGIN_ISOLATIONS = ["process", "in-process"];
 
 /** The `serve` flags of `policy`; throws `INVALID_INPUT` for a malformed one. */
 function pluginFlags(
@@ -184,7 +195,7 @@ function pluginFlags(
   if (typeof policy !== "object" || policy === null)
     throw invalid("must be an object");
   const flags: string[] = [];
-  const { mode, origins, root } = policy;
+  const { mode, origins, root, isolation, resourceRoot } = policy;
   if (mode !== undefined) {
     if (!PLUGIN_MODES.includes(mode))
       throw invalid("mode must be off, wasm or native");
@@ -216,6 +227,21 @@ function pluginFlags(
     flags.push(
       "--plugin-root",
       root === "any" || root === "none" ? root : resolve(cwd, root),
+    );
+  }
+  if (isolation !== undefined) {
+    if (!PLUGIN_ISOLATIONS.includes(isolation))
+      throw invalid("isolation must be process or in-process");
+    flags.push("--plugin-isolation", isolation);
+  }
+  if (resourceRoot !== undefined) {
+    if (typeof resourceRoot !== "string" || resourceRoot === "")
+      throw invalid('resourceRoot must be "none", "any" or a directory');
+    flags.push(
+      "--plugin-resource-root",
+      resourceRoot === "any" || resourceRoot === "none"
+        ? resourceRoot
+        : resolve(cwd, resourceRoot),
     );
   }
   return flags;
@@ -561,6 +587,11 @@ export interface GpuSubmissions {
   readonly maxPerFrame: number;
   /** Longest predicted GPU time of one submission; `null` when no frame needed splitting. */
   readonly maxPredictedMs: number | null;
+  /**
+   * Submissions predicted over the submission budget: passes that could not be cut finer, and
+   * frames spread past the per-frame submission cap.
+   */
+  readonly overBudget: number;
 }
 
 /**
@@ -1121,6 +1152,16 @@ export interface HostCapabilities {
     HostEncodeCapabilities
   >;
   readonly effectCatalog: BuiltinEffectCatalog;
+  /**
+   * What the host's plugin policy allows (the client's `plugins` option): which artifacts run
+   * (`--plugins`), whether a request may fill a resource slot (`--plugin-resource-root` other than
+   * `none`) and where a native artifact runs (`--plugin-isolation`).
+   */
+  readonly plugins: {
+    readonly mode: "off" | "wasm" | "native";
+    readonly slots: boolean;
+    readonly isolation: "process" | "in-process";
+  };
   readonly [diagnostic: string]: unknown;
 }
 
@@ -1143,6 +1184,8 @@ export interface Alpha2HostErrorOptions extends ErrorOptions {
   readonly problem?: string;
   /** As {@link Alpha2HostError.refusal}. */
   readonly refusal?: string;
+  /** As {@link Alpha2HostError.details}. */
+  readonly details?: Readonly<Record<string, unknown>>;
 }
 
 /** Bytes of the host's standard error an error keeps. */
@@ -1171,6 +1214,11 @@ export class Alpha2HostError extends Error {
   readonly problem?: string;
   /** Why an edit operation refused, such as `unknown_data` (`alpha2/apply-edit` `EditRefusal`). */
   readonly refusal?: string;
+  /**
+   * What the host sent besides the code, as it sent it: for `PLUGIN_RESOURCE_INVALID`
+   * `{ slot, reason }`, for `PLUGIN_TRAPPED` `{ exit }`, `{ signal }` or `{ wire }`.
+   */
+  readonly details?: Readonly<Record<string, unknown>>;
 
   constructor(code: string, message: string, options?: Alpha2HostErrorOptions) {
     super(message, options);
@@ -1196,6 +1244,7 @@ export class Alpha2HostError extends Error {
     if (options?.path !== undefined) this.path = options.path;
     if (options?.problem !== undefined) this.problem = options.problem;
     if (options?.refusal !== undefined) this.refusal = options.refusal;
+    if (options?.details !== undefined) this.details = options.details;
   }
 }
 
@@ -1831,6 +1880,16 @@ export class Alpha2NodeClient {
         invalidShape(
           "request.plugin needs its manifest and the manifest's sha256",
         );
+      const supplied = plugin.supplied ?? {};
+      if (
+        typeof supplied !== "object" ||
+        supplied === null ||
+        Array.isArray(supplied) ||
+        !Object.values(supplied).every(nonEmptyString)
+      )
+        invalidShape(
+          "request.plugin.supplied maps resource slots to file or directory paths",
+        );
       runs = {
         plugin: {
           manifest: URL_SCHEME.test(plugin.manifest)
@@ -1839,6 +1898,12 @@ export class Alpha2NodeClient {
           sha256: plugin.sha256,
           allow_native: plugin.allowNative ?? false,
           force_wasm: plugin.forceWasm ?? false,
+          supplied: Object.fromEntries(
+            Object.entries(supplied).map(([slot, path]) => [
+              slot,
+              absolutePath(path),
+            ]),
+          ),
         },
       };
     }
@@ -1948,6 +2013,12 @@ export interface ExtractPlugin {
   readonly allowNative?: boolean;
   /** The wasm artifact even where a native one is allowed. */
   readonly forceWasm?: boolean;
+  /**
+   * The file or directory that fills each resource slot the manifest declares, by slot name;
+   * relative paths resolve against the working directory. The host takes them only within its
+   * `plugins.resourceRoot`.
+   */
+  readonly supplied?: Readonly<Record<string, string>>;
 }
 
 export type {
@@ -3688,6 +3759,11 @@ function errorFromHost(
       : {}),
     ...(typeof details?.refusal === "string"
       ? { refusal: details.refusal }
+      : {}),
+    ...(error.details !== null &&
+    typeof error.details === "object" &&
+    !Array.isArray(error.details)
+      ? { details: error.details as Record<string, unknown> }
       : {}),
   });
 }

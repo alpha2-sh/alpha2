@@ -23,7 +23,7 @@ pub use audio::{AppleAudio, AudioToolboxAudio, VorbisAudio};
 #[cfg(target_vendor = "apple")]
 pub use audio_encode::{AppleAudioEncoders, AudioToolboxEncoder};
 #[cfg(target_vendor = "apple")]
-pub use video::{AppleVideo, VideoToolboxVideo};
+pub use video::{AppleSurface, AppleVideo, VideoOutput, VideoToolboxVideo};
 #[cfg(target_vendor = "apple")]
 pub use video_encode::{AppleVideoEncoders, VideoToolboxEncoder};
 

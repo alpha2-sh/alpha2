@@ -10,7 +10,9 @@
 //! Params: `threshold` (0.5), `min_silence_ms` (200). Another key, or a value that is not a number
 //! in the range the descriptor declares, fails `begin`.
 
-use alpha2_plugin_sdk::{Audio, Context, Emitter, Error, Extractor, Host};
+use alpha2_plugin_sdk::{
+    Audio, Context, Emitter, Error, Extractor, Host, NumberParam, TICKS_PER_SECOND,
+};
 use tract_onnx::prelude::*;
 
 /// The model's rate.
@@ -21,8 +23,6 @@ const BLOCK: usize = 512;
 const CONTEXT: usize = 64;
 /// Samples per millisecond at the model's rate.
 const SAMPLES_PER_MS: f64 = 16.0;
-/// alpha2's clock.
-const TICKS_PER_SECOND: i64 = 120_000;
 /// The hysteresis below `threshold` at which speech ends.
 const RELEASE: f32 = 0.15;
 /// The probability from which a block before speech counts as its start: the model rises over a
@@ -58,37 +58,20 @@ pub struct Silence {
     range_end: i64,
 }
 
-/// Each param with its default and the inclusive bounds `descriptor.json` declares.
-const PARAMS: [(&str, f64, f64, f64); 2] = [
-    ("threshold", 0.5, 0.05, 0.95),
-    ("min_silence_ms", 200.0, 0.0, 60_000.0),
+const PARAMS: [NumberParam; 2] = [
+    NumberParam {
+        key: "threshold",
+        default: 0.5,
+        min: 0.05,
+        max: 0.95,
+    },
+    NumberParam {
+        key: "min_silence_ms",
+        default: 200.0,
+        min: 0.0,
+        max: 60_000.0,
+    },
 ];
-
-/// `threshold` and `min_silence_ms`, defaults filled in.
-fn params(context: &Context) -> Result<[f64; 2], Error> {
-    if let Some(key) = context
-        .params
-        .keys()
-        .find(|key| PARAMS.iter().all(|(name, ..)| name != key))
-    {
-        return Err(Error(format!(
-            "params.{key} is not a param of alpha2.silence"
-        )));
-    }
-    let mut values = [0.0; 2];
-    for (value, (key, default, min, max)) in values.iter_mut().zip(PARAMS) {
-        *value = match context.params.get(key) {
-            None => default,
-            Some(given) => given
-                .as_f64()
-                .filter(|number| (min..=max).contains(number))
-                .ok_or_else(|| {
-                    Error(format!("params.{key} must be a number from {min} to {max}"))
-                })?,
-        };
-    }
-    Ok(values)
-}
 
 /// The first sample at or after `ticks`.
 fn to_sample_ceil(ticks: i64) -> i64 {
@@ -146,7 +129,7 @@ impl Extractor for Silence {
             .ok_or("no resource named vad.onnx")?;
         let model =
             load(&bytes).map_err(|error| Error(format!("vad.onnx does not load: {error}")))?;
-        let [threshold, min_silence_ms] = params(context)?;
+        let [threshold, min_silence_ms] = context.number_params("alpha2.silence", &PARAMS)?;
         #[allow(clippy::cast_possible_truncation)]
         let threshold = threshold as f32;
         #[allow(clippy::cast_possible_truncation)]
@@ -269,3 +252,20 @@ impl Silence {
 }
 
 alpha2_plugin_sdk::export_extractor!(Silence);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_descriptor_declares_the_defaults_and_bounds_the_plugin_uses() {
+        let descriptor: serde_json::Value =
+            serde_json::from_str(<Silence as Extractor>::DESCRIPTOR).expect("descriptor");
+        for param in PARAMS {
+            let schema = &descriptor["params_schema"]["properties"][param.key];
+            assert_eq!(schema["default"].as_f64(), Some(param.default), "{param:?}");
+            assert_eq!(schema["minimum"].as_f64(), Some(param.min), "{param:?}");
+            assert_eq!(schema["maximum"].as_f64(), Some(param.max), "{param:?}");
+        }
+    }
+}

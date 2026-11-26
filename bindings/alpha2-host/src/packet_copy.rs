@@ -27,7 +27,7 @@ use crate::metrics::{VideoPipeline, frames_per_second};
 use crate::protocol::{HostError, LoudnessRequest};
 use alpha2_audio::TransportState;
 use alpha2_engine::{AudioRenderer, EngineProject, PassthroughAudio};
-use alpha2_media::{AudioBlock, CancelToken, ColorMetadata};
+use alpha2_media::{AudioBlock, CancelToken, YuvEncoding};
 use alpha2_model::Project;
 use alpha2_native::{
     AudioBlockFeed, AudioStreamConfig, CopyAudio, NativeAudioCodec, NativeVideoCodec, PacketCopy,
@@ -198,7 +198,7 @@ pub(crate) fn packet_copy_plan(request: &CopyRequest) -> Result<CopyPlan, String
             height: request.project.settings.height,
             codec: request.video_codec,
             container: request.container,
-            color: ColorMetadata::EXPORT,
+            color: YuvEncoding::export(request.video_codec.model()).color,
             output_start: MediaTime::from_ticks(
                 first_shown.ticks() - request.effective_range.start().ticks(),
             ),

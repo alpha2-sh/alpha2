@@ -49,6 +49,9 @@ impl RepackSource<'_> {
     }
 }
 
+const REPACK_SAMPLE_COST: crate::effect_cost::EffectCost =
+    crate::effect_cost::EffectCost::fixed(1, 0);
+
 impl Renderer {
     /// Copies the `visible` part of a decoded 8-bit 4:2:0 picture into same-size NV12 targets,
     /// sample for sample, in one submission. Counted as a repack in diagnostics.
@@ -90,7 +93,7 @@ impl Renderer {
         {
             return Err(RenderError::InvalidImageData);
         }
-        check_targets(targets, output)?;
+        targets.check(output)?;
         self.check_submitted_work()?;
         let passes = self.repack_passes(source, visible, targets)?;
         self.submit_repack(&passes, started, timings)
@@ -134,38 +137,33 @@ impl Renderer {
             .collect::<Vec<_>>();
         let pass = |label: &'static str,
                     pipeline: &wgpu::RenderPipeline,
-                    target: &wgpu::Texture,
+                    target: &wgpu::TextureView,
                     uploads: Vec<UploadTexture>,
                     external_leases: Vec<Arc<dyn ExternalTextureLease>>| {
-            let mut uniforms = self.uniform_buffers.acquire(
-                self.gpu.device(),
-                u64::try_from(origin.len()).unwrap_or(u64::MAX),
-            );
-            let slice = uniforms.write(&origin);
-
-            let bind_group = self
-                .gpu
-                .device()
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("alpha2 YUV repack bind group"),
-                    layout: &cached.bind_group_layout,
-                    entries: &[
-                        texture_entry(0, &planes[0]),
-                        texture_entry(1, &planes[1]),
-                        texture_entry(2, planes.get(2).unwrap_or(&planes[1])),
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: uniforms.binding(slice),
-                        },
-                    ],
-                });
             PendingSourceWork::new(SourceWork {
                 label,
                 conversion: false,
                 pipeline: pipeline.clone(),
-                bind_group,
-                output_view: crate::pool::default_view(target),
-                uniforms,
+                layout: cached.bind_group_layout.clone(),
+                textures: [
+                    (0, planes[0].clone()),
+                    (1, planes[1].clone()),
+                    (2, planes.get(2).unwrap_or(&planes[1]).clone()),
+                ]
+                .into_iter()
+                .collect(),
+                uniform_binding: 3,
+                uniform: origin.clone(),
+                sampler: None,
+                output_view: target.clone(),
+                output_size: RenderSize {
+                    width: target.texture().width(),
+                    height: target.texture().height(),
+                },
+                work: crate::FrameCost::of(
+                    REPACK_SAMPLE_COST,
+                    u64::from(target.texture().width()) * u64::from(target.texture().height()),
+                ),
                 uploads,
                 external_leases,
             })
@@ -202,19 +200,25 @@ impl Renderer {
         let frame = self.frame_lock.hold();
         let mut command_encoder = self.command_encoder("alpha2 YUV repack encoder");
         let work = begin_source_work(&frame, &[&passes[0], &passes[1]]);
+        let mut uniforms = self.uniform_buffers.acquire(
+            self.gpu.device(),
+            crate::prepared_frame::source_uniform_capacity(&work, self.uniform_alignment()),
+        );
         for ticket in &work {
-            ticket.encode(&mut command_encoder);
+            ticket.encode(self, &mut command_encoder, &mut uniforms)?;
         }
         // A repack reads nothing back, so its canary goes in a buffer of its own.
         let (canary_buffer, canary) = self.canaries.encode_own(&self.gpu, &mut command_encoder)?;
         let recorded = started.elapsed();
+        uniforms.flush(self.gpu.queue());
         let staged = web_time::Instant::now();
-        stage_source_submissions(self.gpu.queue(), &work)?;
+        stage_source_submissions(&work)?;
         let source_acquire = staged.elapsed();
         let finishing = web_time::Instant::now();
         let command_buffer = command_encoder.finish();
         let command_encode = recorded.saturating_add(finishing.elapsed());
         let submitted = self.submit_measured([command_buffer], true)?;
+        uniforms.recycle();
         self.submission_canaries
             .track(&self.gpu, canary_buffer, canary);
         let completing = web_time::Instant::now();
@@ -301,7 +305,7 @@ impl Renderer {
                                 visibility: wgpu::ShaderStages::FRAGMENT,
                                 ty: wgpu::BindingType::Buffer {
                                     ty: wgpu::BufferBindingType::Uniform,
-                                    has_dynamic_offset: false,
+                                    has_dynamic_offset: true,
                                     min_binding_size: None,
                                 },
                                 count: None,
@@ -368,35 +372,4 @@ impl Renderer {
             }
         })
     }
-}
-
-fn texture_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
-    wgpu::BindGroupEntry {
-        binding,
-        resource: wgpu::BindingResource::TextureView(view),
-    }
-}
-
-/// The same target checks the NV12 pack makes.
-fn check_targets(targets: Nv12PlaneTargets<'_>, size: RenderSize) -> Result<(), RenderError> {
-    let attachment = |texture: &wgpu::Texture| {
-        texture
-            .usage()
-            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
-            && texture.mip_level_count() == 1
-            && texture.sample_count() == 1
-            && texture.depth_or_array_layers() == 1
-    };
-    if targets.luma.format() != wgpu::TextureFormat::R8Unorm
-        || targets.chroma.format() != wgpu::TextureFormat::Rg8Unorm
-        || targets.luma.width() != size.width
-        || targets.luma.height() != size.height
-        || targets.chroma.width() != size.width / 2
-        || targets.chroma.height() != size.height / 2
-        || !attachment(targets.luma)
-        || !attachment(targets.chroma)
-    {
-        return Err(RenderError::InvalidPlaneTarget);
-    }
-    Ok(())
 }

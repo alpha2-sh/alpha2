@@ -309,21 +309,22 @@ pub struct ExportPipelineLimits {
 /// Divides the in-flight byte budget between readbacks and the encode channel.
 ///
 /// `requested_encode_depth` pins the depth; `None` derives it. Readbacks are capped at
-/// [`MAX_IN_FLIGHT_VIDEO_FRAMES`], then the encode channel takes what is left within
-/// [`MIN_ENCODE_CHANNEL_DEPTH`]..=[`MAX_ENCODE_CHANNEL_DEPTH`], reduced until both fit, so a small
-/// budget degrades instead of failing.
+/// `requested_depth` and [`MAX_IN_FLIGHT_VIDEO_FRAMES`], and the encode channel takes what is left
+/// within [`MIN_ENCODE_CHANNEL_DEPTH`]..=[`MAX_ENCODE_CHANNEL_DEPTH`]. Where both do not fit, a
+/// derived channel gives up slots, down to a rendezvous, before a readback is given up; a pinned
+/// one keeps its slots first. So a small budget degrades instead of failing.
 ///
 /// # Errors
 /// When the budget cannot hold one readback and two packed frames (a rendezvous channel's), which
 /// is a configuration error rather than backpressure.
 pub fn export_pipeline_limits(
     size: RenderSize,
-    (format, layout): (wgpu::TextureFormat, alpha2_media::PixelLayout),
+    layout: alpha2_media::PixelLayout,
     budget: crate::memory::InFlightBudget,
     requested_depth: usize,
     requested_encode_depth: Option<usize>,
 ) -> Result<ExportPipelineLimits, String> {
-    let staging_bytes_per_frame = estimated_staging_bytes(size, format, layout);
+    let staging_bytes_per_frame = estimated_staging_bytes(size, layout);
     let packed_bytes_per_frame = layout.frame_bytes(size.width, size.height);
     let least = staging_bytes_per_frame.saturating_add(
         packed_bytes_per_frame
@@ -343,32 +344,47 @@ pub fn export_pipeline_limits(
         },
         |depth| depth.min(MAX_ENCODE_CHANNEL_DEPTH),
     );
-    for encode_channel_depth in (0..=start).rev() {
+    let fits = |readback_depth: usize, encode_channel_depth: usize| {
         let encode_slots =
             u64::try_from(readback_encode_frame_bound(encode_channel_depth)).unwrap_or(u64::MAX);
-        let encode_reserve = packed_bytes_per_frame.saturating_mul(encode_slots);
-        let available = byte_budget.saturating_sub(encode_reserve);
-        let possible_depth = available / staging_bytes_per_frame.max(1);
-        let readback_depth = usize::try_from(possible_depth)
-            .unwrap_or(MAX_IN_FLIGHT_VIDEO_FRAMES)
-            .min(requested_depth)
-            .min(MAX_IN_FLIGHT_VIDEO_FRAMES);
-        if readback_depth > 0
-            && encode_reserve.saturating_add(
-                staging_bytes_per_frame
-                    .saturating_mul(u64::try_from(readback_depth).unwrap_or(u64::MAX)),
-            ) <= byte_budget
-        {
-            return Ok(ExportPipelineLimits {
-                byte_budget,
-                readback_depth,
-                encode_channel_depth,
-                staging_bytes_per_frame,
-                packed_bytes_per_frame,
-                #[cfg(feature = "hwencode")]
-                gpu: None,
-            });
-        }
+        let readbacks = u64::try_from(readback_depth).unwrap_or(u64::MAX);
+        packed_bytes_per_frame
+            .saturating_mul(encode_slots)
+            .saturating_add(staging_bytes_per_frame.saturating_mul(readbacks))
+            <= byte_budget
+    };
+    let wanted = requested_depth.min(MAX_IN_FLIGHT_VIDEO_FRAMES);
+    let channel_first = || {
+        (0..=start).rev().find_map(|encode_channel_depth| {
+            (1..=wanted)
+                .rev()
+                .find(|&readback_depth| fits(readback_depth, encode_channel_depth))
+                .map(|readback_depth| (readback_depth, encode_channel_depth))
+        })
+    };
+    let readbacks_first = || {
+        (1..=wanted).rev().find_map(|readback_depth| {
+            (0..=start)
+                .rev()
+                .find(|&encode_channel_depth| fits(readback_depth, encode_channel_depth))
+                .map(|encode_channel_depth| (readback_depth, encode_channel_depth))
+        })
+    };
+    let plan = if requested_encode_depth.is_some() {
+        channel_first()
+    } else {
+        readbacks_first()
+    };
+    if let Some((readback_depth, encode_channel_depth)) = plan {
+        return Ok(ExportPipelineLimits {
+            byte_budget,
+            readback_depth,
+            encode_channel_depth,
+            staging_bytes_per_frame,
+            packed_bytes_per_frame,
+            #[cfg(feature = "hwencode")]
+            gpu: None,
+        });
     }
     Err(crate::memory::resource_limit(format!(
         "{} cannot hold one readback and two packed {}x{} {} frames",
@@ -572,18 +588,7 @@ pub fn add_gpu_time_metrics(value: &mut Value, renderer: Option<&alpha2_render::
             times.sampled_frames,
             None,
         ),
-        Ok(times) if times.flat_frames > 0 => (
-            None,
-            None,
-            0,
-            Some("the device's timestamps did not advance across the frame's passes"),
-        ),
-        Ok(_) => (
-            None,
-            None,
-            0,
-            Some("no sampled frame's timestamps were read back before the export ended"),
-        ),
+        Ok(times) => (None, None, 0, Some(gpu_time_unavailable(&times))),
         Err(reason) => (None, None, 0, Some(reason)),
     };
     value["gpuRenderMsPerFrame"] = json!(render);
@@ -592,13 +597,42 @@ pub fn add_gpu_time_metrics(value: &mut Value, renderer: Option<&alpha2_render::
     value["gpuTimeUnavailable"] = json!(unavailable);
     value["gpuSubmissions"] = renderer.map_or(Value::Null, |renderer| {
         let stats = renderer.take_gpu_submission_stats();
+        if let Some(warning) = over_budget_warning(&stats) {
+            alpha2_os::diagnostic!("{warning}");
+        }
         json!({
             "frames": stats.frames,
             "splitFrames": stats.split_frames,
             "maxPerFrame": stats.max_per_frame,
             "maxPredictedMs": stats.max_predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
+            "overBudget": stats.over_budget,
         })
     });
+}
+
+pub fn over_budget_warning(stats: &alpha2_render::GpuSubmissionStats) -> Option<String> {
+    (stats.over_budget > 0).then(|| {
+        format!(
+            "alpha2-host warning: {} GPU submissions were predicted over the {:.1} ms submission \
+             budget, the longest at {:.1} ms; a pass could not be cut finer or a frame needed more \
+             submissions than one frame may take",
+            stats.over_budget,
+            stats.budget_ms.unwrap_or_default(),
+            stats.max_predicted_ms.unwrap_or_default()
+        )
+    })
+}
+
+pub fn gpu_time_unavailable(times: &alpha2_render::FrameGpuTimes) -> &'static str {
+    if times.flat_frames > 0 {
+        "the device's timestamps did not advance across the frame's passes"
+    } else if times.unread_frames > 0 {
+        "no sampled frame's timestamps were read back before the export ended"
+    } else if times.timed_frames > 0 {
+        "the export drew too few frames on the GPU for one to be sampled"
+    } else {
+        "the export drew no frame on the GPU"
+    }
 }
 
 fn milliseconds(duration: Duration) -> Value {
@@ -816,6 +850,18 @@ pub fn append_buffer_pool_metrics(
             .saturating_sub(before.textures.evicted)
     );
     value["textureHighWaterBytes"] = json!(after.textures.high_water_bytes);
+    value["bindGroupsCreated"] = json!(
+        after
+            .bind_groups
+            .created
+            .saturating_sub(before.bind_groups.created)
+    );
+    value["bindGroupsReused"] = json!(
+        after
+            .bind_groups
+            .reused
+            .saturating_sub(before.bind_groups.reused)
+    );
     value["uploadTexturesCreated"] = json!(
         after
             .upload_textures

@@ -117,8 +117,34 @@ fn linked<'a>(metadata: &'a Value, root: &str) -> Result<Vec<&'a Value>, String>
     Ok(packages)
 }
 
+fn licence_files_below(directory: &Path) -> Vec<(String, PathBuf)> {
+    let mut found: Vec<(String, PathBuf)> = licence_files(directory)
+        .into_iter()
+        .filter_map(|file| Some((file.file_name()?.to_str()?.to_owned(), file)))
+        .collect();
+    let mut subdirectories: Vec<PathBuf> = std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    subdirectories.sort();
+    for subdirectory in subdirectories {
+        let Some(prefix) = subdirectory.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        for file in licence_files(&subdirectory) {
+            if let Some(name) = file.file_name().and_then(|name| name.to_str()) {
+                found.push((format!("{prefix}/{name}"), file.clone()));
+            }
+        }
+    }
+    found
+}
+
 /// `THIRD_PARTY_NOTICES.txt` for the crates package `root` links: each with its name, version,
-/// licence expression and the text of the licence files in its source directory.
+/// licence expression and the text of the licence files in its source directory and the
+/// directories directly below it.
 pub fn third_party_notices(metadata: &Value, root: &str) -> Result<String, String> {
     let mut text = String::from(
         "Third-party software linked into this plugin's artifacts, with its licence terms.\n",
@@ -140,14 +166,10 @@ pub fn third_party_notices(metadata: &Value, root: &str) -> Result<String, Strin
             .and_then(|path| Path::new(path).parent())
             .map(Path::to_path_buf)
             .unwrap_or_default();
-        for file in licence_files(&directory) {
+        for (name, file) in licence_files_below(&directory) {
             let body = std::fs::read_to_string(&file)
                 .map_err(|error| format!("{}: {error}", file.display()))?;
-            let file_name = file
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("");
-            let _ = write!(text, "\n--- {file_name}\n\n{}\n", body.trim_end());
+            let _ = write!(text, "\n--- {name}\n\n{}\n", body.trim_end());
         }
     }
     Ok(text)
@@ -202,6 +224,18 @@ mod tests {
             !text.contains("\nalpha2-plugin-fixture-digest "),
             "the plugin itself"
         );
+    }
+
+    #[test]
+    fn the_notices_carry_the_licence_of_the_c_sources_a_crate_builds() {
+        let (metadata, root) = metadata("first-party/transcribe");
+        let text = third_party_notices(&metadata, &root).expect("notices");
+        let at = text.find("\nwhisper-rs-sys ").expect("whisper-rs-sys");
+        let licence = text[at..]
+            .find("--- whisper.cpp/LICENSE")
+            .expect("its licence")
+            + at;
+        assert!(text[licence..].contains("The ggml authors"), "{text}");
     }
 
     #[test]

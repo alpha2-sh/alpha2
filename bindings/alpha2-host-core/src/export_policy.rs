@@ -153,11 +153,43 @@ pub enum AttemptEncoder {
     Software,
 }
 
+/// The memory a failure's evidence names, as an export failure's `resource` spells it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryResource {
+    /// Host memory.
+    Cpu,
+    /// GPU memory.
+    Gpu,
+    /// The JavaScript heap.
+    Js,
+    /// The engine's wasm linear memory.
+    Wasm,
+    /// No region named.
+    Unknown,
+}
+
+impl MemoryResource {
+    /// Parses its wire name (`cpu`, `gpu`, `js`, `wasm`, `unknown`).
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "cpu" => Some(Self::Cpu),
+            "gpu" => Some(Self::Gpu),
+            "js" => Some(Self::Js),
+            "wasm" => Some(Self::Wasm),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
 /// A classified export failure, as the retry policy reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttemptFailure {
     /// Its class.
     pub code: FailureClass,
+    /// The memory its evidence names.
+    pub resource: MemoryResource,
     /// The phase it failed in (`prepare`, `decode`, `render`, `encode`, `publish`).
     pub phase: String,
     /// The export frame it failed at, when known.
@@ -251,10 +283,10 @@ fn backoff(failed: usize) -> u64 {
 ///
 /// An export is retried whole on a fresh device; attempts change the in-flight budget, the
 /// renderer and the video encoder, never the output settings. A GPU that hangs on the export's
-/// own work moves to the CPU renderer; memory exhaustion steps down a profile; an encode failure
-/// retries once in software; a busy resource waits; an engine fault (`DEFECT`) retries once,
-/// unchanged and at once; anything else transient retries unchanged and steps down only when it
-/// recurs at the same point.
+/// own work moves to the CPU renderer; memory exhaustion steps down a profile, then GPU memory
+/// exhaustion moves to the CPU renderer; an encode failure retries once in software; a busy
+/// resource waits; an engine fault (`DEFECT`) retries once, unchanged and at once; anything else
+/// transient retries unchanged and steps down only when it recurs at the same point.
 // One rule after another, in the reference policy's order.
 #[allow(clippy::too_many_lines)]
 #[must_use]
@@ -377,6 +409,24 @@ pub fn decide_retry(history: &[AttemptOutcome], options: RetryOptions) -> RetryD
                 None,
                 None,
             ),
+            None if code == FailureClass::OutOfMemory
+                && failure.resource == MemoryResource::Gpu
+                && last.renderer == AttemptRenderer::Gpu
+                && options.cpu_renderer =>
+            {
+                retry(
+                    format!(
+                        "{code} with the smallest profile ({}): the GPU cannot hold the export; \
+                         retrying on the CPU renderer",
+                        last.profile.name
+                    ),
+                    note,
+                    None,
+                    Some(AttemptRenderer::Cpu),
+                    None,
+                    None,
+                )
+            }
             None => stop(
                 format!(
                     "{code} with the smallest profile ({}): nothing left to reduce",

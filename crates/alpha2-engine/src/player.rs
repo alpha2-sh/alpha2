@@ -173,10 +173,7 @@ impl<I> Player<I> {
         crate::frame::check_frame_effects(renderer, &frame)?;
         let size = self.quality.render_size(&project.project().settings)?;
         renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
-        renderer.set_quality_controls(
-            self.quality.max_filter_samples,
-            self.quality.motion_blur_subframes,
-        );
+        renderer.set_quality_controls(self.quality.max_filter_samples);
         let epoch = renderer.content_epoch();
         let built = renderer.build_frame_graph(size, &frame, frames)?;
         if let Some(graph) = built.graph {

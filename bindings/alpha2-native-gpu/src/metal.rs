@@ -1,8 +1,7 @@
-//! `VideoToolbox`/`CoreVideo` surface import into the renderer's `Metal` device.
+//! `CoreVideo` pixel buffers as textures and render targets on the renderer's `Metal` device.
 
 use std::{error::Error, ffi::c_void, fmt, ptr::NonNull, sync::Arc};
 
-use alpha2_ffmpeg_bridge::{BridgeError, VideoToolboxFrameLease};
 use alpha2_gpu::GpuContext;
 use objc2::{
     rc::Retained,
@@ -10,76 +9,26 @@ use objc2::{
 };
 use objc2_metal::{MTLTexture, MTLTextureType};
 
+use crate::status::{HelperFailure, classify};
 use crate::{NativeGpuIdentity, NativePlaneLayout};
 
 use crate::interop::Alpha2MetalFrameInfo as MetalFrameInfo;
 
-/// A codec `VideoToolbox` may decode in hardware.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VideoToolboxCodec {
-    /// H.264 (`avc1`).
-    H264,
-    /// HEVC (`hvc1`).
-    Hevc,
-    /// VP9 (`vp09`), through the supplemental decoder.
-    Vp9,
-    /// AV1 (`av01`), through the supplemental decoder.
-    Av1,
-}
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
+#[path = "metal_videotoolbox.rs"]
+mod videotoolbox;
 
-impl VideoToolboxCodec {
-    /// Every codec, in the order a device's list names them.
-    const ALL: [Self; 4] = [Self::H264, Self::Hevc, Self::Vp9, Self::Av1];
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
+pub use videotoolbox::{VideoToolboxCodec, videotoolbox_hardware_decodes, videotoolbox_surface_id};
 
-    /// The codec's `FFmpeg` name, as conform and `capabilities.decode` spell it.
-    const fn name(self) -> &'static str {
-        match self {
-            Self::H264 => "h264",
-            Self::Hevc => "hevc",
-            Self::Vp9 => "vp9",
-            Self::Av1 => "av1",
-        }
-    }
-
-    /// The `CMVideoCodecType` four-character code.
-    const fn four_cc(self) -> u32 {
-        u32::from_be_bytes(*match self {
-            Self::H264 => b"avc1",
-            Self::Hevc => b"hvc1",
-            Self::Vp9 => b"vp09",
-            Self::Av1 => b"av01",
-        })
-    }
-}
-
-/// Whether `VideoToolbox` decodes `codec` in hardware on this machine, per
-/// `VTIsHardwareDecodeSupported` after registering the supplemental decoders (per codec, not
-/// per profile).
+/// The system-wide `IOSurface` ID behind a `CoreVideo` pixel buffer, if any. It stays the same
+/// when `CoreVideo` rewraps the surface, so it names a pool's buffer across wraps.
+///
+/// # Safety
+/// `pixel_buffer` is null or a live `CVPixelBufferRef` for the call.
 #[must_use]
-pub fn videotoolbox_hardware_decodes(codec: VideoToolboxCodec) -> bool {
-    // SAFETY: takes a plain integer and calls two VideoToolbox queries.
-    unsafe { alpha2_native_gpu_vt_hardware_decodes(codec.four_cc()) != 0 }
-}
-
-/// The codecs `VideoToolbox` decodes in hardware, by `FFmpeg` name, asked once per process.
-fn hardware_decode_codecs() -> &'static [&'static str] {
-    static CODECS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
-    CODECS.get_or_init(|| {
-        VideoToolboxCodec::ALL
-            .into_iter()
-            .filter(|codec| videotoolbox_hardware_decodes(*codec))
-            .map(VideoToolboxCodec::name)
-            .collect()
-    })
-}
-
-/// The system-wide `IOSurface` ID behind a `VideoToolbox` frame's pixel buffer, if any. It stays
-/// the same when `CoreVideo` rewraps the surface, so counting IDs counts decoder surfaces.
-#[must_use]
-pub fn videotoolbox_surface_id(frame: &VideoToolboxFrameLease) -> Option<u32> {
-    let pixel_buffer = usize::try_from(frame.info().ok()?.pixel_buffer).ok()? as *mut c_void;
-    // SAFETY: the lease holds the frame and its pixel buffer for the call; the helper accepts
-    // null.
+pub unsafe fn pixel_buffer_surface_id(pixel_buffer: *mut c_void) -> Option<u32> {
+    // SAFETY: the caller's contract; the helper accepts null.
     let id = unsafe { alpha2_native_gpu_iosurface_id(pixel_buffer) };
     (id != 0).then_some(id)
 }
@@ -122,7 +71,6 @@ fn four_cc_text(format: u32) -> String {
 }
 
 unsafe extern "C" {
-    fn alpha2_native_gpu_vt_hardware_decodes(codec_type: u32) -> i32;
     fn alpha2_native_gpu_iosurface_id(pixel_buffer: *mut c_void) -> u32;
     fn alpha2_native_gpu_metal_cache_create(device: *mut c_void, output: *mut *mut c_void) -> i32;
     fn alpha2_native_gpu_metal_cache_destroy(cache: *mut c_void);
@@ -265,6 +213,71 @@ impl fmt::Display for SharedMetalError {
 
 impl Error for SharedMetalError {}
 
+/// Why a pixel buffer did not import, or its planes did not become render targets.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MetalImportError {
+    /// The buffer is not an `IOSurface`-backed bi-planar 4:2:0 buffer.
+    Unsupported(String),
+    /// A 10-bit buffer on a device without 16-bit normalized textures.
+    NoSixteenBitPlanes,
+    /// A `CoreVideo` call failed at a step of `operation`, with its `CVReturn`.
+    Helper {
+        /// What the call was part of.
+        operation: &'static str,
+        /// The helper's failing step (`include/alpha2_native_gpu_status.h`).
+        step: i32,
+        /// The `CVReturn` at that step, or 0.
+        status: i32,
+    },
+    /// A plane of an encoder-input buffer cannot be a render target, with the helper's code.
+    NotRenderTarget {
+        /// The plane, 0 for luma.
+        plane: u32,
+        /// The helper's refusal.
+        code: i32,
+    },
+    /// `CoreVideo` or `Metal` returned no object where one was due.
+    Missing(&'static str),
+    /// The renderer's device is not `Metal`.
+    NotMetal,
+}
+
+impl fmt::Display for MetalImportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unsupported(reason) => formatter.write_str(reason),
+            Self::NoSixteenBitPlanes => {
+                formatter.write_str("renderer does not expose 16-bit plane textures")
+            }
+            Self::Helper {
+                operation,
+                step,
+                status,
+            } => match classify(*step) {
+                HelperFailure::Call(step) if *status == 0 => {
+                    write!(formatter, "Metal {operation} failed at {step}")
+                }
+                HelperFailure::Call(step) => {
+                    write!(
+                        formatter,
+                        "Metal {operation} failed at {step} (CVReturn {status})"
+                    )
+                }
+                refused => formatter.write_str(refused.refusal().unwrap_or_default()),
+            },
+            Self::NotRenderTarget { plane, code } => write!(
+                formatter,
+                "encoder pixel buffer plane {plane} cannot be a Metal render target: {} ({code})",
+                encoder_plane_reason(*code)
+            ),
+            Self::Missing(what) => formatter.write_str(what),
+            Self::NotMetal => formatter.write_str("renderer is not using Metal"),
+        }
+    }
+}
+
+impl Error for MetalImportError {}
+
 struct MetalCache {
     raw: NonNull<c_void>,
 }
@@ -334,15 +347,17 @@ pub struct ImportedMetalFrame {
     pub full_range: bool,
     /// The buffer's pixel format as its four characters, for a report.
     pub pixel_format: String,
-    /// Decoder and `CoreVideo` ownership retained through queue completion.
+    /// The pixel buffer's owner and the `CoreVideo` plane wrappers, retained through queue
+    /// completion.
     pub lease: Arc<MetalImportLease>,
 }
 
-/// Owns the decoder frame, `CoreVideo` plane wrappers, and wgpu textures.
+/// Owns the wgpu textures, the `CoreVideo` plane wrappers, and what keeps the pixel buffer alive,
+/// dropped in that order.
 pub struct MetalImportLease {
-    _frame: Arc<VideoToolboxFrameLease>,
-    _cv_textures: [CoreVideoTexture; 2],
     _textures: [wgpu::Texture; 2],
+    _cv_textures: [CoreVideoTexture; 2],
+    _owner: Box<dyn Send + Sync>,
     retained_bytes: u64,
 }
 
@@ -408,7 +423,8 @@ impl SharedMetalContext {
         };
         drop(hal);
         // Asked now, before any export, so a session never pays for the query.
-        hardware_decode_codecs();
+        #[cfg(all(target_os = "macos", feature = "hwdevice"))]
+        videotoolbox::hardware_decode_codecs();
         Ok(Self {
             gpu,
             cache: Arc::new(MetalCache { raw: cache }),
@@ -432,42 +448,36 @@ impl SharedMetalContext {
             .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
     }
 
-    /// The codecs `VideoToolbox` decodes in hardware here, by `FFmpeg` name (`h264`, `hevc`,
-    /// `vp9`, `av1`), per codec, not per profile.
-    #[must_use]
-    pub fn decode_codecs(&self) -> &'static [&'static str] {
-        hardware_decode_codecs()
-    }
-
     /// Raw-device cache identity.
     #[must_use]
     pub const fn identity(&self) -> NativeGpuIdentity {
         self.identity
     }
 
-    /// Imports an `IOSurface`-backed 4:2:0 pixel buffer as two `Metal` textures.
+    /// Imports an `IOSurface`-backed 4:2:0 pixel buffer as two `Metal` textures, whose lease
+    /// keeps `owner` until the renderer is done with them.
     ///
     /// Supports 8-bit (`420v`/`420f`) and 10-bit (`x420`/`xf20`) bi-planar buffers; 10-bit
     /// samples are left-aligned in 16-bit containers, which presentation corrects for.
     ///
+    /// # Safety
+    /// `pixel_buffer` is a live `CVPixelBufferRef` that `owner` keeps alive, and that its
+    /// producer does not write, until `owner` drops.
+    ///
     /// # Errors
-    /// Returns an error for unsupported or non-`IOSurface` buffers, or failed `Metal` wrapping.
-    #[allow(clippy::too_many_lines)]
-    pub fn import_surface(
+    /// An unsupported or non-`IOSurface` buffer, a 10-bit buffer without 16-bit textures, or a
+    /// failed `CoreVideo` wrap.
+    pub unsafe fn import_pixel_buffer(
         &self,
-        frame: Arc<VideoToolboxFrameLease>,
-    ) -> Result<ImportedMetalFrame, BridgeError> {
-        let decoded = frame.info()?;
-        let pixel_buffer = usize::try_from(decoded.pixel_buffer)
-            .map_err(|_| BridgeError::InvalidInput("invalid CoreVideo pointer"))?
-            as *mut c_void;
+        pixel_buffer: *mut c_void,
+        owner: Box<dyn Send + Sync>,
+    ) -> Result<ImportedMetalFrame, MetalImportError> {
         let mut info = MetalFrameInfo::default();
-        // SAFETY: the retained AVFrame owns `pixel_buffer`, and output is writable.
+        // SAFETY: the caller keeps `pixel_buffer` alive, and output is writable.
         let result = unsafe { alpha2_native_gpu_metal_frame_info(pixel_buffer, &raw mut info) };
         if result != 0 {
-            return Err(BridgeError::UnsupportedSurface(format!(
-                "VideoToolbox frame {} ({}x{}, {} planes) is not an IOSurface-backed 4:2:0 \
-                 buffer: {}",
+            return Err(MetalImportError::Unsupported(format!(
+                "{} ({}x{}, {} planes) is not an IOSurface-backed 4:2:0 buffer: {}",
                 four_cc_text(info.pixel_format),
                 info.width,
                 info.height,
@@ -483,16 +493,8 @@ impl SharedMetalContext {
         };
         // CoreVideo hands planes over separately, so 10-bit needs standalone 16-bit norm
         // formats rather than P010.
-        if layout == NativePlaneLayout::P010
-            && !self
-                .gpu
-                .device()
-                .features()
-                .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
-        {
-            return Err(BridgeError::InvalidInput(
-                "renderer does not expose 16-bit plane textures",
-            ));
+        if layout == NativePlaneLayout::P010 && !self.supports_ten_bit() {
+            return Err(MetalImportError::NoSixteenBitPlanes);
         }
         let mut cv = [std::ptr::null_mut(); 2];
         let mut metal = [std::ptr::null_mut(); 2];
@@ -514,20 +516,19 @@ impl SharedMetalContext {
                     // SAFETY: each non-null entry is a +1 reference from the helper.
                     unsafe { destroy_texture(texture) };
                 }
-                return Err(crate::status::helper_failure(
-                    alpha2_ffmpeg_bridge::NativeGpuBackend::Metal,
-                    "texture import",
+                return Err(MetalImportError::Helper {
+                    operation: "texture import",
                     step,
                     status,
-                ));
+                });
             }
         }
         let cv_textures = [
             CoreVideoTexture(
                 NonNull::new(cv[0])
-                    .ok_or(BridgeError::InvalidInput("CoreVideo returned no Y texture"))?,
+                    .ok_or(MetalImportError::Missing("CoreVideo returned no Y texture"))?,
             ),
-            CoreVideoTexture(NonNull::new(cv[1]).ok_or(BridgeError::InvalidInput(
+            CoreVideoTexture(NonNull::new(cv[1]).ok_or(MetalImportError::Missing(
                 "CoreVideo returned no UV texture",
             ))?),
         ];
@@ -552,9 +553,9 @@ impl SharedMetalContext {
             .saturating_mul(layout.bytes_per_pixel_numerator())
             .div_ceil(2);
         let lease = Arc::new(MetalImportLease {
-            _frame: frame,
-            _cv_textures: cv_textures,
             _textures: [y, uv],
+            _cv_textures: cv_textures,
+            _owner: owner,
             retained_bytes,
         });
         Ok(ImportedMetalFrame {
@@ -577,35 +578,32 @@ impl SharedMetalContext {
         })
     }
 
-    /// Wraps the planes of an encoder-input `VideoToolbox` frame's pixel buffer as render
-    /// targets on the renderer's device.
+    /// Wraps the planes of an encoder-input pixel buffer as render targets on the renderer's
+    /// device.
+    ///
+    /// # Safety
+    /// `pixel_buffer` is a live `CVPixelBufferRef` for the call. The planes keep its
+    /// `IOSurface`, not the buffer, alive.
     ///
     /// # Errors
-    /// Returns an error for a frame that is not a `VideoToolbox` hardware frame, or whose buffer
-    /// is not `IOSurface`-backed 8-bit video-range NV12 that `Metal` can alias.
-    pub fn encoder_planes(
+    /// A buffer that is not `IOSurface`-backed 8-bit video-range NV12 that `Metal` can alias,
+    /// or a renderer that is not `Metal`.
+    pub unsafe fn pixel_buffer_planes(
         &self,
-        frame: &rsmpeg::avutil::AVFrame,
-    ) -> Result<MetalEncoderPlanes, SharedMetalError> {
-        let info = alpha2_ffmpeg_bridge::videotoolbox_frame_info(frame)
-            .map_err(|error| SharedMetalError(format!("encoder frame: {error}")))?;
-        let pixel_buffer = usize::try_from(info.pixel_buffer)
-            .ok()
-            .filter(|pointer| *pointer != 0)
-            .ok_or_else(|| SharedMetalError("encoder frame has no pixel buffer".into()))?
-            as *mut c_void;
+        pixel_buffer: *mut c_void,
+    ) -> Result<MetalEncoderPlanes, MetalImportError> {
         // SAFETY: the guard only borrows the device for this call.
         let hal = unsafe { self.gpu.device().as_hal::<wgpu_hal::api::Metal>() }
-            .ok_or_else(|| SharedMetalError("renderer is not using Metal".into()))?;
+            .ok_or(MetalImportError::NotMetal)?;
         let device = Retained::as_ptr(hal.raw_device())
             .cast_mut()
             .cast::<c_void>();
         let mut planes = Vec::with_capacity(2);
         for plane in 0..2_u32 {
             let (mut width, mut height, mut raw) = (0, 0, std::ptr::null_mut());
-            // SAFETY: the device is live for the guard, `frame` holds the pixel buffer, and the
-            // outputs belong to this call.
-            let result = unsafe {
+            // SAFETY: the device is live for the guard, the caller keeps the pixel buffer alive,
+            // and the outputs belong to this call.
+            let code = unsafe {
                 alpha2_native_gpu_metal_encoder_plane(
                     device,
                     pixel_buffer,
@@ -615,16 +613,12 @@ impl SharedMetalContext {
                     &raw mut raw,
                 )
             };
-            if result != 0 {
-                return Err(SharedMetalError(format!(
-                    "encoder pixel buffer plane {plane} cannot be a Metal render target: {} \
-                     ({result})",
-                    encoder_plane_reason(result)
-                )));
+            if code != 0 {
+                return Err(MetalImportError::NotRenderTarget { plane, code });
             }
             // SAFETY: a non-null result is the +1 id<MTLTexture> the helper transferred to us.
             let object = unsafe { Retained::<AnyObject>::from_raw(raw.cast()) }
-                .ok_or_else(|| SharedMetalError("Metal returned no plane texture".into()))?;
+                .ok_or(MetalImportError::Missing("Metal returned no plane texture"))?;
             // SAFETY: the helper created this object with
             // -newTextureWithDescriptor:iosurface:plane:.
             let texture: Retained<ProtocolObject<dyn MTLTexture>> =
@@ -636,7 +630,7 @@ impl SharedMetalContext {
         let luma = planes.pop();
         luma.zip(chroma)
             .map(|(luma, chroma)| MetalEncoderPlanes { luma, chroma })
-            .ok_or_else(|| SharedMetalError("Metal returned no plane texture".into()))
+            .ok_or(MetalImportError::Missing("Metal returned no plane texture"))
     }
 
     fn wrap_target(
@@ -707,11 +701,11 @@ impl SharedMetalContext {
         height: u32,
         plane: usize,
         layout: NativePlaneLayout,
-    ) -> Result<wgpu::Texture, BridgeError> {
+    ) -> Result<wgpu::Texture, MetalImportError> {
         // SAFETY: `raw` is the Metal texture the import helper returned for a live CoreVideo
         // texture, or null, which `retain` maps to `None`.
         let object = unsafe { Retained::<AnyObject>::retain(raw.cast()) }.ok_or(
-            BridgeError::InvalidInput("CoreVideo returned no Metal texture"),
+            MetalImportError::Missing("CoreVideo returned no Metal texture"),
         )?;
         // SAFETY: CoreVideo returned this object as id<MTLTexture>.
         let raw_texture: Retained<ProtocolObject<dyn MTLTexture>> =

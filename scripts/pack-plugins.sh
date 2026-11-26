@@ -1,8 +1,5 @@
 #!/bin/sh
-# Packs every plugin crate (a directory with descriptor.json) under plugins/first-party, and with
-# --fixtures under plugins/fixtures, into <directory>/<group>/<name>. Artifacts are built in
-# plugins/target, so tests that pack a plugin again find it built.
-#   pack-plugins.sh [--fixtures] <directory> [<pack option>...]
+# usage: pack-plugins.sh [--fixtures] <directory> [<pack option>...]
 set -eu
 
 workspace=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -13,11 +10,22 @@ if [ "${1:-}" = --fixtures ]; then
 fi
 out=$1
 shift
+wasm_only=false
+for option in "$@"; do
+  case $option in --no-native) wasm_only=true ;; esac
+done
+pack() {
+  cargo run --release --locked --manifest-path "$workspace/plugins/Cargo.toml" \
+    -p alpha2-plugin-pack "$@"
+}
 for group in $groups; do
   for descriptor in "$workspace/plugins/$group"/*/descriptor.json; do
     [ -f "$descriptor" ] || continue
     plugin=$(dirname -- "$descriptor")
-    cargo run --release --locked --manifest-path "$workspace/plugins/Cargo.toml" \
-      -p alpha2-plugin-pack -- "$plugin" --out "$out/$group/$(basename -- "$plugin")" "$@"
+    if [ "$wasm_only" = true ] && [ "$(pack --quiet -- builds-wasm "$plugin")" = false ]; then
+      echo "$plugin builds no wasm; left out"
+      continue
+    fi
+    pack -- "$plugin" --out "$out/$group/$(basename -- "$plugin")" "$@"
   done
 done

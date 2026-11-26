@@ -16,7 +16,7 @@ alpha2-eval = { path = "../crates/alpha2-eval" }
 alpha2-extensions = { path = "../extensions" }
 alpha2-geometry = { path = "../crates/alpha2-geometry" }
 alpha2-gpu = { path = "../crates/alpha2-gpu" }
-alpha2-host-core = { path = "../bindings/alpha2-host-core", default-features = false, features = ["requests"] }
+alpha2-host-core = { path = "../bindings/alpha2-host-core", default-features = false, features = ["requests", "wire-fuzz"] }
 alpha2-media = { path = "../crates/alpha2-media" }
 alpha2-model = { path = "../crates/alpha2-model" }
 alpha2-plugin-abi = { path = "../crates/alpha2-plugin-abi" }
@@ -193,6 +193,13 @@ bench = false
 [[bin]]
 name = "plugin_records"
 path = "fuzz_targets/plugin_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_wire"
+path = "fuzz_targets/plugin_wire.rs"
 test = false
 doc = false
 bench = false

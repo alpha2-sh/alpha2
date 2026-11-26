@@ -43,11 +43,9 @@ fn gl_transition(uv: vec2f) -> vec4f {
             let inside = step(0.0, q.y) * step(q.y, 1.0) * step(0.0, q.x) * step(q.x, 1.0);
             let flipped = vec2f(f.x, 1.0 - f.y);
             let tap = mix(to_color(flipped), from_color(flipped), inside);
-            let border = clamp(
-                (min(f + border_span * 0.5, vec2f(1.0)) - max(f - border_span * 0.5, vec2f(0.0))) / border_span,
-                vec2f(0.0),
-                vec2f(1.0),
-            );
+            let border_cut = max(f + border_span * 0.5 - 1.0, vec2f(0.0))
+                + max(border_span * 0.5 - f, vec2f(0.0));
+            let border = clamp(1.0 - border_cut / border_span, vec2f(0.0), vec2f(1.0));
             color += tap * (border.x * border.y);
         }
     }

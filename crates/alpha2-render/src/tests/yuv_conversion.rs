@@ -811,8 +811,8 @@ fn malformed_planes_and_presentations_are_refused_before_they_reach_the_gpu() {
             crate::RepackSource::Cpu(frame(planes, 1.0)),
             presentation(0, 0, 4, 2, (1, 1)).visible_rect,
             crate::Nv12PlaneTargets {
-                luma: &luma_target,
-                chroma: &chroma_target,
+                luma: &luma_target.create_view(&wgpu::TextureViewDescriptor::default()),
+                chroma: &chroma_target.create_view(&wgpu::TextureViewDescriptor::default()),
             },
             &mut crate::FrameSubmitTimings::default(),
         )

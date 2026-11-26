@@ -39,9 +39,10 @@ impl CpuRenderer {
     /// without a CPU kernel, [`RenderError::InvalidSource`] for a GPU source.
     #[allow(clippy::too_many_lines)]
     pub fn execute_graph(&self, graph: &RenderGraph<'_>) -> Result<Arc<CpuImage>, GraphError> {
+        self.frame_pool.next_frame();
         let started = Instant::now();
         let quality = self.quality_controls();
-        let plan = graph.compile_with_quality(quality)?;
+        let plan = graph.compile()?;
         if matches!(graph.nodes[plan.output.index], RenderNode::Source(_)) {
             return Err(GraphError::SourceOutput);
         }
@@ -201,8 +202,8 @@ impl CpuRenderer {
     /// CPU counterpart of [`crate::Renderer::render_graph_yuv420p`].
     ///
     /// # Errors
-    /// [`Self::execute_graph`]'s errors, and [`RenderError::TextureReadback`] for an odd size or a
-    /// target too small.
+    /// [`Self::execute_graph`]'s errors, [`RenderError::TextureReadback`] for an odd size or a
+    /// target too small, and [`RenderError::UnsupportedOutputColor`] for an unpackable color.
     pub fn render_graph_into_yuv420p(
         &self,
         graph: &RenderGraph<'_>,
@@ -231,7 +232,7 @@ impl CpuRenderer {
             return Err(GraphError::EffectKindMismatch);
         }
         crate::runtime_effect::validate_runtime(node.runtime)?;
-        crate::runtime_effect::encode_params(&definition.params, node.params)?;
+        crate::runtime_effect::validate_params(&definition.params, node.params)?;
         if node
             .resources
             .iter()
@@ -313,7 +314,7 @@ impl CpuRenderer {
                     let y = bounds.y + (first_row + index) as u32;
                     kernel.row(&context, y, bounds.x, row);
                     for (out, value) in line.iter_mut().zip(row.iter()) {
-                        *out = half::store4(*value);
+                        *out = half::store4_nearest(*value);
                     }
                 }
             },

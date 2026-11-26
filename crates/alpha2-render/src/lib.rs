@@ -7,7 +7,17 @@
 //! documented only with the `wgpu-interop` feature, track `wgpu`'s major version, and are
 //! otherwise hidden and not part of this crate's API.
 
+#![cfg_attr(
+    target_os = "android",
+    allow(
+        clippy::missing_const_for_thread_local,
+        reason = "clippy misreads the emulated-TLS expansion of `const` thread locals on Android"
+    )
+)]
+
 mod backend;
+mod bind_group;
+pub use bind_group::BindGroupStats;
 mod blend;
 mod builtins;
 mod call_budget;
@@ -39,8 +49,10 @@ mod masking;
 mod paint_wgsl;
 mod pipeline;
 mod pool;
+mod prepared_frame;
 mod present;
 mod readback;
+mod recent_use;
 mod registry;
 pub use registry::{CheckedEffect, CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect, check_effect};
 mod renderer;
@@ -78,8 +90,7 @@ pub use builtins::{
 };
 pub use catalog::{builtin_catalog, builtin_catalog_document, builtin_catalog_json};
 pub use color::{
-    Color, ColorDiagnostic, ColorError, ColorPolicy, SdrOutputTransfer, YuvSample,
-    convert_yuv_to_linear_rgba, encode_linear_rgb, is_hdr,
+    Color, ColorDiagnostic, ColorError, ColorPolicy, YuvSample, convert_yuv_to_linear_rgba, is_hdr,
 };
 pub use composite::{CompositeLayer, LayerTransform};
 pub use cpu::{

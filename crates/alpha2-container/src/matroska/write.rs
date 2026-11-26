@@ -568,6 +568,7 @@ fn colour(color: alpha2_media::ColorMetadata) -> BytesMut {
         ColorPrimaries::Bt709 => 1,
         ColorPrimaries::Bt601 => 6,
         ColorPrimaries::Bt2020 => 9,
+        ColorPrimaries::DisplayP3 => 12,
     };
     let range = if color.range == ColorRange::Full {
         2

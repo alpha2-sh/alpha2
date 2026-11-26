@@ -58,8 +58,20 @@ pub struct Vui {
     pub sample_aspect_ratio: Option<SampleAspectRatio>,
     /// The color the video signal type declares.
     pub color: Option<ColorMetadata>,
+    /// The video signal type as coded.
+    pub signal: Option<VideoSignal>,
     /// The chroma siting of a 4:2:0 stream, when declared.
     pub chroma_location: Option<ChromaLocation>,
+}
+
+/// A VUI video signal type's range flag and colour description, as coded.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct VideoSignal {
+    /// `video_full_range_flag`.
+    pub full_range: bool,
+    /// `colour_primaries`, `transfer_characteristics` and `matrix_coeffs` (ITU-T H.273), when
+    /// the colour description is present.
+    pub description: Option<[u8; 3]>,
 }
 
 /// What one SPS declares.
@@ -555,15 +567,22 @@ fn vui(bits: &mut Bits<'_>, chroma_format: u32) -> Option<Vui> {
     if bits.flag()? {
         bits.skip(3)?; // video_format
         let full = bits.flag()?;
-        let (mut primaries, mut transfer, mut matrix) = (2, 2, 2);
-        if bits.flag()? {
-            primaries = bits.read(8)?;
-            transfer = bits.read(8)?;
-            matrix = bits.read(8)?;
-        }
         let code = |value: u32| u8::try_from(value).unwrap_or(2);
-        vui.color =
-            ColorMetadata::from_h273(code(primaries), code(transfer), code(matrix), Some(full));
+        let description = if bits.flag()? {
+            Some([
+                code(bits.read(8)?),
+                code(bits.read(8)?),
+                code(bits.read(8)?),
+            ])
+        } else {
+            None
+        };
+        let [primaries, transfer, matrix] = description.unwrap_or([2, 2, 2]);
+        vui.color = ColorMetadata::from_h273(primaries, transfer, matrix, Some(full));
+        vui.signal = Some(VideoSignal {
+            full_range: full,
+            description,
+        });
     }
     if bits.flag()? {
         let top = bits.ue()?;
@@ -775,6 +794,7 @@ impl Vp9Format {
                     ColorPrimaries::Bt601 => 6,
                     ColorPrimaries::Bt709 => 1,
                     ColorPrimaries::Bt2020 => 9,
+                    ColorPrimaries::DisplayP3 => 12,
                 },
                 match color.transfer {
                     TransferFunction::Bt709 => 1,
@@ -1159,6 +1179,22 @@ mod tests {
         let hlg = ColorMetadata::from_h273(9, 18, 9, Some(false));
         let bt709 = ColorMetadata::from_h273(1, 1, 1, Some(false));
         let range_only = ColorMetadata::from_h273(2, 2, 2, Some(false));
+        let facts_of = |name: &str| {
+            let file = std::fs::read(corpus.join(name)).expect(name);
+            let hevc = name.starts_with("hevc");
+            let tag: &[u8] = if hevc { b"hvcC" } else { b"avcC" };
+            let at = file
+                .windows(4)
+                .position(|window| window == tag)
+                .expect("decoder configuration");
+            let size = u32::from_be_bytes(file[at - 4..at].try_into().expect("size")) as usize;
+            let codec = if hevc {
+                ParameterSetCodec::Hevc
+            } else {
+                ParameterSetCodec::H264
+            };
+            sequence_facts(codec, &file[at + 4..at - 4 + size]).expect(name)
+        };
         // As ffprobe reports them.
         for (name, ratio, color, chroma) in [
             (
@@ -1178,20 +1214,7 @@ mod tests {
             ("hevc-padded.mp4", (1, 1), bt709, ChromaLocation::Left),
             ("h264-high10.mp4", (1, 1), None, ChromaLocation::Left),
         ] {
-            let file = std::fs::read(corpus.join(name)).expect(name);
-            let hevc = name.starts_with("hevc");
-            let tag: &[u8] = if hevc { b"hvcC" } else { b"avcC" };
-            let at = file
-                .windows(4)
-                .position(|window| window == tag)
-                .expect("decoder configuration");
-            let size = u32::from_be_bytes(file[at - 4..at].try_into().expect("size")) as usize;
-            let codec = if hevc {
-                ParameterSetCodec::Hevc
-            } else {
-                ParameterSetCodec::H264
-            };
-            let facts = sequence_facts(codec, &file[at + 4..at - 4 + size]).expect(name);
+            let facts = facts_of(name);
             let (num, den) = ratio;
             assert_eq!(
                 facts
@@ -1204,6 +1227,20 @@ mod tests {
             assert_eq!(facts.vui.color, color, "{name}");
             assert_eq!(facts.chroma_location(), Some(chroma), "{name}");
         }
+        for (name, description) in [
+            ("h264-bt709-transcode.mp4", Some([1, 1, 1])),
+            ("h264-bt709-transcode-vui-bt601.mp4", Some([6, 6, 6])),
+        ] {
+            assert_eq!(
+                facts_of(name).vui.signal,
+                Some(super::VideoSignal {
+                    full_range: false,
+                    description
+                }),
+                "{name}"
+            );
+        }
+        assert_eq!(facts_of("h264-high10.mp4").vui.signal, None);
     }
 
     /// The configuration record after `tag` in a corpus file.

@@ -27,6 +27,7 @@ pub fn apply_edit(project_json: &str, request_json: &str) -> Result<EditedProjec
             }
         } else {
             Alpha2Error::Failed {
+                details: None,
                 code: failure.code.to_owned(),
                 reason: failure.message,
             }

@@ -449,11 +449,8 @@ fn hdr_sources_decode_and_tone_map_or_are_refused_in_words() {
                 tone,
             )
             .expect("reference");
-            let expected = alpha2_render::encode_linear_rgb(
-                [linear[0], linear[1], linear[2]],
-                alpha2_render::SdrOutputTransfer::Srgb,
-            )
-            .map(|value| (value * 255.0).round() as u8);
+            let expected = srgb_encoded([linear[0], linear[1], linear[2]])
+                .map(|value| (value * 255.0).round() as u8);
             let pixel = &pixels[x * 4..x * 4 + 3];
             for channel in 0..3 {
                 assert!(
@@ -511,11 +508,7 @@ fn a_bt2020_sdr_source_converts_into_bt709_primaries_without_a_tone_map() {
         )
         .expect("SDR");
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        alpha2_render::encode_linear_rgb(
-            [linear[0], linear[1], linear[2]],
-            alpha2_render::SdrOutputTransfer::Srgb,
-        )
-        .map(|value| (value * 255.0).round() as u8)
+        srgb_encoded([linear[0], linear[1], linear[2]]).map(|value| (value * 255.0).round() as u8)
     };
     let as_bt709 = alpha2_media::ColorMetadata {
         primaries: alpha2_media::ColorPrimaries::Bt709,
@@ -554,6 +547,17 @@ fn a_bt2020_sdr_source_converts_into_bt709_primaries_without_a_tone_map() {
             ),
         }
     }
+}
+
+fn srgb_encoded(linear: [f32; 3]) -> [f32; 3] {
+    linear.map(|value| {
+        let value = value.clamp(0.0, 1.0);
+        if value <= 0.003_130_8 {
+            12.92 * value
+        } else {
+            1.055 * value.powf(1.0 / 2.4) - 0.055
+        }
+    })
 }
 
 /// Read back as stored: sRGB-encoded, premultiplied RGBA.
@@ -1020,4 +1024,35 @@ fn a_ten_bit_rgb_source_exports_its_colour_on_both_renderers() {
             );
         }
     }
+}
+
+#[test]
+fn a_texture_budget_the_gpu_memory_cap_lowers_is_reported_once_per_change() {
+    let _lock = gpu_test_lock();
+    let host = create_gpu_test_host(VideoDecodePolicy::Software).expect("GPU host");
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&lines);
+    alpha2_os::set_diagnostic_sink(Some(std::sync::Arc::new(move |line: &str| {
+        if line.contains("texture budget:") {
+            kept.lock().expect("lines").push(line.to_owned());
+        }
+    })));
+    let mib = 1024 * 1024;
+    let renderer = host.gpu_renderer();
+    renderer.set_gpu_memory_budget(Some(1024 * mib));
+    renderer.set_texture_budget_bytes(512 * mib);
+    host.response_metadata(0.0);
+    host.response_metadata(0.0);
+    renderer.set_texture_budget_bytes(64 * mib);
+    host.response_metadata(0.0);
+    renderer.set_texture_budget_bytes(512 * mib);
+    host.response_metadata(0.0);
+    alpha2_os::set_diagnostic_sink(None);
+    let expected = format!(
+        "alpha2-host texture budget: {} bytes requested, held to {}, a quarter of the GPU memory \
+         budget",
+        512 * mib,
+        256 * mib
+    );
+    assert_eq!(*lines.lock().expect("lines"), [expected.clone(), expected]);
 }

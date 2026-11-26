@@ -12,7 +12,7 @@ license-files = ["LICENSE.md", "THIRD_PARTY_NOTICES.md", "rust-crate-licenses.md
 # 3.11 for NotRequired and generic TypedDicts; 3.11.4 for tarfile extraction filters.
 requires-python = ">=3.11.4"
 dependencies = [
-  "alpha2-host==0.6.2; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+  "alpha2-host==0.7.0; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
   "truststore>=0.10; sys_platform == 'darwin' or sys_platform == 'win32'",
   "certifi>=2024.2.2; sys_platform == 'linux'",
 ]

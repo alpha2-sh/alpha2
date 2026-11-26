@@ -2,7 +2,7 @@
 //! Work still being encoded keeps what it uses until submission. Writing to a destroyed object
 //! is a validation error, which is how these tests tell destroyed from dropped.
 
-use super::{gpu, gpu_test_lock, rgba_texture, runtime_tint_effect, visual};
+use super::{empty_frames, gpu, gpu_test_lock, rgba_texture, runtime_tint_effect, visual};
 use crate::readback::read_rgba8;
 use crate::{
     BlendMode, CacheIntent, EffectParams, EffectRuntime, GraphLayer, ParamValue, RenderCacheKey,
@@ -130,28 +130,35 @@ fn what_a_pool_evicts_or_declines_to_keep_is_destroyed() {
     let size = rgba8_size();
     let format = wgpu::TextureFormat::Rgba8Unorm;
 
-    // Evicted by a smaller budget.
-    let lease = renderer
+    let first = renderer
         .textures
         .acquire(renderer.gpu.device(), size, format, "evicted target");
-    let evicted = lease.texture().clone();
-    drop(lease);
+    let second = renderer
+        .textures
+        .acquire(renderer.gpu.device(), size, format, "declined target");
+    let (evicted, declined) = (first.texture().clone(), second.texture().clone());
+    drop((first, second));
     renderer.set_texture_budget_bytes(0);
-    assert_destroyed(
-        write_error_texture(&renderer, &evicted),
-        "a texture evicted by the budget",
-    );
+    assert_eq!(renderer.texture_pool_stats().available, 2);
+    empty_frames(&renderer, crate::recent_use::RECENT_FRAMES);
 
-    // Larger than the budget when it returns.
     let lease = renderer
         .textures
         .acquire(renderer.gpu.device(), size, format, "declined target");
-    let declined = lease.texture().clone();
+    assert_eq!(lease.texture(), &declined);
     drop(lease);
-    assert_eq!(renderer.texture_pool_stats().available, 0);
+    assert_eq!(renderer.texture_pool_stats().available, 1);
     assert_destroyed(
         write_error_texture(&renderer, &declined),
-        "a texture over the budget",
+        "a texture over the budget beside an idle twin",
+    );
+
+    empty_frames(&renderer, crate::recent_use::RECENT_FRAMES);
+    renderer.set_texture_budget_bytes(0);
+    assert_eq!(renderer.texture_pool_stats().available, 0);
+    assert_destroyed(
+        write_error_texture(&renderer, &evicted),
+        "a texture evicted by the budget",
     );
 
     // The oldest idle upload texture, pushed out by the pool's count limit.
@@ -201,16 +208,14 @@ fn what_a_pool_evicts_or_declines_to_keep_is_destroyed() {
 
 /// A source, three chained tints and a composite; each tint's input returns to the pool
 /// mid-encode.
-fn tint_chain(renderer: &mut Renderer, budget: u64) -> Vec<u8> {
+fn tint_chain(renderer: &mut Renderer) -> Vec<u8> {
     let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
     .expect("tint compiles");
-    renderer.set_texture_budget_bytes(budget);
     let texture = rgba_texture(renderer, [200, 160, 120, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let size = RenderSize::new(8, 4).expect("size");
-    let mut graph = RenderGraph::new(size);
+    let mut graph = RenderGraph::new(tint_chain_size());
     let mut node = graph.add_source(SourceView::from_wgpu(&view));
     for red in [0.9, 0.8, 0.7] {
         node = graph
@@ -237,22 +242,38 @@ fn tint_chain(renderer: &mut Renderer, budget: u64) -> Vec<u8> {
     let frame = renderer.execute_graph(&graph).expect("renders");
     let pixels = read_rgba8(renderer, &frame);
     if let Some(error) = pollster::block_on(scope.pop()) {
-        panic!("budget {budget}: {error}");
+        panic!("{error}");
     }
     pixels
+}
+
+fn tint_chain_size() -> RenderSize {
+    RenderSize::new(8, 4).expect("size")
 }
 
 #[test]
 fn a_texture_let_go_while_its_frame_is_encoded_lives_until_the_frame_is_submitted() {
     let _lock = gpu_test_lock();
     let mut pooled = Renderer::new(gpu());
-    let expected = tint_chain(&mut pooled, u64::MAX);
-    // With no budget every intermediate is released once read, before submit.
+    let expected = tint_chain(&mut pooled);
     let mut unpooled = Renderer::new(gpu());
-    assert_eq!(tint_chain(&mut unpooled, 0), expected);
-    let stats = unpooled.texture_pool_stats();
-    assert!(stats.evicted >= 2, "evicted {}", stats.evicted);
-    assert_eq!(stats.available, 0);
+    unpooled.set_texture_budget_bytes(0);
+    let stale = (0..6)
+        .map(|_| {
+            unpooled.textures.acquire(
+                unpooled.gpu.device(),
+                tint_chain_size(),
+                unpooled.intermediate_format(),
+                "stale target",
+            )
+        })
+        .collect::<Vec<_>>();
+    drop(stale);
+    empty_frames(&unpooled, crate::recent_use::RECENT_FRAMES);
+    let before = unpooled.texture_pool_stats();
+    assert_eq!(tint_chain(&mut unpooled), expected);
+    let evicted = unpooled.texture_pool_stats().evicted - before.evicted;
+    assert!(evicted >= 2, "evicted {evicted}");
 }
 
 #[test]

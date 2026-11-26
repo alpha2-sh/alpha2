@@ -6,6 +6,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::Descriptor;
+#[cfg(feature = "schema")]
+use super::descriptor::PLAIN_TEXT_PATTERN;
+use super::descriptor::plain_text;
 
 /// The longest manifest text accepted.
 pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
@@ -40,8 +43,181 @@ pub struct PluginManifest {
     /// Files the plugin reads through `resource()`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<PluginResource>,
+    /// What an interface shows about the plugin. The engine ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<PluginAbout>,
     /// The descriptor `describe()` returns.
     pub descriptor: Descriptor,
+}
+
+/// The longest `about.name`, in characters.
+pub const MAX_ABOUT_NAME_CHARS: usize = 80;
+/// The longest `about.summary`, in characters.
+pub const MAX_ABOUT_SUMMARY_CHARS: usize = 400;
+/// The longest `about.author`, in characters.
+pub const MAX_ABOUT_AUTHOR_CHARS: usize = 80;
+/// The longest `about.homepage`, in characters.
+pub const MAX_ABOUT_HOMEPAGE_CHARS: usize = 2048;
+/// The longest `about.license`, in characters.
+pub const MAX_ABOUT_LICENSE_CHARS: usize = 256;
+
+/// What an interface shows about a plugin: plain text, never markup, without control characters.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PluginAbout {
+    /// The plugin's name.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAX_ABOUT_NAME_CHARS), regex(pattern = PLAIN_TEXT_PATTERN))
+    )]
+    pub name: String,
+    /// What it does, in a sentence or two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_ABOUT_SUMMARY_CHARS), regex(pattern = PLAIN_TEXT_PATTERN))
+    )]
+    pub summary: Option<String>,
+    /// Who makes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_ABOUT_AUTHOR_CHARS), regex(pattern = PLAIN_TEXT_PATTERN))
+    )]
+    pub author: Option<String>,
+    /// Its web page, an `https:` URL of printable ASCII.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_ABOUT_HOMEPAGE_CHARS), regex(pattern = HOMEPAGE_PATTERN))
+    )]
+    pub homepage: Option<String>,
+    /// Its license, an SPDX license expression such as `MIT OR Apache-2.0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_ABOUT_LICENSE_CHARS), regex(pattern = LICENSE_PATTERN))
+    )]
+    pub license: Option<String>,
+}
+
+#[cfg(feature = "schema")]
+const HOMEPAGE_PATTERN: &str = "^https://[!-~]+$";
+#[cfg(feature = "schema")]
+const LICENSE_PATTERN: &str = r"^[A-Za-z0-9.+:() -]+$";
+
+impl PluginAbout {
+    fn validate(&self) -> Result<(), String> {
+        let text = |field: &str, value: &str, min: usize, max: usize| {
+            if plain_text(value, min, max) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "about.{field} is not {min} to {max} characters without control characters"
+                ))
+            }
+        };
+        text("name", &self.name, 1, MAX_ABOUT_NAME_CHARS)?;
+        if let Some(summary) = &self.summary {
+            text("summary", summary, 0, MAX_ABOUT_SUMMARY_CHARS)?;
+        }
+        if let Some(author) = &self.author {
+            text("author", author, 0, MAX_ABOUT_AUTHOR_CHARS)?;
+        }
+        if let Some(homepage) = &self.homepage {
+            let rest = homepage.strip_prefix("https://").unwrap_or_default();
+            if homepage.len() > MAX_ABOUT_HOMEPAGE_CHARS
+                || rest.is_empty()
+                || !rest.bytes().all(|byte| matches!(byte, b'!'..=b'~'))
+            {
+                return Err(format!(
+                    "about.homepage is not an https: URL of printable ASCII, at most \
+                     {MAX_ABOUT_HOMEPAGE_CHARS} characters"
+                ));
+            }
+        }
+        if let Some(license) = &self.license
+            && (license.len() > MAX_ABOUT_LICENSE_CHARS || !spdx_expression(license))
+        {
+            return Err(format!(
+                "about.license {license:?} is not an SPDX license expression of at most \
+                 {MAX_ABOUT_LICENSE_CHARS} characters"
+            ));
+        }
+        Ok(())
+    }
+}
+
+// SPDX 2.3 annex D license expressions; the ids are not looked up.
+fn spdx_expression(text: &str) -> bool {
+    let spaced = text.replace('(', " ( ").replace(')', " ) ");
+    let tokens = spaced.split_ascii_whitespace().collect::<Vec<_>>();
+    let mut at = 0;
+    spdx_or(&tokens, &mut at, 0) && at == tokens.len()
+}
+
+const SPDX_MAX_NESTING: usize = 32;
+
+fn spdx_id(token: &str) -> bool {
+    !matches!(token, "AND" | "OR" | "WITH" | "(" | ")")
+        && !token.is_empty()
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':'))
+}
+
+fn spdx_or(tokens: &[&str], at: &mut usize, depth: usize) -> bool {
+    spdx_and(tokens, at, depth)
+        && loop {
+            if tokens.get(*at) != Some(&"OR") {
+                break true;
+            }
+            *at += 1;
+            if !spdx_and(tokens, at, depth) {
+                break false;
+            }
+        }
+}
+
+fn spdx_and(tokens: &[&str], at: &mut usize, depth: usize) -> bool {
+    spdx_term(tokens, at, depth)
+        && loop {
+            if tokens.get(*at) != Some(&"AND") {
+                break true;
+            }
+            *at += 1;
+            if !spdx_term(tokens, at, depth) {
+                break false;
+            }
+        }
+}
+
+fn spdx_term(tokens: &[&str], at: &mut usize, depth: usize) -> bool {
+    let Some(&token) = tokens.get(*at) else {
+        return false;
+    };
+    *at += 1;
+    if token == "(" {
+        if depth >= SPDX_MAX_NESTING
+            || !spdx_or(tokens, at, depth + 1)
+            || tokens.get(*at) != Some(&")")
+        {
+            return false;
+        }
+        *at += 1;
+        return true;
+    }
+    if !spdx_id(token.strip_suffix('+').unwrap_or(token)) {
+        return false;
+    }
+    if tokens.get(*at) == Some(&"WITH") {
+        *at += 1;
+        let exception = tokens.get(*at).is_some_and(|token| spdx_id(token));
+        *at += 1;
+        return exception;
+    }
+    true
 }
 
 /// The contract a plugin implements.
@@ -86,21 +262,245 @@ pub enum ArtifactKind {
     Staticlib,
 }
 
-/// A file a plugin reads.
+/// The most resource slots one manifest declares, inside [`MAX_PLUGIN_RESOURCES`].
+pub const MAX_PLUGIN_SLOTS: usize = 16;
+/// The most file name suffixes one slot's `accept` lists.
+pub const MAX_SLOT_ACCEPT: usize = 16;
+/// The longest file name suffix in a slot's `accept`, in bytes.
+pub const MAX_SLOT_ACCEPT_BYTES: usize = 64;
+/// The longest slot name, in bytes.
+pub const MAX_SLOT_NAME_BYTES: usize = 64;
+
+/// A file a plugin reads: pinned by the manifest, or supplied by the caller at load time.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "ResourceEntry", into = "ResourceEntry")]
 pub struct PluginResource {
     /// The name the plugin asks for.
     pub name: String,
+    /// Where its bytes come from.
+    pub source: ResourceSource,
+}
+
+/// Where a resource's bytes come from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResourceSource {
+    /// A file the manifest pins by URL, SHA-256 and length.
+    Pinned(PinnedResource),
+    /// A file or directory the caller names when it loads the plugin.
+    Supplied(SuppliedSlot),
+}
+
+/// A file the manifest pins.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedResource {
     /// Where it is: a path under the manifest's own directory, or an absolute `https:` URL.
     pub url: String,
     /// SHA-256 of its bytes, 64 lowercase hexadecimal digits.
-    #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{64}$")))]
     pub sha256: String,
     /// Its length in bytes.
-    #[cfg_attr(feature = "schema", schemars(range(max = MAX_PLUGIN_RESOURCE_BYTES)))]
     pub bytes: u64,
+}
+
+/// A resource slot the caller fills at load time.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SuppliedSlot {
+    /// What the caller names.
+    pub shape: SlotShape,
+    /// Whether a load without it fails. An optional slot left empty reads as an undeclared name.
+    #[serde(default = "required_default", skip_serializing_if = "is_true")]
+    #[cfg_attr(feature = "schema", schemars(extend("default" = true)))]
+    pub required: bool,
+    /// The largest single file the plugin takes from the slot, in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 1)))]
+    pub max_bytes: Option<u64>,
+    /// File name suffixes a picker offers, such as `.onnx`; for interfaces only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAX_SLOT_ACCEPT), inner(length(min = 1, max = MAX_SLOT_ACCEPT_BYTES)))
+    )]
+    pub accept: Vec<String>,
+}
+
+const fn required_default() -> bool {
+    true
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
+const fn is_true(value: &bool) -> bool {
+    *value
+}
+
+/// What the caller names for a slot.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SlotShape {
+    /// One file, read as the resource named as the slot.
+    File,
+    /// A directory; each file under it is the resource `<slot>/<relative path>`.
+    Directory,
+}
+
+impl PluginResource {
+    /// The pin, for a pinned resource.
+    #[must_use]
+    pub const fn pinned(&self) -> Option<&PinnedResource> {
+        match &self.source {
+            ResourceSource::Pinned(pinned) => Some(pinned),
+            ResourceSource::Supplied(_) => None,
+        }
+    }
+
+    /// The slot, for a supplied resource.
+    #[must_use]
+    pub const fn slot(&self) -> Option<&SuppliedSlot> {
+        match &self.source {
+            ResourceSource::Pinned(_) => None,
+            ResourceSource::Supplied(slot) => Some(slot),
+        }
+    }
+}
+
+/// A resource as JSON spells it: the pin's fields, or `supplied`.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceEntry {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supplied: Option<SuppliedSlot>,
+}
+
+impl TryFrom<ResourceEntry> for PluginResource {
+    type Error = String;
+
+    fn try_from(entry: ResourceEntry) -> Result<Self, String> {
+        let ResourceEntry {
+            name,
+            url,
+            sha256,
+            bytes,
+            supplied,
+        } = entry;
+        let source = match (url, sha256, bytes, supplied) {
+            (Some(url), Some(sha256), Some(bytes), None) => {
+                ResourceSource::Pinned(PinnedResource { url, sha256, bytes })
+            }
+            (None, None, None, Some(slot)) => ResourceSource::Supplied(slot),
+            (None, None, None, None) => {
+                return Err(format!(
+                    "resource {name:?} has neither url, sha256 and bytes nor supplied"
+                ));
+            }
+            (_, _, _, Some(_)) => {
+                return Err(format!(
+                    "resource {name:?} has supplied and a pin; a resource is one or the other"
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "resource {name:?} needs all of url, sha256 and bytes"
+                ));
+            }
+        };
+        Ok(Self { name, source })
+    }
+}
+
+impl From<PluginResource> for ResourceEntry {
+    fn from(resource: PluginResource) -> Self {
+        let mut entry = Self {
+            name: resource.name,
+            url: None,
+            sha256: None,
+            bytes: None,
+            supplied: None,
+        };
+        match resource.source {
+            ResourceSource::Pinned(PinnedResource { url, sha256, bytes }) => {
+                entry.url = Some(url);
+                entry.sha256 = Some(sha256);
+                entry.bytes = Some(bytes);
+            }
+            ResourceSource::Supplied(slot) => entry.supplied = Some(slot),
+        }
+        entry
+    }
+}
+
+#[cfg(feature = "schema")]
+mod resource_schema {
+    use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+
+    use super::{MAX_PLUGIN_RESOURCE_BYTES, SuppliedSlot};
+
+    /// A file the manifest pins by URL, SHA-256 and length.
+    #[derive(JsonSchema)]
+    #[schemars(deny_unknown_fields, rename = "PinnedResource")]
+    #[expect(dead_code, reason = "a shape for the schema alone")]
+    struct PinnedResourceEntry {
+        /// The name the plugin asks for.
+        #[schemars(length(min = 1))]
+        name: String,
+        /// Where it is: a path under the manifest's own directory, or an absolute `https:` URL.
+        url: String,
+        /// SHA-256 of its bytes, 64 lowercase hexadecimal digits.
+        #[schemars(regex(pattern = r"^[0-9a-f]{64}$"))]
+        sha256: String,
+        /// Its length in bytes.
+        #[schemars(range(max = MAX_PLUGIN_RESOURCE_BYTES))]
+        bytes: u64,
+    }
+
+    /// A slot the caller fills with a file or a directory when it loads the plugin.
+    #[derive(JsonSchema)]
+    #[schemars(deny_unknown_fields, rename = "SuppliedResource")]
+    #[expect(dead_code, reason = "a shape for the schema alone")]
+    struct SuppliedResourceEntry {
+        /// The slot's name, which the plugin asks for.
+        #[schemars(regex(pattern = r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$"))]
+        name: String,
+        /// What the caller fills it with.
+        supplied: SuppliedSlot,
+    }
+
+    impl JsonSchema for super::PluginResource {
+        fn schema_name() -> std::borrow::Cow<'static, str> {
+            "PluginResource".into()
+        }
+
+        fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+            json_schema!({
+                "description": "A file a plugin reads: pinned by the manifest, or a slot the \
+                                caller fills at load time.",
+                "oneOf": [
+                    generator.subschema_for::<PinnedResourceEntry>(),
+                    generator.subschema_for::<SuppliedResourceEntry>(),
+                ]
+            })
+        }
+    }
+}
+
+/// Whether `name` is a slot name: 1 to 64 of `A-Z a-z 0-9 . _ -`, not starting with `.`.
+#[must_use]
+pub fn is_slot_name(name: &str) -> bool {
+    let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-');
+    name.len() <= MAX_SLOT_NAME_BYTES
+        && name.bytes().next().is_some_and(allowed)
+        && name.bytes().all(|byte| allowed(byte) || byte == b'.')
 }
 
 /// Why a manifest was refused.
@@ -196,7 +596,14 @@ impl PluginManifest {
                 ));
             }
         }
+        self.validate_resources()?;
+        self.about.as_ref().map_or(Ok(()), PluginAbout::validate)
+    }
+
+    fn validate_resources(&self) -> Result<(), String> {
         let mut names = HashSet::new();
+        let mut directories = Vec::new();
+        let (mut slots, mut total) = (0_usize, 0_u64);
         for resource in &self.resources {
             if resource.name.is_empty() || !names.insert(&resource.name) {
                 return Err(format!(
@@ -204,20 +611,46 @@ impl PluginManifest {
                     resource.name
                 ));
             }
-            check_file(&resource.url, &resource.sha256)?;
-            if resource.bytes > MAX_PLUGIN_RESOURCE_BYTES {
-                return Err(format!(
-                    "resource {} is longer than {MAX_PLUGIN_RESOURCE_BYTES} bytes",
-                    resource.name
-                ));
+            match &resource.source {
+                ResourceSource::Pinned(pinned) => {
+                    check_file(&pinned.url, &pinned.sha256)?;
+                    if pinned.bytes > MAX_PLUGIN_RESOURCE_BYTES {
+                        return Err(format!(
+                            "resource {} is longer than {MAX_PLUGIN_RESOURCE_BYTES} bytes",
+                            resource.name
+                        ));
+                    }
+                    total = total.saturating_add(pinned.bytes);
+                }
+                ResourceSource::Supplied(slot) => {
+                    slots += 1;
+                    check_slot(&resource.name, slot)?;
+                    if slot.shape == SlotShape::Directory {
+                        directories.push(format!("{}/", resource.name));
+                    }
+                }
             }
         }
-        let total = self.resources.iter().fold(0_u64, |total, resource| {
-            total.saturating_add(resource.bytes)
-        });
+        if slots > MAX_PLUGIN_SLOTS {
+            return Err(format!(
+                "declares more than {MAX_PLUGIN_SLOTS} resource slots"
+            ));
+        }
+        if let Some(resource) = self.resources.iter().find(|resource| {
+            resource.pinned().is_some()
+                && directories
+                    .iter()
+                    .any(|prefix| resource.name.starts_with(prefix.as_str()))
+        }) {
+            return Err(format!(
+                "pinned resource {} lies under a directory slot's names",
+                resource.name
+            ));
+        }
         if total > MAX_PLUGIN_RESOURCES_TOTAL_BYTES {
             return Err(format!(
-                "the resources are longer than {MAX_PLUGIN_RESOURCES_TOTAL_BYTES} bytes together"
+                "the pinned resources are longer than {MAX_PLUGIN_RESOURCES_TOTAL_BYTES} bytes \
+                 together"
             ));
         }
         Ok(())
@@ -292,6 +725,34 @@ pub fn reference(url: &str) -> Result<Reference<'_>, String> {
         }
     }
     Ok(Reference::Relative(url))
+}
+
+fn check_slot(name: &str, slot: &SuppliedSlot) -> Result<(), String> {
+    if !is_slot_name(name) {
+        return Err(format!(
+            "slot name {name:?} is not 1 to {MAX_SLOT_NAME_BYTES} of A-Z, a-z, 0-9, '.', '_' and \
+             '-', not starting with '.'"
+        ));
+    }
+    if slot.max_bytes == Some(0) {
+        return Err(format!("slot {name}: max_bytes is 0"));
+    }
+    if slot.accept.len() > MAX_SLOT_ACCEPT {
+        return Err(format!(
+            "slot {name}: accept lists more than {MAX_SLOT_ACCEPT} suffixes"
+        ));
+    }
+    if let Some(suffix) = slot
+        .accept
+        .iter()
+        .find(|suffix| suffix.is_empty() || suffix.len() > MAX_SLOT_ACCEPT_BYTES)
+    {
+        return Err(format!(
+            "slot {name}: accept suffix {suffix:?} is empty or longer than \
+             {MAX_SLOT_ACCEPT_BYTES} bytes"
+        ));
+    }
+    Ok(())
 }
 
 fn check_file(url: &str, sha256: &str) -> Result<(), String> {

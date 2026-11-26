@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import { decodeRecords, loadPlugin } from "../dist/plugins.js";
 
@@ -95,6 +96,11 @@ async function hostedPlugin({
   end = "i32.const 0",
   alloc = "i32.const 65536",
   describe = null,
+  resources = undefined,
+  about = undefined,
+  serve = (body) => new Response(body),
+  options = {},
+  fields = "",
 } = {}) {
   const binaryen = (await import("binaryen")).default;
   const json = JSON.stringify(DESCRIPTOR);
@@ -103,7 +109,10 @@ async function hostedPlugin({
     (import "alpha2" "fail" (func $fail (param i32 i32)))
     (import "alpha2" "log" (func $log (param i32 i32 i32)))
     (import "alpha2" "emit" (func $emit (param i32 i32) (result i32)))
+    (import "alpha2" "resource_size" (func $size (param i32 i32) (result i64)))
+    (import "alpha2" "resource_read" (func $read (param i32 i32 i32 i32) (result i32)))
     (memory (export "memory") 128)
+    ${fields}
     (data (i32.const 0) "${json.replaceAll('"', "\\22")}")
     (func (export "alpha2_abi") (result i32) i32.const 1)
     (func (export "alpha2_describe") (result i64) ${describe ?? `i64.const ${packed}`})
@@ -133,15 +142,25 @@ async function hostedPlugin({
           bytes: wasm.byteLength,
         },
       ],
+      resources,
+      about,
       descriptor: DESCRIPTOR,
     }),
   );
   const files = { "manifest.json": manifest, "m.wasm": wasm };
-  const fetch = async (url) =>
-    new Response(files[new URL(url).pathname.slice(1)]);
-  return loadPlugin("https://plugins.test/manifest.json", await hex(manifest), {
-    fetch,
-  });
+  const fetch = async (url) => {
+    const name = new URL(url).pathname.slice(1);
+    return name === "manifest.json"
+      ? new Response(files[name])
+      : serve(files[name]);
+  };
+  const loaded = await loadPlugin(
+    "https://plugins.test/manifest.json",
+    await hex(manifest),
+    { fetch, ...options },
+  );
+  assert.equal(loaded.manifestSha256, await hex(manifest));
+  return loaded;
 }
 
 const CONTEXT = {
@@ -242,4 +261,226 @@ test("a trap in describe or in the allocation is a PluginError", async () => {
     outside.extractor().begin(CONTEXT),
     (error) => error.code === "PLUGIN_TRAPPED",
   );
+});
+
+const SLOTS = [
+  { name: "model", supplied: { shape: "file", max_bytes: 8 } },
+  { name: "vocab", supplied: { shape: "directory", required: false } },
+];
+
+/** A plugin whose `begin` fails with its context and whose `video` reads resource `name`. */
+function readingPlugin(name, supplied, resources = SLOTS) {
+  const bytes = new TextEncoder().encode(name);
+  return hostedPlugin({
+    resources,
+    options: { supplied },
+    fields: `(data (i32.const 60000) "${name}")`,
+    begin: "local.get 0 local.get 1 call $fail i32.const 1",
+    video: `(i32.wrap_i64 (call $size (i32.const 60000) (i32.const ${bytes.length})))
+      local.set $i
+      (call $read (i32.const 60000) (i32.const ${bytes.length}) (i32.const 131072) (local.get $i))`,
+  });
+}
+
+const picked = (path, text) =>
+  Object.defineProperty(
+    new File([text], path.split("/").at(-1)),
+    "webkitRelativePath",
+    {
+      value: path,
+    },
+  );
+
+async function contextOf(plugin) {
+  const error = await plugin
+    .extractor()
+    .begin(CONTEXT)
+    .then(
+      () => assert.fail("begin fails with its context"),
+      (caught) => caught,
+    );
+  return JSON.parse(error.message);
+}
+
+test("supplied files fill a plugin's slots as the native loaders fill them", async () => {
+  const sha = (text) => createHash("sha256").update(text).digest("hex");
+  const model = new File(["weights"], "model.onnx");
+  const plugin = await readingPlugin("model", {
+    model,
+    vocab: [
+      picked("pick/b.txt", "bb"),
+      picked("pick/sub/a.txt", "a"),
+      picked("pick/.hidden/c.txt", "c"),
+      picked("pick/.d.txt", "d"),
+    ],
+  });
+  assert.deepEqual((await contextOf(plugin)).supplied, {
+    model: { shape: "file", files: [{ name: "model", bytes: 7 }] },
+    vocab: {
+      shape: "directory",
+      files: [
+        { name: "vocab/b.txt", bytes: 2 },
+        { name: "vocab/sub/a.txt", bytes: 1 },
+      ],
+    },
+  });
+  const reads = await readingPlugin("vocab/sub/a.txt", {
+    model,
+    vocab: [picked("pick/sub/a.txt", "a")],
+  });
+  const extractor = reads.extractor();
+  await extractor.begin(CONTEXT).catch(() => {});
+  extractor.video(FRAME, {});
+  assert.deepEqual(extractor.madeByPlugin().supplied, [
+    { name: "vocab/sub/a.txt", sha256: sha("a"), bytes: 1 },
+  ]);
+  assert.equal(extractor.madeByPlugin().manifest_sha256, reads.manifestSha256);
+});
+
+test("a directory handle fills a directory slot, walked in name order", async () => {
+  const file = (text) => ({
+    kind: "file",
+    getFile: async () => new File([text], "f"),
+  });
+  const directory = (entries) => ({
+    kind: "directory",
+    async *entries() {
+      yield* Object.entries(entries);
+    },
+  });
+  const plugin = await readingPlugin("model", {
+    model: new File(["w"], "m"),
+    vocab: directory({
+      z: file("zz"),
+      a: directory({ b: file("b") }),
+      ".git": file("x"),
+    }),
+  });
+  assert.deepEqual((await contextOf(plugin)).supplied.vocab.files, [
+    { name: "vocab/a/b", bytes: 1 },
+    { name: "vocab/z", bytes: 2 },
+  ]);
+});
+
+test("supplied files that do not fit a slot are refused with the native loaders' reasons", async () => {
+  const model = new File(["weights"], "model.onnx");
+  const refused = async (supplied, reason, slot = "model") =>
+    assert.rejects(readingPlugin("model", supplied), (error) => {
+      assert.equal(error.code, "PLUGIN_RESOURCE_INVALID", error.message);
+      assert.deepEqual(error.details, { slot, reason });
+      return true;
+    });
+  await refused({}, "missing");
+  await refused({ model, other: model }, "unknown_slot", "other");
+  await refused({ model: [picked("pick/a", "a")] }, "shape");
+  await refused({ model, vocab: model }, "shape", "vocab");
+  await refused({ model: new File(["123456789"], "m") }, "too_large");
+  const deep = `pick/${"d/".repeat(9)}f`;
+  await refused({ model, vocab: [picked(deep, "x")] }, "too_deep", "vocab");
+  const long = `pick/${"n".repeat(512)}`;
+  await refused(
+    { model, vocab: [picked(long, "x")] },
+    "name_too_long",
+    "vocab",
+  );
+  const many = Array.from({ length: 1025 }, (_, index) =>
+    picked(`pick/${index}`, ""),
+  );
+  await refused({ model, vocab: many }, "too_many_files", "vocab");
+});
+
+test("a supplied file past its slot's max_bytes or unreadable fails the call that reads it", async () => {
+  const slots = [
+    { name: "vocab", supplied: { shape: "directory", max_bytes: 2 } },
+  ];
+  const plugin = await readingPlugin(
+    "vocab/big",
+    { vocab: [picked("pick/big", "big")] },
+    slots,
+  );
+  const extractor = plugin.extractor();
+  await extractor.begin(CONTEXT).catch(() => {});
+  assert.throws(
+    () => extractor.video(FRAME, {}),
+    (error) => {
+      assert.equal(error.code, "PLUGIN_RESOURCE_INVALID");
+      assert.deepEqual(error.details, { slot: "vocab", reason: "too_large" });
+      return true;
+    },
+  );
+  const unreadable = new File(["x"], "m");
+  unreadable.arrayBuffer = async () => {
+    throw new DOMException("the file changed", "NotReadableError");
+  };
+  const failing = await readingPlugin("model", { model: unreadable });
+  await assert.rejects(failing.extractor().begin(CONTEXT), {
+    code: "PLUGIN_FETCH_FAILED",
+  });
+});
+
+test("loadPlugin reports each pinned file as it arrives and gives the manifest's about", async () => {
+  const progress = [];
+  const chunked = (body) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          for (let at = 0; at < body.byteLength; at += 64)
+            controller.enqueue(body.slice(at, at + 64));
+          controller.close();
+        },
+      }),
+    );
+  const plugin = await hostedPlugin({
+    about: { name: "Bounds", license: "MIT" },
+    serve: chunked,
+    options: { onProgress: (report) => progress.push(report) },
+  });
+  assert.deepEqual(plugin.about, { name: "Bounds", license: "MIT" });
+  assert.ok(progress.length > 1, `${progress.length} reports`);
+  assert.ok(
+    progress.every(
+      (report) => report.phase === "load" && report.file === "m.wasm",
+    ),
+  );
+  const last = progress.at(-1);
+  assert.equal(last.loaded, last.total);
+  assert.ok(
+    progress.every(
+      (report, index) =>
+        index === 0 || report.loaded > progress[index - 1].loaded,
+    ),
+  );
+});
+
+test("loadPlugin refuses a file once more bytes arrive than the manifest pins", async () => {
+  let sent = 0;
+  const endless = () =>
+    new Response(
+      new ReadableStream({
+        pull(controller) {
+          sent += 1024;
+          controller.enqueue(new Uint8Array(1024));
+        },
+      }),
+    );
+  await assert.rejects(hostedPlugin({ serve: endless }), {
+    code: "PLUGIN_HASH_MISMATCH",
+    message: /m\.wasm is \d+ bytes or more/,
+  });
+  assert.ok(sent < 1024 * 1024, `${sent} bytes sent`);
+});
+
+test("loadPlugin checks the manifest before it fetches a file", async () => {
+  let fetched = 0;
+  await assert.rejects(
+    hostedPlugin({
+      about: { name: "Bounds\u0007" },
+      serve: (body) => {
+        fetched += 1;
+        return new Response(body);
+      },
+    }),
+    { code: "PLUGIN_LOAD_FAILED", message: /about\.name/ },
+  );
+  assert.equal(fetched, 0);
 });

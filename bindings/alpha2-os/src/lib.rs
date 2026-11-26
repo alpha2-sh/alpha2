@@ -1,6 +1,7 @@
 //! Safe wrappers for the operating-system calls the native host needs that the standard library
 //! does not offer at the minimum Rust version: file locks, no-replace publishing, termination
-//! handling, parent and child lifetime, clocks, memory, and the OS version.
+//! handling, parent and child lifetime, memory shared with a worker, clocks, memory, and the OS
+//! version.
 //!
 //! In iOS and Android apps the system owns the process, so the termination, parent-exit and
 //! child-lifetime calls have no use there; files, clocks, memory and the version do.
@@ -10,11 +11,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+mod descriptor_passing;
 mod lifetime;
 mod memory;
 mod os_version;
+mod shared_region;
 #[cfg(unix)]
 mod unix;
+mod worker;
 #[cfg(unix)]
 use unix as platform;
 #[cfg(windows)]
@@ -22,6 +27,8 @@ mod windows;
 #[cfg(windows)]
 use windows as platform;
 
+#[cfg(unix)]
+pub use descriptor_passing::{DescriptorReader, write_with_descriptor};
 pub use lifetime::{
     KillOnCloseJob, claim_stdout, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
 };
@@ -31,6 +38,11 @@ pub use memory::{
 };
 pub use memory::{MemoryCapacity, memory_capacity};
 pub use os_version::os_version;
+pub use shared_region::{MappedRegion, SharedRegion};
+pub use worker::{
+    child_exited, claim_stdin, close_descriptors_except, disable_crash_dumps, kill_process_tree,
+    own_process_tree, prefer_out_of_memory_kill,
+};
 
 /// Takes an exclusive advisory lock on `file` without waiting. Returns `Ok(false)` when another
 /// open handle, in this or another process, holds it.

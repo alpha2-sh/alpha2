@@ -22,9 +22,9 @@ use wasm_bindgen::prelude::*;
 use crate::effect::EffectRequest;
 use crate::error::{BindingError, Code, EngineTyped};
 use crate::interop::{
-    DeviceHealth, diagnostics_to_js, export_readback_promise, export_status, frame_upload_receipt,
-    gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved, set, texture_byte_len,
-    validate_texture_extent, watch_device,
+    DeviceHealth, ReadbackFrame, diagnostics_to_js, export_readback_promise, export_status,
+    frame_upload_receipt, gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved,
+    set, texture_byte_len, validate_texture_extent, watch_device,
 };
 use crate::present::{
     UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult, present_texture,
@@ -49,7 +49,7 @@ pub(crate) fn invalid_state(message: impl std::fmt::Display) -> JsValue {
 
 /// The binding's own step failed, not the caller's input.
 pub(crate) fn internal_error(message: impl std::fmt::Display) -> JsValue {
-    coded_error(Code::INTERNAL, message)
+    coded_error(Code::ALPHA2_ERROR, message)
 }
 
 /// `RESOURCE_LIMIT` for an upload of `source_id` that would push the export frame's pinned
@@ -1944,24 +1944,27 @@ impl WebEffectRegistry {
     }
 
     /// After a loss ([`Self::device_lost`]), what the renderer's submission times say about it,
-    /// as JSON `{ hung, gpuMs, watchdogMs, timeTicks, frameIndex, effects, predictedMs }`.
-    /// `hung` means the longest recent submission ran at least half the GPU watchdog, so the
-    /// loss was most likely this work's and rerunning it would stop the GPU again. `undefined`
-    /// before any loss.
+    /// as JSON `{ hung, gpuMs, measured, submissions, watchdogMs, timeTicks, frameIndex, effects,
+    /// predictedMs }`; `gpuMs` is an upper bound unless `measured`. `hung` means a recent
+    /// submission ran at least half the GPU watchdog, or `submissions` completed together did and
+    /// ran more than twice their predicted time, so the loss was most likely this work's and
+    /// rerunning it would stop the GPU again; the other fields describe that submission, else the
+    /// longest. `undefined` before any loss.
     #[wasm_bindgen(getter, js_name = lossReport)]
     pub fn loss_report(&self) -> Option<String> {
         if !self.device_lost() {
             return None;
         }
-        let longest = self.renderer.longest_submission();
-        let hung = longest
-            .as_ref()
-            .is_some_and(|report| report.gpu_ms >= f64::from(alpha2_gpu::hung_threshold_ms()));
+        let hung = self.renderer.hung_submission();
+        let is_hung = hung.is_some();
+        let longest = hung.or_else(|| self.renderer.longest_submission());
         let frame = longest.as_ref().and_then(|report| report.frame);
         Some(
             serde_json::json!({
-                "hung": hung,
+                "hung": is_hung,
                 "gpuMs": longest.as_ref().map(|report| (report.gpu_ms * 10.0).round() / 10.0),
+                "measured": longest.as_ref().is_some_and(|report| report.measured),
+                "submissions": longest.as_ref().map(|report| report.submissions),
                 "watchdogMs": alpha2_gpu::watchdog_ms(),
                 "timeTicks": frame.map(|frame| frame.time_ticks.to_string()),
                 "frameIndex": frame.and_then(|frame| frame.frame_index),
@@ -2040,8 +2043,8 @@ impl WebEffectRegistry {
     }
 
     /// How frames rendered since the last call were split into GPU submissions to stay under
-    /// the watchdog budget, as JSON `{ frames, splitFrames, maxPerFrame, maxPredictedMs }` (the
-    /// native host's `performance.gpuSubmissions`). Resets the counts.
+    /// the watchdog budget, as JSON `{ frames, splitFrames, maxPerFrame, maxPredictedMs,
+    /// overBudget }` (the native host's `performance.gpuSubmissions`). Resets the counts.
     #[wasm_bindgen(js_name = takeGpuSubmissionStats)]
     pub fn take_gpu_submission_stats(&self) -> String {
         let stats = self.renderer.take_gpu_submission_stats();
@@ -2050,6 +2053,7 @@ impl WebEffectRegistry {
             "splitFrames": stats.split_frames,
             "maxPerFrame": stats.max_per_frame,
             "maxPredictedMs": stats.max_predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
+            "overBudget": stats.over_budget,
         })
         .to_string()
     }
@@ -2113,6 +2117,11 @@ impl WebEffectRegistry {
                 "runtimeEffects": diagnostics.pipelines.runtime_effects,
                 "builtins": diagnostics.pipelines.builtins,
             },
+            "bindGroups": {
+                "created": diagnostics.bind_groups.created,
+                "reused": diagnostics.bind_groups.reused,
+                "kept": diagnostics.bind_groups.kept,
+            },
             "frames": {
                 "presented": diagnostics.presented_frames,
                 "dropped": diagnostics.dropped_frames,
@@ -2131,7 +2140,6 @@ impl WebEffectRegistry {
             "webgl2Uploads": crate::interop::measured_webgl2_uploads()
                 .filter(|_| !self.browser_webgpu)
                 .map(crate::interop::WebGl2Uploads::name),
-            "motionBlurSubframes": diagnostics.motion_blur_subframes,
             "degradations": diagnostics
                 .degradations
                 .iter()
@@ -2552,6 +2560,7 @@ impl WebEffectRegistry {
             time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
             frame_index: Some(exporter.progress().completed),
         }));
+        let color = exporter.encoding().color;
         let step = exporter
             .render_next(
                 project,
@@ -2586,8 +2595,11 @@ impl WebEffectRegistry {
             self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
-            Some(index),
-            time,
+            ReadbackFrame {
+                index: Some(index),
+                time,
+                color,
+            },
         );
         Ok(readback)
     }
@@ -2620,6 +2632,7 @@ impl WebEffectRegistry {
             time_ticks: exporter.pending_time().map_or(0, MediaTime::ticks),
             frame_index: Some(exporter.progress().completed),
         }));
+        let color = exporter.encoding().color;
         let step = exporter
             .render_next(
                 project,
@@ -2652,8 +2665,11 @@ impl WebEffectRegistry {
             self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
-            Some(index),
-            time,
+            ReadbackFrame {
+                index: Some(index),
+                time,
+                color,
+            },
         );
         let result = web_sys::js_sys::Object::new();
         set(&result, "kind", &JsValue::from_str("rendered"))?;
@@ -2810,7 +2826,7 @@ impl WebEffectRegistry {
         self.renderer
             .set_texture_budget_bytes(quality.texture_budget_bytes);
         self.renderer
-            .set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+            .set_quality_controls(quality.max_filter_samples);
         self.texts
             .prepare(&self.renderer, &frame, size)
             .map_err(|error| typed_error(&error))?;
@@ -2819,10 +2835,11 @@ impl WebEffectRegistry {
             time_ticks,
             frame_index: None,
         }));
+        let encoding = YuvEncoding::export(codec);
         let (readback, missing) = if pixels.is_yuv420p() {
             let attempt = self
                 .renderer
-                .render_frame_yuv420p(size, &frame, &provider, YuvEncoding::export(codec))
+                .render_frame_yuv420p(size, &frame, &provider, encoding)
                 .map_err(|error| typed_error(&error))?;
             (attempt.readback, attempt.report.missing_sources)
         } else {
@@ -2832,11 +2849,8 @@ impl WebEffectRegistry {
             let readback = render
                 .texture
                 .map(|texture| {
-                    self.renderer.begin_layout_readback(
-                        &texture,
-                        YuvEncoding::export(codec),
-                        pixels,
-                    )
+                    self.renderer
+                        .begin_layout_readback(&texture, encoding, pixels)
                 })
                 .transpose()
                 .map_err(|error| typed_error(&error))?;
@@ -2853,8 +2867,11 @@ impl WebEffectRegistry {
             self.renderer.loss_classifier(),
             self.browser_webgpu,
             self.renderer.gpu_wait_timeout(),
-            None,
-            time,
+            ReadbackFrame {
+                index: None,
+                time,
+                color: encoding.color,
+            },
         );
         let result = web_sys::js_sys::Object::new();
         set(&result, "kind", &JsValue::from_str("rendered"))?;

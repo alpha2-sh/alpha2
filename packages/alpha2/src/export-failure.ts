@@ -254,6 +254,7 @@ type ProtocolErrorCode =
   | "PLUGIN_LOAD_FAILED"
   | "PLUGIN_TRAPPED"
   | "PLUGIN_LIMIT"
+  | "PLUGIN_RESOURCE_INVALID"
   | "GPU_INIT_FAILED"
   | "ENCODE_ERROR"
   | "ENCODER_BUSY"
@@ -346,10 +347,11 @@ const CODE_CLASSES: Readonly<Record<ClassifiedCode, FailureClass>> =
     PLUGIN_LOAD_FAILED: permanent,
     PLUGIN_TRAPPED: permanent,
     PLUGIN_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
+    PLUGIN_RESOURCE_INVALID: permanent,
     GPU_INIT_FAILED: unknown,
     ENCODE_ERROR: unknown,
     ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },
-    // A caught panic of the host.
+    // A defect in the host or the engine: a caught panic or an internal error.
     INTERNAL: defect,
     ALPHA2_ERROR: unknown,
     // `@alpha2-sh/node` setup errors that a retry does not fix.
@@ -393,6 +395,27 @@ export function failureClassOfCode(code: unknown): FailureClass {
   return (
     (typeof code === "string" && Object.hasOwn(CODE_CLASSES, code)
       ? CODE_CLASSES[code as ClassifiedCode]
+      : undefined) ?? unknown
+  );
+}
+
+const HTTP_STATUS_CLASSES: Readonly<Record<number, FailureClass>> =
+  Object.freeze({
+    413: { code: "RESOURCE_LIMIT", resource: "unknown" },
+    429: { code: "RESOURCE_BUSY", resource: "unknown" },
+    503: { code: "RESOURCE_BUSY", resource: "unknown" },
+    507: { code: "STORAGE_QUOTA_EXCEEDED", resource: "unknown" },
+  });
+
+/**
+ * Failure class of an export service's HTTP error status: `413` (a body past the service's limit)
+ * is `RESOURCE_LIMIT`, `429` and `503` are `RESOURCE_BUSY`, `507` is `STORAGE_QUOTA_EXCEEDED`, and
+ * any other status is `UNKNOWN`.
+ */
+export function failureClassOfHttpStatus(status: number): FailureClass {
+  return (
+    (Object.hasOwn(HTTP_STATUS_CLASSES, status)
+      ? HTTP_STATUS_CLASSES[status]
       : undefined) ?? unknown
   );
 }

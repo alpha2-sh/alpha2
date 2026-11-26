@@ -474,6 +474,15 @@ fn transition_test_image(size: RenderSize, inverse: bool) -> Vec<u8> {
         .collect()
 }
 
+fn empty_frames(renderer: &Renderer, count: usize) {
+    for _ in 0..count {
+        let encoder = renderer.command_encoder("alpha2 empty test frame");
+        renderer
+            .submit([encoder.finish()])
+            .expect("empty frame submits");
+    }
+}
+
 fn rgba_texture(renderer: &Renderer, pixel: [u8; 4]) -> wgpu::Texture {
     rgba_image_texture(
         renderer,

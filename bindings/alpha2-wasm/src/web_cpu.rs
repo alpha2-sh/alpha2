@@ -157,6 +157,7 @@ struct ExportedFrame {
     time: MediaTime,
     planes: Vec<u8>,
     size: RenderSize,
+    color: ColorMetadata,
 }
 
 /// RGBA pixels, 8-bit or half-float bits, rows packed.
@@ -372,6 +373,7 @@ impl WebCpuRenderer {
         size: RenderSize,
         index: Option<u64>,
         time: MediaTime,
+        color: ColorMetadata,
     ) -> Result<web_sys::js_sys::Object, JsValue> {
         let (width, height) = (size.width, size.height);
         let luma = u64::from(width) * u64::from(height);
@@ -396,11 +398,7 @@ impl WebCpuRenderer {
         set(&result, "width", &JsValue::from_f64(f64::from(width)))?;
         set(&result, "height", &JsValue::from_f64(f64::from(height)))?;
         set(&result, "format", &JsValue::from_str("I420"))?;
-        set(
-            &result,
-            "colorSpace",
-            &video_color_space(ColorMetadata::EXPORT)?,
-        )?;
+        set(&result, "colorSpace", &video_color_space(color)?)?;
         set(&result, "layout", &layout)?;
         let pixels = crate::interop::copy_out_bytes(planes)
             .map_err(|error| crate::interop::copy_out_failure(&error))?;
@@ -459,6 +457,7 @@ impl WebCpuRenderer {
                     time,
                     planes,
                     size,
+                    color: exporter.encoding().color,
                 }))
             }
         }
@@ -1449,10 +1448,14 @@ impl WebCpuRenderer {
     #[wasm_bindgen(js_name = exportFrame)]
     pub fn export_frame(&mut self) -> Result<web_sys::js_sys::Promise, JsValue> {
         Ok(resolved(&match self.next_export_frame()? {
-            Ok(frame) => {
-                Self::rendered_frame(&frame.planes, frame.size, Some(frame.index), frame.time)?
-                    .into()
-            }
+            Ok(frame) => Self::rendered_frame(
+                &frame.planes,
+                frame.size,
+                Some(frame.index),
+                frame.time,
+                frame.color,
+            )?
+            .into(),
             Err(status) => status,
         }))
     }
@@ -1472,6 +1475,7 @@ impl WebCpuRenderer {
             exported.size,
             Some(exported.index),
             exported.time,
+            exported.color,
         )?;
         ticket(
             Some(exported.index),
@@ -1495,7 +1499,7 @@ impl WebCpuRenderer {
         codec: &str,
         pixels: Option<String>,
     ) -> Result<JsValue, JsValue> {
-        let codec = parse_codec(codec)?;
+        let encoding = YuvEncoding::export(parse_codec(codec)?);
         let pixels = crate::interop::parse_pixels(pixels.as_deref())?;
         let project = self
             .project
@@ -1527,7 +1531,7 @@ impl WebCpuRenderer {
                     size,
                     &frame,
                     &FramesWithText::new(&self.frames, &self.texts),
-                    YuvEncoding::export(codec),
+                    encoding,
                     pixels,
                     &mut crate::interop::plane_targets(&mut memory, &offsets),
                 )
@@ -1537,7 +1541,7 @@ impl WebCpuRenderer {
                 return export_waiting(project, time, &report.missing_sources);
             }
             self.frames.unpin();
-            let rendered = Self::rendered_frame(&memory, size, None, time)?;
+            let rendered = Self::rendered_frame(&memory, size, None, time, encoding.color)?;
             set(
                 &rendered,
                 "format",
@@ -1554,7 +1558,7 @@ impl WebCpuRenderer {
                     size,
                     &frame,
                     &FramesWithText::new(&self.frames, &self.texts),
-                    YuvEncoding::export(codec),
+                    encoding,
                     &mut targets,
                 )
                 .map_err(|error| typed_error(&error))?
@@ -1564,7 +1568,7 @@ impl WebCpuRenderer {
             return export_waiting(project, time, &report.missing_sources);
         }
         self.frames.unpin();
-        let rendered = Self::rendered_frame(&planes, size, None, time)?;
+        let rendered = Self::rendered_frame(&planes, size, None, time, encoding.color)?;
         ticket(None, time, planes.len() as u64, &rendered)
     }
 
@@ -1664,11 +1668,11 @@ impl WebCpuRenderer {
         self.texts = TextTextures::new();
     }
 
-    /// Sets the export profile's texture budget and filter and motion blur sample controls.
+    /// Sets the export profile's texture budget and filter sample budget.
     fn use_export_quality(renderer: &CpuRenderer) {
         let quality = QualityProfile::export();
         renderer.set_texture_budget_bytes(quality.texture_budget_bytes);
-        renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+        renderer.set_quality_controls(quality.max_filter_samples);
     }
 
     /// The project's frame at `time_ticks`, drawn at export quality at `width` x `height` from the

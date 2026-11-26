@@ -3,12 +3,12 @@
 //! deadline or a cancel, checked at every epoch deadline, and NaNs are canonicalized so results do
 //! not depend on the CPU.
 
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use alpha2_engine::extract::{AudioInput, ExtractorError};
 use alpha2_media::CancelToken;
+use alpha2_model::SuppliedFile;
 use alpha2_plugin_abi::wasm as names;
 use wasmtime::wasmparser::{Parser, Payload, TypeRef, Validator, WasmFeatures};
 use wasmtime::{
@@ -16,6 +16,7 @@ use wasmtime::{
     TypedFunc, UpdateDeadline,
 };
 
+use super::resources::ResourceReader;
 use super::{
     Call, Collected, LogBudget, MAX_FAIL_BYTES, MAX_LOG_BYTES, MAX_MEMORY_BYTES, OutputCap,
     PluginError, Policy, Transport, bounded_text, codes,
@@ -200,7 +201,7 @@ struct State {
     limiter: Limiter,
     collected: Collected,
     caps: Vec<OutputCap>,
-    resources: HashMap<String, Vec<u8>>,
+    reader: ResourceReader,
     log: LogBudget,
     cancel: CancelToken,
     /// When the running call must have returned.
@@ -273,8 +274,8 @@ fn linker() -> Result<Linker<State>, PluginError> {
             |mut caller: Caller<'_, State>, name: i32, len: i32| {
                 read(&mut caller, name, len)
                     .and_then(|name| String::from_utf8(name).ok())
-                    .and_then(|name| caller.data().resources.get(&name))
-                    .and_then(|bytes| i64::try_from(bytes.len()).ok())
+                    .and_then(|name| caller.data_mut().reader.size(&name))
+                    .and_then(|bytes| i64::try_from(bytes).ok())
                     .unwrap_or(-1)
             },
         )
@@ -293,18 +294,10 @@ fn linker() -> Result<Linker<State>, PluginError> {
                     return 1;
                 };
                 let (data, state) = memory.data_and_store_mut(&mut caller);
-                match (state.resources.get(&name), span(dst, dst_len)) {
-                    (Some(bytes), Some(range)) if range.len() == bytes.len() => {
-                        match data.get_mut(range) {
-                            Some(target) => {
-                                target.copy_from_slice(bytes);
-                                0
-                            }
-                            None => 1,
-                        }
-                    }
-                    _ => 1,
-                }
+                let read = span(dst, dst_len)
+                    .and_then(|range| data.get_mut(range))
+                    .is_some_and(|target| state.reader.read_into(&name, target));
+                i32::from(!read)
             },
         )
         .map_err(failed)?;
@@ -373,7 +366,7 @@ impl WasmTransport {
         id: &str,
         bytes: &[u8],
         sha256: &str,
-        resources: HashMap<String, Vec<u8>>,
+        reader: ResourceReader,
         caps: Vec<OutputCap>,
         policy: &Policy,
         cancel: CancelToken,
@@ -397,7 +390,7 @@ impl WasmTransport {
                 },
                 collected: Collected::default(),
                 caps,
-                resources,
+                reader,
                 log: LogBudget::default(),
                 cancel,
                 ends: deadline_from_now(policy.call_deadline),
@@ -454,11 +447,15 @@ impl WasmTransport {
         })
     }
 
-    /// Why a call failed: cancelled, a refused emit, past its memory cap or deadline, or trapped.
+    /// Why a call failed: a failed resource read, cancelled, a refused emit, past its memory cap
+    /// or deadline, or trapped.
     fn failure(&mut self, error: &wasmtime::Error) -> ExtractorError {
         let state = self.store.data_mut();
         let interrupted = matches!(error.downcast_ref::<Trap>(), Some(Trap::Interrupt));
-        if interrupted && std::mem::take(&mut state.cancelled) {
+        if let Some(failure) = state.reader.take_failure() {
+            state.collected = Collected::default();
+            failure.into_call_error()
+        } else if interrupted && std::mem::take(&mut state.cancelled) {
             ExtractorError::with_code(super::CANCELLED, "the extraction was cancelled")
         } else if let Some(reason) = std::mem::take(&mut state.collected).refusal {
             ExtractorError::with_code("INVALID_EMIT", reason)
@@ -484,13 +481,21 @@ impl WasmTransport {
         state.ends = deadline_from_now(self.deadline);
         state.cancelled = false;
         state.limiter.hit = None;
+        state.reader.start_call(Some((state.ends, self.deadline)));
     }
 
     /// Runs `call` and turns its status into the call's outcome.
     fn run(&mut self, call: impl FnOnce(&mut Self) -> wasmtime::Result<i32>) -> Call {
         self.start_call();
         match call(self) {
-            Ok(status) => self.store.data_mut().collected.outcome(status),
+            Ok(status) => {
+                let state = self.store.data_mut();
+                if let Some(failure) = state.reader.take_failure() {
+                    state.collected = Collected::default();
+                    return Err(failure.into_call_error());
+                }
+                state.collected.outcome(status)
+            }
             Err(error) => Err(self.failure(&error)),
         }
     }
@@ -616,5 +621,9 @@ impl Transport for WasmTransport {
             let end = this.exports.end.clone();
             end.call(&mut this.store, ())
         })
+    }
+
+    fn supplied(&self) -> Vec<SuppliedFile> {
+        self.store.data().reader.supplied()
     }
 }

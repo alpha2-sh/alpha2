@@ -1,6 +1,4 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+use std::path::Path;
 
 use alpha2_engine::extract::{
     DriveError, ExtractRequest, ExtractSession, Need, RequestError, SuppliedAudio, SuppliedFrame,
@@ -10,6 +8,7 @@ use alpha2_eval::edit::{DataRef, EditRequest, Ranges, Ripple, Target, apply};
 use alpha2_model::{DataSet, DataValues, Project};
 use serde_json::{Value, json};
 
+use super::tests::{MANIFEST_SHA256, Packed, packed};
 use super::*;
 
 const RATE: i64 = 16_000;
@@ -22,41 +21,6 @@ const TOLERANCE: i64 = 6_000;
 
 fn ticks(sample: i64) -> i64 {
     sample * 120_000 / RATE
-}
-
-/// The packed plugin's directory, packed once per test process and shared by its tests.
-fn packed() -> &'static Path {
-    static PACKED: OnceLock<PathBuf> = OnceLock::new();
-    PACKED.get_or_init(|| {
-        let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-        let out = plugins.join("target/tmp/silence-packed");
-        let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .args(["run", "--manifest-path"])
-            .arg(plugins.join("Cargo.toml"))
-            .arg("--target-dir")
-            .arg(plugins.join("target"))
-            .args(["-p", "alpha2-plugin-pack", "--"])
-            .arg(plugins.join("first-party/silence"))
-            .arg("--out")
-            .arg(&out)
-            .env_remove("CARGO_TARGET_DIR")
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "plugins/first-party/silence packs");
-        out
-    })
-}
-
-/// Fetches files relative to the packed directory.
-struct Packed;
-
-impl Fetch for Packed {
-    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
-        Ok(Fetched {
-            path: packed().join(url),
-            local: true,
-        })
-    }
 }
 
 /// The fixture's samples and, in ticks, where each inserted silence lies.
@@ -153,8 +117,10 @@ fn silence_request(input: &Value, params: &Value) -> ExtractRequest {
 }
 
 fn packed_manifest() -> PluginManifest {
-    parse_manifest(&std::fs::read_to_string(packed().join("manifest.json")).expect("manifest"))
-        .expect("manifest")
+    parse_manifest(
+        &std::fs::read_to_string(packed("silence").join("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest")
 }
 
 /// The data set the artifact `policy` picks makes from `samples` over `start..end` (ticks).
@@ -166,10 +132,14 @@ fn extract(
 ) -> Result<DataSet, DriveError> {
     let manifest = packed_manifest();
     let mut plugin = load(
-        &manifest,
-        params.as_object().cloned().unwrap_or_default(),
+        LoadRequest {
+            manifest: &manifest,
+            manifest_sha256: MANIFEST_SHA256,
+            params: &params.as_object().cloned().unwrap_or_default(),
+            supplied: &BTreeMap::new(),
+        },
         policy,
-        &mut Packed,
+        &mut Packed("silence"),
         &CancelToken::default(),
     )
     .expect("plugin loads");
@@ -367,4 +337,16 @@ fn a_timeline_request_is_refused_before_the_run() {
         refused,
         RequestError::InvalidInput("the descriptor does not read this input".to_owned())
     );
+}
+
+#[test]
+fn the_packed_manifest_names_the_plugin_and_its_output_for_interfaces() {
+    let manifest = packed_manifest();
+    let about = manifest.about.expect("about");
+    assert_eq!(about.name, "Silence");
+    assert_eq!(about.license.as_deref(), Some("MIT"));
+    let output = &manifest.descriptor.outputs[0];
+    assert_eq!(output.label.as_deref(), Some("Silences"));
+    let threshold = &manifest.descriptor.params_schema["properties"]["threshold"];
+    assert_eq!(threshold["x-alpha2-display"], "percent");
 }

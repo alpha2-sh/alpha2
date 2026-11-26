@@ -27,7 +27,7 @@ fn the_staging_corpus_is_what_a_readback_stages_and_packs() {
             "{width}x{height}"
         );
         assert_eq!(
-            Yuv420StagingLayout::new(render).expect("layout").bytes,
+            StagingLayout::yuv420(render).expect("layout").bytes,
             field(size, "packedBytes"),
             "{width}x{height}"
         );
@@ -45,19 +45,35 @@ fn every_plane_starts_on_a_placement_boundary_in_its_own_region() {
         (3840, 2160),
     ] {
         let size = RenderSize::new(width, height).expect("size");
-        let layout = Yuv420StagingLayout::new(size).expect("layout");
-        let planes = layout.planes(size);
-        let mut end = 0;
-        for (offset, pitch, plane_width, rows) in planes {
-            assert_eq!(offset % PLANE_PLACEMENT_ALIGNMENT, 0, "{width}x{height}");
-            assert_eq!(pitch % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT, 0);
-            assert!(plane_width <= pitch);
-            assert!(offset >= end, "{width}x{height}: planes overlap");
-            end = offset + u64::from(pitch) * u64::from(rows);
+        for layout in [
+            "yuv420p",
+            "yuva420p",
+            "p010le",
+            "yuv422p10le",
+            "yuva444p10le",
+        ] {
+            let layout = PixelLayout::from_ffmpeg_name(layout).expect("layout");
+            let staging = StagingLayout::of_layout(layout, size).expect("layout");
+            let mut end = 0;
+            for plane in &staging.planes {
+                assert_eq!(
+                    plane.offset % PLANE_PLACEMENT_ALIGNMENT,
+                    0,
+                    "{width}x{height}"
+                );
+                assert_eq!(plane.pitch % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT, 0);
+                assert!(plane.row_bytes <= plane.pitch);
+                assert!(plane.offset >= end, "{width}x{height}: planes overlap");
+                end = plane.offset + u64::from(plane.pitch) * u64::from(plane.rows);
+            }
+            assert_eq!(end, staging.bytes);
         }
-        assert_eq!(end, layout.bytes);
+        assert_eq!(
+            StagingLayout::of_layout(PixelLayout::YUV420P, size).expect("layout"),
+            StagingLayout::yuv420(size).expect("layout")
+        );
     }
     // At 1920 wide both padded chroma rows fill exactly one 2048-byte luma pitch.
-    let hd = Yuv420StagingLayout::new(RenderSize::new(1920, 1080).expect("size")).expect("layout");
+    let hd = StagingLayout::yuv420(RenderSize::new(1920, 1080).expect("size")).expect("layout");
     assert_eq!(hd.bytes, 2048 * (1080 + 540));
 }

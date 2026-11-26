@@ -53,7 +53,7 @@ pub use layout::{
     EvaluatedLayout, EvaluatedNode, EvaluatedText, GeneratorPlan, LayoutPlan, NodeContent,
     NodeLayout, NodePaint, NodeVisual, Sides,
 };
-pub(crate) use retime::{Mirror, map_source_time};
+pub(crate) use retime::{Mirror, map_source_time, picture_line_breaks};
 pub use retime::{picture_source_time, source_instant_to_timeline, source_range_to_timeline};
 pub use shapes::{ShapesPlan, evaluate_geometry, evaluate_item, evaluate_items};
 pub use text_animation::{

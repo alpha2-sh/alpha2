@@ -16,7 +16,7 @@ A project document names no file and no URL: sources are ids, and a request's `a
 
 ### Paths are the request's
 
-Every path in a request is a path on the host's file system, opened with the host's rights: `assets`, `proxies`, `frames`, `resources`, `effectAssets`, `fonts`, `output` and each still's `output`, `renderCache.directory`, and a plugin's `manifest`. There is no root directory and no allow-list. A request can read any file the host can read by naming it as media (the rendered output and the `conform` report show what it holds: whether it exists, its size, modification time, stream facts, and its SHA-256 when the project records one), and can replace any regular file the host can write with `overwrite`.
+Every path in a request is a path on the host's file system, opened with the host's rights: `assets`, `proxies`, `frames`, `resources`, `effectAssets`, `fonts`, `output` and each still's `output`, `renderCache.directory`, and a plugin's `manifest`. There is no root directory and no allow-list for these; the files a request supplies for a plugin's resource slots (`plugin.supplied`) are the exception, refused unless the operator names where they may lie (below). A request can read any file the host can read by naming it as media (the rendered output and the `conform` report show what it holds: whether it exists, its size, modification time, stream facts, and its SHA-256 when the project records one), and can replace any regular file the host can write with `overwrite`.
 
 A compose spec or its template data chooses media and caption paths, and the clients send a compiled spec's `assets` to the host as they are. A service that takes paths, specs or template data from someone it does not trust checks every path against its own rules before it sends the request. The [MCP server](#the-mcp-server) does this for an agent.
 
@@ -24,21 +24,22 @@ Outputs are written beside their path and moved into place when complete; an exi
 
 ### Network and native code
 
-The host opens no listening socket; it talks to its parent over standard input and output. It reaches the network only to fetch [plugins](host-protocol.md#plugins), and loads code other than its own and FFmpeg's only as a native plugin or as a library its environment names (below). The operator decides both when it starts `serve`, and no request can widen them:
+The host opens no listening socket; it talks to its parent over standard input and output. It reaches the network only to fetch [plugins](host-protocol.md#plugins), and loads code other than its own and FFmpeg's only as a native plugin (in a worker process of its own by default) or as a library its environment names (below). The operator decides these when it starts `serve`, and no request can widen them:
 
-- `--plugins off|wasm|native` (default `wasm`). A request's `allow_native` takes effect only under `native`; a native artifact then runs inside the host process with the host's rights.
+- `--plugins off|wasm|native` (default `wasm`). A request's `allow_native` takes effect only under `native`; a native artifact then runs with the host's rights, in a worker process per run (`--plugin-isolation process`, the default) or inside the host process (`--plugin-isolation in-process`).
 - `--plugin-origins none|<https origins>` (default: a manifest from any `https:` origin, with its files and redirects on that origin).
 - `--plugin-root any|none|<dir>` (default `any`) for manifests given as local paths.
+- `--plugin-resource-root none|any|<dir>` (default `none`) for the files a request supplies for a plugin's resource slots: under `none` no request fills a slot; under a directory every supplied file, links resolved, must lie under it. With `any`, a sender can hand a wasm plugin of its own choice the bytes of any file the host can read, and the plugin's data carries them back; it is for an operator who trusts its senders with every path.
 
 With the defaults, a request sender can make the host fetch an `https:` URL and learn whether it answered, and learn the SHA-256 of a local file of at most 1 MiB by naming it as a manifest. A host that serves senders it does not trust sets `--plugins off`, or `--plugin-origins` and `--plugin-root`.
 
-A wasm plugin cannot read a file, open a connection or read a clock. It sees the run's frames or audio, its `params` and the resources its manifest declares; its memory and tables stay under their limits, what it emits is refused at the data limits of its outputs, and each call ends at its deadline. It can use the CPU for as long as its calls may run and return any data the limits allow, so its output is as trustworthy as the plugin.
+A wasm plugin cannot open a file, a connection or read a clock. It sees the run's frames or audio, its `params`, the resources its manifest pins and the files the request supplies for its slots within `--plugin-resource-root`; its memory and tables stay under their limits, what it emits is refused at the data limits of its outputs, and each call ends at its deadline. It can use the CPU for as long as its calls may run and return any data the limits allow, so its output is as trustworthy as the plugin.
 
 Runtime effects are WGSL that runs on the GPU. The engine checks a definition (size, the code rules, the calls it makes, a cost model) but not who sent it, and the driver's shader compiler runs on it; a host that takes requests from other users decides who may send effect definitions.
 
 ### Requests share the process
 
-The host runs one request at a time by default (`--max-running 1`) and keeps serving: up to 1,000 requests (`--max-requests`) until it drains. Requests that one host runs share its process: its memory, its GPU device and driver, the native plugin libraries it loaded and its caches on disk. A request's rendered frames are its own, but a fault that one request's input triggers in a decoder, a driver, a document parser or a native plugin can reach the data of the requests that run after it, or beside it with a higher `--max-running`.
+The host runs one request at a time by default (`--max-running 1`) and keeps serving: up to 1,000 requests (`--max-requests`) until it drains. Requests that one host runs share its process: its memory, its GPU device and driver, its caches on disk and, under `--plugin-isolation in-process`, the native plugin libraries it loaded. A native plugin in a worker process shares nothing with other requests but the machine and the user's rights: a crash or hang ends its worker and its request, not the host. The host writes the video frames of the worker's run into memory it shares with that worker alone, read-only there and holding nothing but those frames; the memory has no name another process could open (on macOS the name is random, private to the user and removed before the worker is told of it), and its host never reads what lies in it. A request's rendered frames are its own, but a fault that one request's input triggers in a decoder, a driver, a document parser or a native plugin can reach the data of the requests that run after it, or beside it with a higher `--max-running`.
 
 - Requests from senders who must not see each other's data go to separate hosts: one host per tenant.
 - Outside input goes to a disposable process: `alpha2-host serve --max-running 1 --max-requests 1`, so each request gets a fresh one. For PDF pages and for FFmpeg's decoders this is the only containment there is.
@@ -70,9 +71,10 @@ Each of these refuses past its limit with a typed error, before or while it does
 - Caption files: cue and word counts, and a file no larger than a project.
 - Runtime effects: the definition's size and code rules, its calls and a cost model.
 - wasm plugins: one memory of at most `--plugin-memory-limit` (1 GiB by default, at most 2 GiB), 1,048,576 table elements, `--plugin-call-timeout` per call, and the data limits on what it emits; plugin files are checked against their pinned sizes and hashes.
+- Native plugins in a worker process: `--plugin-call-timeout` per call, enforced by killing the worker and what it started, and the data limits on what it emits. Not their memory: a worker's memory is outside the host's limits (on Linux it stays in the host's cgroup).
 - The render cache: its quota (4 GiB by default).
 
-Not bounded, and the operator's to contain with the process limits above: the wall-clock time of a request, the size of its output and the disk it fills, what FFmpeg's decoders and parsers do with a file's bytes, the PDF interpreter (font programs, shadings, functions) and its image codecs, a GPU driver's shader compile, font table parsing and shaping, and a native plugin. An extension provider call that runs long cannot be cancelled; only the stall report sees it.
+Not bounded, and the operator's to contain with the process limits above: the wall-clock time of a request, the size of its output and the disk it fills, what FFmpeg's decoders and parsers do with a file's bytes, the PDF interpreter (font programs, shadings, functions) and its image codecs, a GPU driver's shader compile, font table parsing and shaping, and a native plugin's memory, or all of a native plugin that runs inside the host. An extension provider call that runs long cannot be cancelled; only the stall report sees it.
 
 ### Answers are for the operator
 

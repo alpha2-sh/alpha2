@@ -331,6 +331,7 @@ fn color(entry: &SampleEntry) -> Option<ColorMetadata> {
     Some(ColorMetadata {
         primaries: match primaries {
             9 => ColorPrimaries::Bt2020,
+            12 => ColorPrimaries::DisplayP3,
             5 | 6 => ColorPrimaries::Bt601,
             _ => ColorPrimaries::Bt709,
         },

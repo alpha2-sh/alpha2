@@ -390,26 +390,24 @@ fn a_graph_cache_key_changes_with_the_quality_and_storage_that_change_its_pixels
     graph.set_output(output).expect("output");
     let key = |renderer: &Renderer| renderer.graph_cache_key(&graph).expect("graph has a key");
 
-    renderer.set_quality_controls(1, 1);
+    renderer.set_quality_controls(1);
     let preview = key(&renderer);
     assert_eq!(preview, key(&renderer), "stable");
-    renderer.set_quality_controls(64, 1);
+    renderer.set_quality_controls(64);
     let export = key(&renderer);
     assert_ne!(preview, export, "max filter samples");
     // Passes see at most 64 samples, so asking for more draws the same.
-    renderer.set_quality_controls(100, 1);
+    renderer.set_quality_controls(100);
     assert_eq!(
         key(&renderer),
         export,
         "max filter samples past what passes take"
     );
-    renderer.set_quality_controls(64, 4);
-    assert_ne!(key(&renderer), export, "motion blur subframes");
-    renderer.set_quality_controls(64, 1);
+    renderer.set_quality_controls(64);
     assert_eq!(key(&renderer), export, "back to the same configuration");
 
     let eight_bit = Renderer::new(rgba8);
-    eight_bit.set_quality_controls(64, 1);
+    eight_bit.set_quality_controls(64);
     if eight_bit.intermediate_format() == renderer.intermediate_format() {
         // Under ALPHA2_TEST_INTERMEDIATE=rgba8unorm both are already 8-bit.
         assert_eq!(key(&eight_bit), export, "the same storage");

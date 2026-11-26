@@ -293,6 +293,7 @@ fn run(host: &mut Option<Host>) -> Result<(), HostError> {
         }
         Some("export") => export_cli(args.collect(), host),
         Some("conform") => conform_cli(args.collect()),
+        Some(crate::plugin_policy::PLUGIN_WORKER) => alpha2_host_core::plugins::worker::main(),
         #[cfg(all(target_os = "linux", feature = "hwencode"))]
         Some("probe-gpu-encode") => probe_gpu_encode(args.collect()),
         #[cfg(all(target_os = "macos", feature = "hwencode"))]
@@ -421,6 +422,7 @@ fn render_gpu_encode_slice(
         .preferred_capability()
         .map_err(|error| HostError::new("ENCODE_ERROR", error))?
         .codec;
+    let encoding = alpha2_media::YuvEncoding::export(codec.model());
     let (mut session, mut input) = device
         .open(&alpha2_native::HardwareEncodeRequest {
             width,
@@ -432,7 +434,7 @@ fn render_gpu_encode_slice(
                 mode: alpha2_media::BitrateMode::Variable,
                 quantizer: None,
             },
-            color: alpha2_media::ColorMetadata::EXPORT,
+            color: encoding.color,
             output: &alpha2_native::OutputTarget::from(std::path::Path::new(path)),
             container: alpha2_media::Container::Mp4,
             audio: None,
@@ -453,7 +455,7 @@ fn render_gpu_encode_slice(
             .encode_nv12_pack(
                 &target,
                 Nv12PlaneTargets { luma, chroma },
-                alpha2_media::YuvEncoding::export(codec.model()),
+                encoding,
                 &mut encoder,
             )
             .map_err(|error| HostError::new("GPU_ERROR", format!("{error:?}")))?;
@@ -1709,6 +1711,7 @@ struct RequestWork {
 
 impl RequestWork {
     /// Runs on its own thread, holding the request's termination guard until it is answered.
+    #[expect(clippy::too_many_lines, reason = "one arm per kind of request")]
     fn run(self, out: &Responder, unusable: &Unusable) -> Result<(), HostError> {
         let Self {
             request_id,
@@ -1752,6 +1755,17 @@ impl RequestWork {
             Ok(crate::protocol::Request::Edit(request)) => {
                 crate::compose_request::answer_edit(&request)
             }
+            Ok(request @ crate::protocol::Request::Capabilities { .. }) => match host.as_mut() {
+                Some(host) => host
+                    .handle(request, &mut |progress| {
+                        out.send(&progress_event(&request_id, &progress))
+                    })
+                    .map(|mut result| {
+                        result["plugins"] = extract.plugins.capabilities_json();
+                        result
+                    }),
+                None => Err(missing()),
+            },
             Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
                 Some(host) => crate::extract_request::handle(host, *request, out, extract),
                 None => Err(missing()),

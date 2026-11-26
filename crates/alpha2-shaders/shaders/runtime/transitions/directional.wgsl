@@ -16,12 +16,12 @@ fn directional_sample(uv: vec2f) -> vec4f {
 }
 
 fn gl_transition(uv: vec2f) -> vec4f {
-    let p = uv + progress() * directional_step();
+    let heading = directional_step();
+    let p = uv + progress() * heading;
     let width = 1.0 / resolution();
-    let coverage = builtin_interval_coverage(p.x, width.x) * builtin_interval_coverage(p.y, width.y);
-    if coverage <= 0.0 || coverage >= 1.0 { return directional_sample(uv); }
-    // The two images wrap at the seam: integrate subpixel samples there instead of
-    // blending samples from the wrong side of the wrapped texture.
+    // The two images wrap at the seam: integrate subpixel samples there, not across the wrap.
+    let to_seam = min(abs(p), abs(p - 1.0));
+    if !any((to_seam < width * 0.5) & (heading != vec2f(0.0))) { return directional_sample(uv); }
     let side = floor(sqrt(clamp(max_filter_samples(), 1.0, 16.0)));
     var color = vec4f(0.0);
     for (var y = 0u; y < u32(side); y++) {

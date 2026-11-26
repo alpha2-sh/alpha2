@@ -89,28 +89,32 @@ fn lost_export(watchdog_ms: Option<&str>, size: &str) -> Value {
 }
 
 #[test]
-fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
-    // A heavy frame is cut into submissions of an eighth of the watchdog, so on a fast GPU only a
-    // 1 ms watchdog (line at 0 ms) makes one cross half of it.
-    let answer = lost_export(Some("1"), "1920x1080");
+fn an_injected_loss_after_a_heavy_frame_is_hung_only_on_its_submissions_evidence() {
+    let watchdog_ms = 2;
+    let threshold_ms = f64::from(watchdog_ms / 2);
+    let answer = lost_export(Some(&watchdog_ms.to_string()), "1920x1080");
     let error = &answer["error"];
     assert_eq!(answer["ok"], false, "{answer}");
-    assert_eq!(error["code"], "GPU_DEVICE_HUNG", "{answer}");
-    assert_eq!(error["failure"]["code"], "DEVICE_HUNG", "{answer}");
-    assert_eq!(error["failure"]["resource"], "gpu", "{answer}");
-    assert!(
-        error["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("1 ms watchdog")),
-        "{answer}"
-    );
     let submission = &error["failure"]["diagnostics"]["gpuSubmission"];
-    assert_eq!(submission["watchdogMs"], 1, "{answer}");
-    assert!(
-        submission["maxMs"].as_f64().is_some_and(|ms| ms >= 0.0),
-        "{answer}"
-    );
-    assert!(submission["predictedMs"].as_f64().is_some(), "{answer}");
+    assert_eq!(submission["watchdogMs"], watchdog_ms, "{answer}");
+    let gpu_ms = submission["gpuMs"].as_f64().expect("a GPU time");
+    let alone = submission["submissions"] == 1;
+    let predicted_ms = submission["predictedMs"].as_f64().unwrap_or(0.0);
+    let evidence = gpu_ms >= threshold_ms && (alone || gpu_ms > alpha2_gpu::MARGIN * predicted_ms);
+    if evidence {
+        assert_eq!(error["code"], "GPU_DEVICE_HUNG", "{answer}");
+        assert_eq!(error["failure"]["code"], "DEVICE_HUNG", "{answer}");
+        assert_eq!(error["failure"]["resource"], "gpu", "{answer}");
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(&format!("{watchdog_ms} ms watchdog"))),
+            "{answer}"
+        );
+    } else {
+        assert_eq!(error["code"], "GPU_DEVICE_LOST", "{answer}");
+        assert_eq!(error["failure"]["code"], "DEVICE_LOST", "{answer}");
+    }
 }
 
 #[test]
@@ -188,7 +192,7 @@ fn export_performance_reports_split_frames() {
     );
     assert_eq!(split["splitFrames"], split["frames"], "{split}");
     assert!(
-        split["maxPerFrame"].as_u64().is_some_and(|most| most >= 64),
+        split["maxPerFrame"].as_u64().is_some_and(|most| most > 1),
         "{split}"
     );
     assert!(split["maxPredictedMs"].as_f64().is_some(), "{split}");

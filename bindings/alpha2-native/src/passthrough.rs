@@ -595,6 +595,15 @@ pub fn check_yuv_transcode(
         .ok_or_else(|| "the source has no video stream".to_owned())?;
     check_picture(&probed, video_index, (width, height), encoding.color)?;
     let parameters = input.streams()[video_index].codecpar();
+    let extradata = alpha2_ffmpeg_bridge::codec_parameters_extradata(&parameters);
+    if let Some(declared) = stream_vui(parameters.codec_id, &extradata).and_then(|vui| vui.color)
+        && declared != encoding.color
+    {
+        return Err(format!(
+            "the source's stream declares {declared:?}, and the output must be tagged {:?}",
+            encoding.color
+        ));
+    }
     check_sampling(
         parameters.format,
         parameters.field_order,
@@ -609,6 +618,21 @@ pub fn check_yuv_transcode(
         ));
     }
     Ok(())
+}
+
+/// The VUI of an H.264 or HEVC stream's first SPS. `FFmpeg`'s decoders give the pictures its
+/// color over the container's.
+fn stream_vui(
+    codec_id: ffi::AVCodecID,
+    extradata: &[u8],
+) -> Option<alpha2_host_core::parameter_sets::Vui> {
+    use alpha2_host_core::parameter_sets::{ParameterSetCodec, sequence_facts};
+    let codec = match codec_id {
+        ffi::AV_CODEC_ID_H264 => ParameterSetCodec::H264,
+        ffi::AV_CODEC_ID_HEVC => ParameterSetCodec::Hevc,
+        _ => return None,
+    };
+    Some(sequence_facts(codec, extradata)?.vui)
 }
 
 /// Whether chroma sited at `source` matches `output`, reading unspecified as centred like import.
@@ -677,6 +701,23 @@ fn stream_framing(
             parameters.tags.3,
             request.color
         ));
+    }
+    if let Some(signal) =
+        stream_vui(parameters.codec_id, &parameters.extradata).and_then(|vui| vui.signal)
+    {
+        let tags = crate::convert::color_tags(request.color);
+        let output = [tags.0, tags.1, tags.2].map(|tag| u8::try_from(tag).unwrap_or(u8::MAX));
+        if signal.full_range != (tags.3 == ffi::AVCOL_RANGE_JPEG)
+            || signal
+                .description
+                .is_some_and(|description| description != output)
+        {
+            return Err(format!(
+                "the source's stream declares {:?} (H.273 primaries, transfer, matrix) and full \
+                 range {}, and the output must be tagged {:?}",
+                signal.description, signal.full_range, request.color
+            ));
+        }
     }
     let length_size = nal_length_size(request.codec, &parameters.extradata)?;
     Ok((

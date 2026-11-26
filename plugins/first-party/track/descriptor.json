@@ -1,0 +1,90 @@
+{
+  "id": "alpha2.track",
+  "version": 1,
+  "input": {
+    "media": "video",
+    "from": ["source", "timeline"],
+    "format": "luma8",
+    "max_size": 640
+  },
+  "params_schema": {
+    "type": "object",
+    "required": ["region"],
+    "properties": {
+      "region": {
+        "type": "object",
+        "required": ["x", "y", "width", "height"],
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Left",
+            "description": "The box's left edge, as a fraction of the frame's width.",
+            "x-alpha2-display": "percent"
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Top",
+            "description": "The box's top edge, as a fraction of the frame's height.",
+            "x-alpha2-display": "percent"
+          },
+          "width": {
+            "type": "number",
+            "minimum": 0.04,
+            "maximum": 1,
+            "title": "Width",
+            "description": "As a fraction of the frame's width; the box ends inside the frame.",
+            "x-alpha2-display": "percent"
+          },
+          "height": {
+            "type": "number",
+            "minimum": 0.04,
+            "maximum": 1,
+            "title": "Height",
+            "description": "As a fraction of the frame's height; the box ends inside the frame.",
+            "x-alpha2-display": "percent"
+          }
+        },
+        "additionalProperties": false,
+        "title": "Box",
+        "description": "What to follow, on the first frame each pass delivers: the frame the passes start at.",
+        "x-alpha2-display": "box",
+        "x-alpha2-order": 1
+      },
+      "confidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "title": "Confidence",
+        "description": "How closely the tracked box must still look like the picked one; frames below it are marked lost.",
+        "default": 0.5,
+        "x-alpha2-display": "percent",
+        "x-alpha2-step": 0.05,
+        "x-alpha2-order": 2
+      }
+    },
+    "additionalProperties": false
+  },
+  "outputs": [
+    {
+      "name": "center",
+      "kind": "points",
+      "channels": ["center"],
+      "interpolation": "hold",
+      "suggest": "bind",
+      "label": "Box centre",
+      "description": "The centre of the tracked box on each frame, as a fraction of the frame's width and height; lost where the box is not found."
+    },
+    {
+      "name": "motion",
+      "kind": "similarity",
+      "interpolation": "hold",
+      "suggest": "bind",
+      "label": "Box motion",
+      "description": "The translation, rotation and uniform scale about the picture's centre that carry the box from the picked frame onto each frame; lost where the box is not found."
+    }
+  ]
+}

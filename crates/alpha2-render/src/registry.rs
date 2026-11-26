@@ -40,9 +40,22 @@ pub const MAX_EFFECT_INPUTS: usize = 8;
 /// First named input's binding, after every possible resource slot so inputs never shift other
 /// bindings.
 #[allow(clippy::cast_possible_truncation)]
-const INPUT_BINDING_BASE: u32 = 5 + 2 * MAX_EFFECT_RESOURCES as u32;
+const INPUT_BINDING_BASE: u32 = FIRST_RESOURCE_BINDING + 2 * MAX_EFFECT_RESOURCES as u32;
+const FIRST_RESOURCE_BINDING: u32 = 4;
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) const MAX_EFFECT_BINDINGS: usize = INPUT_BINDING_BASE as usize + MAX_EFFECT_INPUTS;
 /// `ResourceMetadata_<name>`: `domain_min` and `domain_max`, two `vec4f`.
 const RESOURCE_METADATA_BYTES: usize = 32;
+
+/// Mirrors `cpu::half::nearest`; some devices' own half conversion truncates.
+const STORED_RESULT: &str = "override alpha2_stored_half: bool = true;
+fn alpha2_stored(value: vec4f) -> vec4f {
+    if !alpha2_stored_half { return value; }
+    let bits = bitcast<vec4u>(value);
+    let rounded = (bits + 0x0fffu + ((bits >> vec4u(13u)) & vec4u(1u))) & vec4u(0xffffe000u);
+    let subnormal = round(value * 16777216.0) * (1.0 / 16777216.0);
+    return select(subnormal, bitcast<vec4f>(rounded), abs(value) >= vec4f(1.0 / 16384.0));
+}";
 
 /// Stack size for effect shader and pipeline compiles. naga recurses per nested statement and
 /// DXC per operand, which needs about 1.5 MiB at [`MAX_WGSL_STATEMENT_OPERATORS`]; a caller's
@@ -201,7 +214,6 @@ pub(crate) struct EffectPipeline {
     _shader: wgpu::ShaderModule,
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     pub(crate) pipeline: wgpu::RenderPipeline,
-    pub(crate) sampler: wgpu::Sampler,
 }
 
 impl Renderer {
@@ -243,7 +255,13 @@ impl Renderer {
                 Box::pin(shader.get_compilation_info());
             let shader_errors = shader_scope.pop();
             let pipeline_scope = CreationErrorScopes::push(device);
-            let pipeline = effect_pipeline(device, &definition, shader, format);
+            let pipeline = effect_pipeline(
+                device,
+                &definition,
+                shader,
+                format,
+                &self.linear_sampler.layout,
+            );
             (compilation, shader_errors, pipeline, pipeline_scope.pop())
         });
         Ok(PendingEffect {
@@ -328,7 +346,13 @@ impl Renderer {
                 on_compile_stack(|| {
                     let shader = create_checked(device, || self.lazy_effect_shader(effect))?;
                     create_checked(device, || {
-                        effect_pipeline(device, &effect.definition, shader, format)
+                        effect_pipeline(
+                            device,
+                            &effect.definition,
+                            shader,
+                            format,
+                            &self.linear_sampler.layout,
+                        )
                     })
                 })
             },
@@ -601,6 +625,7 @@ fn effect_pipeline(
     definition: &EffectDef,
     shader: wgpu::ShaderModule,
     format: wgpu::TextureFormat,
+    sampler_layout: &wgpu::BindGroupLayout,
 ) -> EffectPipeline {
     let bind_group_layout = runtime_bind_group_layout(
         device,
@@ -608,20 +633,16 @@ fn effect_pipeline(
         &definition.resources,
         &definition.inputs,
     );
-    let pipeline = runtime_pipeline(device, &bind_group_layout, &shader, format);
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("alpha2 runtime effect sampler"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        ..Default::default()
-    });
+    let pipeline = runtime_pipeline(
+        device,
+        [&bind_group_layout, sampler_layout],
+        &shader,
+        format,
+    );
     EffectPipeline {
         _shader: shader,
         bind_group_layout,
         pipeline,
-        sampler,
     }
 }
 
@@ -634,24 +655,26 @@ fn runtime_bind_group_layout(
     let mut entries = vec![
         runtime_texture_entry(0, wgpu::TextureViewDimension::D2),
         runtime_texture_entry(1, wgpu::TextureViewDimension::D2),
-        wgpu::BindGroupLayoutEntry {
-            binding: 2,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-            count: None,
-        },
         // Bind at exact struct sizes so a shader reading past them fails to compile instead of
         // reading the next arena slot.
-        runtime_uniform_entry(3, param_uniform_bytes(params.len())),
-        runtime_uniform_entry(4, RUNTIME_UNIFORM_WORDS * size_of::<f32>()),
+        runtime_uniform_entry(PARAMS_BINDING, param_uniform_bytes(params.len()), true),
+        runtime_uniform_entry(
+            RUNTIME_BINDING,
+            RUNTIME_UNIFORM_WORDS * size_of::<f32>(),
+            true,
+        ),
     ];
     for (index, resource) in resources.iter().enumerate() {
-        let binding = u32::try_from(index).unwrap_or(0) * 2 + 5;
+        let binding = resource_binding(index);
         let dimension = match resource.kind {
             EffectResourceKind::Lut3d => wgpu::TextureViewDimension::D3,
         };
         entries.push(runtime_texture_entry(binding, dimension));
-        entries.push(runtime_uniform_entry(binding + 1, RESOURCE_METADATA_BYTES));
+        entries.push(runtime_uniform_entry(
+            binding + 1,
+            RESOURCE_METADATA_BYTES,
+            false,
+        ));
     }
     for index in 0..inputs.len() {
         entries.push(runtime_texture_entry(
@@ -663,6 +686,13 @@ fn runtime_bind_group_layout(
         label: Some("alpha2 runtime effect layout"),
         entries: &entries,
     })
+}
+
+pub(crate) const PARAMS_BINDING: u32 = 2;
+pub(crate) const RUNTIME_BINDING: u32 = 3;
+
+pub(crate) fn resource_binding(index: usize) -> u32 {
+    FIRST_RESOURCE_BINDING + u32::try_from(index).unwrap_or(0) * 2
 }
 
 pub(crate) fn input_binding(index: usize) -> u32 {
@@ -685,13 +715,17 @@ fn runtime_texture_entry(
     }
 }
 
-fn runtime_uniform_entry(binding: u32, bytes: usize) -> wgpu::BindGroupLayoutEntry {
+fn runtime_uniform_entry(
+    binding: u32,
+    bytes: usize,
+    has_dynamic_offset: bool,
+) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
+            has_dynamic_offset,
             min_binding_size: u64::try_from(bytes)
                 .ok()
                 .and_then(std::num::NonZeroU64::new),
@@ -702,15 +736,16 @@ fn runtime_uniform_entry(binding: u32, bytes: usize) -> wgpu::BindGroupLayoutEnt
 
 fn runtime_pipeline(
     device: &wgpu::Device,
-    bind_group_layout: &wgpu::BindGroupLayout,
+    [bind_group_layout, sampler_layout]: [&wgpu::BindGroupLayout; 2],
     shader: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("alpha2 runtime effect pipeline layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
+        bind_group_layouts: &[Some(bind_group_layout), Some(sampler_layout)],
         immediate_size: 0,
     });
+    let stored_half = f64::from(u8::from(format == wgpu::TextureFormat::Rgba16Float));
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("alpha2 runtime effect pipeline"),
         layout: Some(&layout),
@@ -724,7 +759,10 @@ fn runtime_pipeline(
             module: shader,
             entry_point: Some("alpha2_fs"),
             targets: &[Some(format.into())],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &[("alpha2_stored_half", stored_half)],
+                ..wgpu::PipelineCompilationOptions::default()
+            },
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
@@ -815,16 +853,16 @@ pub(crate) fn build_shader(definition: &EffectDef) -> String {
     format!(
         r"@group(0) @binding(0) var source_a: texture_2d<f32>;
 @group(0) @binding(1) var source_b: texture_2d<f32>;
-@group(0) @binding(2) var source_sampler: sampler;
+@group(1) @binding(0) var source_sampler: sampler;
 struct EffectParams {{
 {param_fields}}};
 struct EffectParamUniforms {{
 {uniform_fields}}};
-@group(0) @binding(3) var<uniform> param_uniforms: EffectParamUniforms;
+@group(0) @binding({PARAMS_BINDING}) var<uniform> param_uniforms: EffectParamUniforms;
 var<private> params: EffectParams;
 var<private> {BUDGET}: u32;
 struct RuntimeValues {{ resolution_time: vec4f, transition: vec4f, ticks: vec4u, }};
-@group(0) @binding(4) var<uniform> runtime: RuntimeValues;
+@group(0) @binding({RUNTIME_BINDING}) var<uniform> runtime: RuntimeValues;
 {resource_declarations}{input_declarations}
 
 fn sample_src(uv: vec2f) -> vec4f {{ return textureSampleLevel(source_a, source_sampler, uv, 0.0); }}
@@ -850,10 +888,11 @@ struct VertexOutput {{ @builtin(position) position: vec4f, @location(0) uv: vec2
     var u = array<vec2f, 3>(vec2f(0.0, 1.0), vec2f(2.0, 1.0), vec2f(0.0, -1.0));
     return VertexOutput(vec4f(p[index], 0.0, 1.0), u[index]);
 }}
+{STORED_RESULT}
 @fragment fn alpha2_fs(input: VertexOutput) -> @location(0) vec4f {{
     params = load_params();
     {BUDGET} = {MAX_LOOP_ITERATIONS}u;
-    return {call};
+    return alpha2_stored({call});
 }}
 ",
         // Registration already delimited loops; this covers definitions that skipped it.
@@ -883,9 +922,9 @@ fn resource_declarations(resources: &[ResourceSpec]) -> String {
                      return textureSampleLevel(resource_{}, source_sampler, coord, 0.0).rgb;\n\
                  }}",
                 resource.name,
-                index * 2 + 5,
+                resource_binding(index),
                 resource.name,
-                index * 2 + 6,
+                resource_binding(index) + 1,
                 resource.name,
                 resource.name,
                 resource.name,

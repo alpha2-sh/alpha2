@@ -310,6 +310,7 @@ impl TimelineFrames {
                 }))
                 .unwrap_or_else(|payload| {
                     Err(Alpha2Error::Failed {
+                        details: None,
                         code: "INTERNAL".into(),
                         reason: format!(
                             "the timeline renderer panicked: {}",
@@ -322,6 +323,7 @@ impl TimelineFrames {
                 }
             })
             .map_err(|error| Alpha2Error::Failed {
+                details: None,
                 code: "RESOURCE_LIMIT".into(),
                 reason: format!("cannot start the timeline thread: {error}"),
             })?;
@@ -417,6 +419,7 @@ fn extract(
             .get(id.as_str())
             .map(std::path::PathBuf::from)
             .ok_or_else(|| Alpha2Error::Failed {
+                details: None,
                 code: "MISSING_INPUT".into(),
                 reason: format!("no media for source {id}"),
             })
@@ -497,12 +500,14 @@ fn extract(
         }
         RunError::Drive(alpha2_engine::extract::DriveError::Extractor(error)) => {
             Alpha2Error::Failed {
+                details: None,
                 code: error.code.unwrap_or("EXTRACTOR_FAILED").into(),
                 reason: error.message,
             }
         }
         RunError::Drive(alpha2_engine::extract::DriveError::Session(error)) => {
             Alpha2Error::Failed {
+                details: None,
                 code: "INVALID_EMIT".into(),
                 reason: error.to_string(),
             }
@@ -512,6 +517,7 @@ fn extract(
             Alpha2Error::Aborted
         }
         RunError::Drive(error) => Alpha2Error::Failed {
+            details: None,
             code: "SOURCE_FAILED".into(),
             reason: error.to_string(),
         },
@@ -522,10 +528,17 @@ fn extract(
 /// Makes the run's extractor; the token is the handle's cancel.
 type MakeExtractor = Box<dyn FnOnce(&CancelToken) -> Result<RunExtractor, Alpha2Error> + Send>;
 
-/// An extractor, and what its data records as `made_by.plugin`.
+pub(crate) trait Run: Engine {
+    /// What its data records as `made_by.plugin`, read once the run has ended.
+    fn made_by(&self) -> Option<alpha2_model::MadeByPlugin> {
+        None
+    }
+}
+
+impl Run for Foreign {}
+
 pub(crate) struct RunExtractor {
-    pub(crate) extractor: Box<dyn Engine>,
-    pub(crate) plugin: Option<alpha2_model::MadeByPlugin>,
+    pub(crate) extractor: Box<dyn Run>,
 }
 
 impl Alpha2 {
@@ -547,12 +560,14 @@ impl Alpha2 {
         handle.job.spawn("alpha2-extract", move || {
             let mut built = make(&cancel)?;
             let mut sets = extract(&self, &request, &mut *built.extractor, &cancel)?;
+            let plugin = built.extractor.made_by();
             for set in &mut sets {
-                if let (Some(plugin), Some(made_by)) = (&built.plugin, &mut set.made_by) {
+                if let (Some(plugin), Some(made_by)) = (&plugin, &mut set.made_by) {
                     made_by.plugin = Some(plugin.clone());
                 }
             }
             serde_json::to_string(&sets).map_err(|error| Alpha2Error::Failed {
+                details: None,
                 code: "INTERNAL".into(),
                 reason: error.to_string(),
             })
@@ -616,7 +631,6 @@ impl Alpha2 {
                         extractor,
                         descriptor,
                     }),
-                    plugin: None,
                 })
             }),
         )
@@ -893,8 +907,13 @@ mod tests {
             &dir,
             case["extractor"]["plugin"].as_str().expect("plugin"),
         );
-        let plugin = crate::Plugin::load(manifest.to_string_lossy().into_owned(), sha256, false)
-            .expect("the plugin loads");
+        let plugin = crate::Plugin::load(
+            manifest.to_string_lossy().into_owned(),
+            sha256,
+            false,
+            HashMap::new(),
+        )
+        .expect("the plugin loads");
         let handle = engine()
             .extract_plugin(request(&table, &case), plugin)
             .expect("started");
@@ -907,13 +926,101 @@ mod tests {
         );
     }
 
+    /// The supplied fixture, packed here, over the files an app names for its slots.
+    #[cfg(all(
+        feature = "plugins",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
+    fn supplied_run(
+        supplied: &[(&str, std::path::PathBuf)],
+        read: &[&str],
+    ) -> Result<serde_json::Value, Alpha2Error> {
+        use crate::extract_cases::{case, request, settled, table, tests_dir};
+        let table = table();
+        let mut case = case(&table, "plugin-digest-timeline-cpu");
+        case["request"]["extractor"] = serde_json::json!("alpha2.test.supplied");
+        case["request"]["outputs"] = serde_json::json!({ "files": "files" });
+        case["request"]["params"] = serde_json::json!({ "read": read });
+        let dir =
+            std::env::temp_dir().join(format!("alpha2-mobile-supplied-{}", std::process::id()));
+        let (manifest, sha256) = alpha2_test_support::extract::pack_plugin(
+            &tests_dir().join(".."),
+            &dir,
+            "plugins/fixtures/supplied",
+        );
+        let plugin = crate::Plugin::load(
+            manifest.to_string_lossy().into_owned(),
+            sha256,
+            false,
+            supplied
+                .iter()
+                .map(|(slot, path)| ((*slot).to_owned(), path.to_string_lossy().into_owned()))
+                .collect(),
+        )?;
+        let handle = engine().extract_plugin(request(&table, &case), plugin)?;
+        let sets = settled(handle, 120)?;
+        Ok(serde_json::from_str(&sets).expect("json"))
+    }
+
+    #[cfg(all(
+        feature = "plugins",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
+    #[test]
+    fn an_app_fills_resource_slots_and_its_data_records_what_was_read() {
+        let dir = std::env::temp_dir().join(format!("alpha2-mobile-slots-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("extra")).expect("dir");
+        std::fs::write(dir.join("model.bin"), b"\x01\x02w").expect("model");
+        std::fs::write(dir.join("extra/a.txt"), b"alpha").expect("file");
+        let sets = supplied_run(
+            &[
+                ("model", dir.join("model.bin")),
+                ("extra", dir.join("extra")),
+            ],
+            &["model", "extra/a.txt"],
+        )
+        .expect("data");
+        let words = sets[0]["words"]
+            .as_array()
+            .expect("words")
+            .iter()
+            .map(|word| word["text"].as_str().expect("text").to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(words, ["model 3 010277", "extra/a.txt 5 616c706861"]);
+        let plugin = &sets[0]["made_by"]["plugin"];
+        assert_eq!(
+            plugin["supplied"].as_array().map(|files| files
+                .iter()
+                .map(|file| file["name"].clone())
+                .collect::<Vec<_>>()),
+            Some(vec![
+                serde_json::json!("extra/a.txt"),
+                serde_json::json!("model")
+            ])
+        );
+        assert_eq!(plugin["manifest_sha256"].as_str().map(str::len), Some(64));
+        match supplied_run(&[], &[]) {
+            Err(Alpha2Error::Failed { code, details, .. }) => {
+                assert_eq!(code, "PLUGIN_RESOURCE_INVALID");
+                let details: serde_json::Value =
+                    serde_json::from_str(details.as_deref().expect("details")).expect("json");
+                assert_eq!(
+                    details,
+                    serde_json::json!({ "slot": "model", "reason": "missing" })
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn an_extractor_whose_making_panics_settles_as_internal() {
         let handle = engine()
             .start_extraction(request(""), Box::new(|_| panic!("no extractor")))
             .expect("started");
         match outcome(handle) {
-            Err(Alpha2Error::Failed { code, reason }) => {
+            Err(Alpha2Error::Failed { code, reason, .. }) => {
                 assert_eq!(code, "INTERNAL");
                 assert!(reason.contains("no extractor"), "{reason}");
             }
