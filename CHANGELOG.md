@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [0.7.1]
 
+### Added
+
+- `alpha2.transcribe` 1.1.0 runs whisper.cpp on the GPU on Apple silicon (Metal), about 1.2x to
+  2.6x faster there by model size. A new param `device` (`auto`, the default, or `cpu`) turns it
+  off. Words and times can differ from the CPU's in a fraction of a percent of words, as they do
+  between CPUs. Under `--plugin-isolation in-process`, a model file that whisper.cpp refuses after
+  the plugin's own check accepted it can make the host abort when it exits; the default isolation
+  is not affected.
+
 ### Fixed
 
 - `alpha2.transcribe` 1.0.2. Its Windows artifact was built without compiler optimization and
