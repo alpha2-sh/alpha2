@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.1]
+
+### Fixed
+
+- `alpha2.transcribe` 1.0.2. Its Windows artifact was built without compiler optimization and
+  transcribed 2x to 7x slower than it should; the build now restores CMake's release flags under
+  MSVC. A window in which whisper.cpp advanced less than 0.16 s aborted the run (`PLUGIN_TRAPPED`,
+  or the host itself under `--plugin-isolation in-process`), for any model; the build now narrows
+  whisper.cpp's DTW median filter there as its development branch does. whisper.cpp's error lines
+  are written as plugin diagnostics.
+
 ## [0.7.0] - 2026-11-26
 
 ### Added
