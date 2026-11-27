@@ -88,6 +88,10 @@ pub struct ActiveClip<'a> {
     pub matte: Option<&'a Matte>,
     /// Whether this clip is another clip's matte, drawn only into that matte.
     pub is_matte: bool,
+    /// Whether the clip is an adjustment clip: it has no picture, and its composition's clip steps
+    /// read the scene composited beneath it. It has no generator, plan, source composition or
+    /// correction, and needs only the frames its composition's media steps read.
+    pub adjustment: bool,
     /// Generated source content, drawn at `source_time` with no host frame.
     pub generator: Option<&'a Generator>,
     /// Planned shapes or layout generator tree, to evaluate at `source_time`.
@@ -105,7 +109,8 @@ impl ActiveClip<'_> {
     /// Whether the clip draws its own host-supplied source frame.
     #[must_use]
     pub fn needs_source(&self) -> bool {
-        self.generator.is_none()
+        !self.adjustment
+            && self.generator.is_none()
             && self.source_composition.is_none()
             && self
                 .composition

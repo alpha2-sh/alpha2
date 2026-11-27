@@ -146,6 +146,7 @@ fn one_clip_frame(source: &SourceId) -> FrameDesc<'static> {
         canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            adjustment: false,
             data: alpha2_eval::SampleContext::NONE,
             correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
@@ -317,6 +318,7 @@ fn pending_source_presentation_joins_the_export_submission() {
         canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            adjustment: false,
             data: alpha2_eval::SampleContext::NONE,
             correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
@@ -433,6 +435,7 @@ fn export_submission_stages_external_source_synchronization() {
         canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            adjustment: false,
             data: alpha2_eval::SampleContext::NONE,
             correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
@@ -519,6 +522,7 @@ fn a_failed_source_synchronization_fails_the_frame_with_what_the_device_said() {
             canvas: None,
             time: MediaTime::ZERO,
             visual: vec![ActiveClip {
+                adjustment: false,
                 data: alpha2_eval::SampleContext::NONE,
                 correction: None,
                 clip_id: leak(ClipId::new("clip").expect("valid ID")),
@@ -568,6 +572,7 @@ fn failed_frame_encoding_restores_pending_source_work() {
         canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            adjustment: false,
             data: alpha2_eval::SampleContext::NONE,
             correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
@@ -635,6 +640,7 @@ fn pending_source_presentation_joins_the_preview_graph_submission() {
         canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            adjustment: false,
             data: alpha2_eval::SampleContext::NONE,
             correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),

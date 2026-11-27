@@ -316,7 +316,8 @@ function invariantProblems(value: unknown): string[] {
     for (const problem of trackProblems(track, catalog, clipIds, false))
       problems.push(problem);
   }
-  for (const problem of matteProblems(tracks)) problems.push(problem);
+  for (const problem of matteProblems(tracks, catalog.sources))
+    problems.push(problem);
   for (const problem of projectDataProblems(project)) problems.push(problem);
   if (catalog.inlined !== undefined) {
     const frame = frameNodesOver(
@@ -439,6 +440,22 @@ function catalogOf(
     }
     const sourceId = text(source.id);
     if (sourceId.length === 0) problems.push("source id must not be empty");
+    if (source.kind === "adjustment") {
+      if (
+        text(source.locator).length > 0 ||
+        source.generator != null ||
+        source.composition != null ||
+        source.color_metadata != null ||
+        source.fingerprint != null ||
+        source.provider != null ||
+        source.has_audio === true
+      ) {
+        problems.push(
+          `source ${sourceId} is not a valid adjustment source: it has only an id and its kind`,
+        );
+      }
+      continue;
+    }
     if (
       source.fingerprint != null &&
       (source.kind === "generated" || !validFingerprint(source.fingerprint))
@@ -658,6 +675,13 @@ function trackProblems(
     transitions,
   ))
     problems.push(problem);
+  for (const problem of adjustmentTransitionProblems(
+    trackId,
+    clips,
+    transitions,
+    catalog.sources,
+  ))
+    problems.push(problem);
   for (const transition of transitions) {
     if (!isRecord(transition) || !isRecord(transition.effect)) continue;
     const resources = transition.effect.resources;
@@ -737,8 +761,44 @@ function clipProblems(
     const issue = masksIssue(clip.masks);
     if (issue) problems.push(shapeProblem(`clip ${clipId}`, issue));
   }
-  if (clip.matte != null && trackKind !== "video") {
+  if (clip.matte != null && (trackKind !== "video" || isAdjustment(source))) {
     problems.push(`clip ${clipId} has an invalid matte`);
+  }
+  return problems;
+}
+
+const ADJUSTMENT_TRANSITION_ID = "alpha2.transition.fade";
+
+function isAdjustment(source: unknown): boolean {
+  return isRecord(source) && source.kind === "adjustment";
+}
+
+function adjustmentTransitionProblems(
+  trackId: string,
+  clips: readonly Clip[],
+  transitions: readonly ClipTransition[],
+  sources: ReadonlyMap<string, unknown>,
+): string[] {
+  const adjustments = new Set<string>();
+  for (const clip of clips)
+    if (isRecord(clip) && isAdjustment(sources.get(text(clip.source_id))))
+      adjustments.add(text(clip.id));
+  if (adjustments.size === 0) return [];
+  const problems: string[] = [];
+  for (const transition of transitions) {
+    if (
+      !isRecord(transition) ||
+      (isRecord(transition.effect) &&
+        transition.effect.id === ADJUSTMENT_TRANSITION_ID)
+    )
+      continue;
+    const clip = [text(transition.from_clip), text(transition.to_clip)].find(
+      (id) => adjustments.has(id),
+    );
+    if (clip !== undefined)
+      problems.push(
+        `a transition on track ${trackId} names adjustment clip ${clip}, which only fades`,
+      );
   }
   return problems;
 }
@@ -1027,6 +1087,7 @@ function mattesHold(summaries: readonly TrackSummary[]): boolean {
       if (
         target === undefined ||
         target.matte != null ||
+        isAdjustment(summary.catalog.sources.get(text(target.source_id))) ||
         video.some((other) => other.joined.has(source))
       )
         return false;
@@ -4703,6 +4764,12 @@ function nodeInputs(op: Record<string, unknown>): [string, unknown][] {
         ["input", op.input],
         ["matte", op.matte],
       ];
+    case "key_mix":
+      return [
+        ["backdrop", op.backdrop],
+        ["input", op.input],
+        ["mask", op.mask],
+      ];
     case "merge":
       return (Array.isArray(op.layers) ? op.layers : []).map(
         (layer: unknown, index) => [
@@ -5049,6 +5116,9 @@ function compositionProblems(
       case "transform":
         if (!validVisual(op.transform)) invalid();
         break;
+      case "key_mix":
+        if (!unit(op.opacity)) invalid();
+        break;
       case "merge": {
         const layers = Array.isArray(op.layers) ? op.layers : [];
         if (
@@ -5186,7 +5256,10 @@ function masksIssue(masks: unknown): ShapeIssue | undefined {
 }
 
 // A matte names another visual clip that has no matte and is in no transition.
-function matteProblems(tracks: readonly Track[]): string[] {
+function matteProblems(
+  tracks: readonly Track[],
+  sources: ReadonlyMap<string, unknown>,
+): string[] {
   const visual = new Map<string, Record<string, unknown>>();
   const inTransition = new Set<string>();
   for (const track of tracks) {
@@ -5211,6 +5284,7 @@ function matteProblems(tracks: readonly Track[]): string[] {
       source === id ||
       matteClip === undefined ||
       matteClip.matte != null ||
+      isAdjustment(sources.get(text(matteClip.source_id))) ||
       inTransition.has(source)
     ) {
       problems.push(`clip ${id} has an invalid matte`);

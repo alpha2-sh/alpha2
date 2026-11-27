@@ -300,3 +300,146 @@ fn a_mask_feather_is_the_same_fraction_of_the_picture_at_any_resolution() {
         );
     }
 }
+
+fn premultiplied_noise(size: RenderSize, seed: u32) -> Vec<u8> {
+    (0..size.width * size.height)
+        .flat_map(|index| {
+            let value = index.wrapping_mul(2_654_435_761).wrapping_add(seed) >> 8;
+            let alpha = 64 + (value & 0xbf);
+            #[allow(clippy::cast_possible_truncation)]
+            [value >> 3, value >> 11, value >> 17, alpha].map(|channel| {
+                let channel = channel & 0xff;
+                (if channel > alpha { alpha } else { channel }) as u8
+            })
+        })
+        .collect()
+}
+
+fn split_mask(size: RenderSize) -> Vec<u8> {
+    (0..size.height)
+        .flat_map(|_| {
+            (0..size.width).flat_map(|x| match x {
+                0..7 => [0; 4],
+                7 | 8 => [128; 4],
+                _ => [255; 4],
+            })
+        })
+        .collect::<Vec<_>>()
+}
+
+#[derive(Clone, Copy)]
+enum Drawn {
+    Backdrop,
+    Picture,
+    Mix { masked: bool, opacity: f32 },
+}
+
+fn faded<'a>(graph: &mut RenderGraph<'a>, view: &'a wgpu::TextureView) -> crate::RenderNodeId {
+    let source = graph.add_source(SourceView::from_wgpu(view));
+    graph
+        .add_composite(vec![GraphLayer {
+            source,
+            visual: visual([1.0, 1.0], 0.37),
+            blend_mode: BlendMode::Normal,
+        }])
+        .expect("an earlier node")
+}
+
+#[test]
+fn key_mix_is_exact_at_no_and_full_coverage() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    for definition in crate::key_mix_definitions() {
+        pollster::block_on(renderer.register_effect(definition)).expect("the key mix compiles");
+    }
+    let scope = renderer
+        .gpu
+        .device()
+        .push_error_scope(wgpu::ErrorFilter::Validation);
+    let size = RenderSize::new(16, 8).expect("size");
+    let textures = [
+        rgba_image_texture(&renderer, size, &premultiplied_noise(size, 7)),
+        rgba_image_texture(&renderer, size, &premultiplied_noise(size, 1_234)),
+    ];
+    let views = textures
+        .each_ref()
+        .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()));
+    let mask = rgba_image_texture(&renderer, size, &split_mask(size));
+    let mask = mask.create_view(&wgpu::TextureViewDescriptor::default());
+    let stored = |drawn: Drawn| {
+        let mut graph = RenderGraph::new(size);
+        let picture = faded(&mut graph, &views[0]);
+        let backdrop = faded(&mut graph, &views[1]);
+        let output = match drawn {
+            Drawn::Backdrop => backdrop,
+            Drawn::Picture => picture,
+            Drawn::Mix { masked, opacity } => {
+                let mut inputs = crate::EffectInputs::new();
+                inputs.insert(crate::KEY_MIX_BACKDROP, backdrop);
+                let id = if masked {
+                    inputs.insert(
+                        crate::KEY_MIX_MASK,
+                        graph.add_source(SourceView::from_wgpu(&mask)),
+                    );
+                    crate::KEY_MIX_EFFECT_ID
+                } else {
+                    crate::KEY_MIX_UNMASKED_EFFECT_ID
+                };
+                graph
+                    .add_effect_with_inputs(
+                        crate::EffectId::from_static(id, 1),
+                        picture,
+                        inputs,
+                        EffectParams::new()
+                            .with(crate::KEY_MIX_OPACITY, ParamValue::Float(opacity)),
+                        crate::EffectResources::new(),
+                        EffectRuntime::default(),
+                    )
+                    .expect("earlier nodes")
+            }
+        };
+        graph.set_output(output).expect("known output");
+        let output = renderer.execute_graph(&graph).expect("the key mix renders");
+        let texel = output.format.block_copy_size(None).expect("a plain format") as usize;
+        read_stored(&renderer, &output)
+            .chunks(texel)
+            .map(<[u8]>::to_vec)
+            .collect::<Vec<_>>()
+    };
+    let backdrop = stored(Drawn::Backdrop);
+    let picture = stored(Drawn::Picture);
+    assert_ne!(backdrop, picture);
+    for masked in [false, true] {
+        assert_eq!(
+            stored(Drawn::Mix {
+                masked,
+                opacity: 0.0
+            }),
+            backdrop,
+            "masked {masked}"
+        );
+    }
+    assert_eq!(
+        stored(Drawn::Mix {
+            masked: false,
+            opacity: 1.0
+        }),
+        picture
+    );
+    let split = stored(Drawn::Mix {
+        masked: true,
+        opacity: 1.0,
+    });
+    for (index, texel) in split.iter().enumerate() {
+        let x = index % size.width as usize;
+        match x {
+            0..7 => assert_eq!(texel, &backdrop[index], "uncovered at {x}"),
+            7 | 8 => {
+                assert_ne!(texel, &backdrop[index], "half covered at {x}");
+                assert_ne!(texel, &picture[index], "half covered at {x}");
+            }
+            _ => assert_eq!(texel, &picture[index], "covered at {x}"),
+        }
+    }
+    assert!(pollster::block_on(scope.pop()).is_none());
+}

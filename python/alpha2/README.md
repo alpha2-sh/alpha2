@@ -339,7 +339,9 @@ alpha2.export(compiled, "summer.mp4")
 - Wrappers combine any nodes: `Group` (one layer, with `effects=[Effect("gaussian-blur",
   radius=8)]`, a transform and a blend mode), `Matte` (one node shown through another's alpha or
   luma), `Mask` (shapes cut out of a node), `Shape` (rectangles, ellipses, polygons and SVG paths)
-  and `Box` (CSS flexbox or grid around text, shapes and any other node). Any value may move:
+  and `Box` (CSS flexbox or grid around text, shapes and any other node). `Adjustment` has no
+  picture: its effects apply to everything under it (in a `Group`, the children before it), and a
+  `Mask` around it limits where. Any value may move:
   `Ramp(0, 1, ease="ease-out")` or `Keys((0, 0), (1, 1))`.
 - Motion: `enter=` and `exit=` on visual nodes and containers take `Fade`, `Rise`, `Slide` or
   `Scale`, timed from the node's own start and back from its own end; `Stack` and `Grid` take

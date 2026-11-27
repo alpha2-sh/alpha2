@@ -27,9 +27,9 @@ use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 use serde_json::json;
 
 use crate::lower::{
-    AnimPrim, AudioPrim, BoxContent, BoxPrim, BoxTree, CaptionsPrim, Content, CounterContent,
-    Coverage, CoveragePrim, EffectPrim, GeometryPrim, GridLayout, GroupPrim, Head, KeyPrim,
-    KeyTime, MaskShapePrim, NodeMotion, PaintPrim, Preset, Prim, RevealPrim, SequencePrim,
+    AdjustmentPrim, AnimPrim, AudioPrim, BoxContent, BoxPrim, BoxTree, CaptionsPrim, Content,
+    CounterContent, Coverage, CoveragePrim, EffectPrim, GeometryPrim, GridLayout, GroupPrim, Head,
+    KeyPrim, KeyTime, MaskShapePrim, NodeMotion, PaintPrim, Preset, Prim, RevealPrim, SequencePrim,
     ShapeContent, StackPrim, VideoContent, Visual, add_ticks, align_point, ticks_scaled,
 };
 use crate::spec::{
@@ -265,6 +265,7 @@ pub(crate) struct Context<'a> {
     assets: BTreeMap<String, String>,
     compositions: Vec<Composition>,
     blur_compositions: BTreeMap<u32, CompositionId>,
+    adjustment_source: Option<SourceId>,
     reserved: HashSet<String>,
     next_source: u32,
     next_clip: u32,
@@ -408,6 +409,7 @@ impl<'a> Context<'a> {
             assets: BTreeMap::new(),
             compositions: Vec::new(),
             blur_compositions: BTreeMap::new(),
+            adjustment_source: None,
             reserved,
             next_source: 0,
             next_clip: 0,
@@ -517,6 +519,16 @@ impl<'a> Context<'a> {
         id
     }
 
+    fn adjustment_source(&mut self) -> SourceId {
+        if let Some(id) = &self.adjustment_source {
+            return id.clone();
+        }
+        let id = self.source_id();
+        self.sources.push(MediaSource::adjustment(id.clone()));
+        self.adjustment_source = Some(id.clone());
+        id
+    }
+
     /// The composition that blurs a clip's picture by `radius`.
     fn blur_composition(&mut self, radius: f32) -> CompositionId {
         if let Some(id) = self.blur_compositions.get(&radius.to_bits()) {
@@ -581,6 +593,9 @@ impl<'a> Context<'a> {
             }
             Prim::Stack(stack) => self.stack_length(stack)?,
             Prim::Group(group) => self.stack_length(&group.stack)?,
+            Prim::Adjustment(_) => {
+                Length::Flexible(crate::lower::seconds_to_ticks(self.theme.text_seconds))
+            }
             Prim::Coverage(coverage) => self.length(&coverage.content)?,
             Prim::Box(node) => self.stack_length(&StackPrim {
                 head: Head::default(),
@@ -665,6 +680,7 @@ impl<'a> Context<'a> {
             Prim::Sequence(sequence) => self.emit_sequence(sequence, slot, out),
             Prim::Stack(stack) => self.emit_stack(stack, slot, out),
             Prim::Group(group) => self.emit_group(group, slot, out),
+            Prim::Adjustment(adjustment) => self.emit_adjustment(adjustment, slot, Vec::new(), out),
             Prim::Coverage(coverage) => self.emit_coverage(coverage, slot, out),
             Prim::Box(node) => self.emit_box(node, slot, out),
             Prim::Visual(visual) => self.emit_visual(visual, slot, out),
@@ -1069,6 +1085,75 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
+    fn emit_adjustment(
+        &mut self,
+        adjustment: &AdjustmentPrim,
+        slot: &Slot,
+        masks: Vec<ShapeMask>,
+        out: &mut Lanes,
+    ) -> Result<(), ComposeError> {
+        let path = &adjustment.head.path;
+        let (start, len) = (slot.start, slot.len);
+        let end = start + len;
+        let mut graph = Graph::default();
+        let picture = graph.add(NodeOp::Clip {});
+        let mut node = picture.clone();
+        for effect in &adjustment.effects {
+            node = self.group_effect(&mut graph, effect, node, slot.rect, len)?;
+        }
+        let base = match &adjustment.opacity {
+            AnimPrim::Value(opacity) => *opacity,
+            keys @ AnimPrim::Keys(_) => {
+                node = graph.add(NodeOp::KeyMix {
+                    backdrop: Some(picture.clone()),
+                    input: Some(node),
+                    mask: None,
+                    opacity: animated(keys, range(0, len)),
+                });
+                1.0
+            }
+        };
+        let source = self.adjustment_source();
+        let mut clip = Clip::new(self.clip_id(), source, range(start, end), range(0, len));
+        if node != picture {
+            if graph.nodes.len() > alpha2_model::MAX_COMPOSITION_NODES {
+                return Err(ComposeError::new(
+                    path,
+                    format!(
+                        "its effects take {} composition nodes, and a composition holds at most {}",
+                        graph.nodes.len(),
+                        alpha2_model::MAX_COMPOSITION_NODES
+                    ),
+                ));
+            }
+            let id = self.composition_id("adjustment");
+            let mut composition = Composition::new(id.clone());
+            composition.nodes = graph.nodes;
+            composition.output = Some(node);
+            self.compositions.push(composition);
+            clip.composition = Some(ClipComposition::new(id));
+        }
+        clip.blend_mode = adjustment.blend;
+        clip.masks = masks;
+        let opacity = Opacity {
+            base,
+            start,
+            end,
+            fade_in: 0,
+            fade_out: 0,
+            ramp: slot.ramp,
+        };
+        clip.visual.opacity = opacity.animation(clip.timeline_range);
+        if !slot.motions.is_empty() {
+            let range = clip.timeline_range;
+            self.apply_motion(&mut clip.visual, &opacity, &slot.motions, range);
+        }
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
+        lane.clips.push(clip);
+        out.visual.push(lane);
+        Ok(())
+    }
+
     /// Places a matte's or mask's content with every visual clip of it matted by one coverage
     /// clip. Content that layers pictures over each other is first drawn as one picture.
     fn emit_coverage(
@@ -1083,6 +1168,20 @@ impl<'a> Context<'a> {
             rect,
             ..slot.clone()
         };
+        if let Prim::Adjustment(adjustment) = &coverage.content {
+            let Coverage::Mask(shapes) = &coverage.by else {
+                return Err(ComposeError::new(path, ADJUSTMENT_TAKES_NO_MATTE));
+            };
+            let whole = range(inner.start, inner.start + inner.len);
+            let masks = self.placed_masks(shapes, rect, whole, path)?;
+            let mut inner = inner;
+            inner.owners.extend(adjustment.head.id.clone());
+            self.resolve_motion(&adjustment.head, &mut inner);
+            self.here.push(adjustment.head.path.clone());
+            let emitted = self.emit_adjustment(adjustment, &inner, masks, out);
+            self.here.pop();
+            return emitted;
+        }
         let mut content = Lanes::default();
         self.emit(&coverage.content, &inner, &mut content)?;
         if !Self::takes_one_matte(&content, path)? {
@@ -1133,23 +1232,7 @@ impl<'a> Context<'a> {
                     range(start, end),
                     range(0, still.len),
                 );
-                let place = Placement::new(rect, self.canvas_px());
-                for shape in shapes {
-                    keys_fit(shape.last_keys(still.len), clip.timeline_range, path)?;
-                }
-                clip.masks = shapes
-                    .iter()
-                    .map(|shape| ShapeMask {
-                        shape: place.geometry(&shape.geometry, clip.timeline_range),
-                        feather: map_animated(
-                            animated(&shape.feather, clip.timeline_range),
-                            |feather| place.length(feather),
-                        ),
-                        invert: shape.invert,
-                        mode: shape.mode,
-                        fill_rule: alpha2_model::FillRule::default(),
-                    })
-                    .collect();
+                clip.masks = self.placed_masks(shapes, rect, clip.timeline_range, path)?;
                 if !still.motions.is_empty() {
                     let opacity = Opacity {
                         base: 1.0,
@@ -1170,6 +1253,9 @@ impl<'a> Context<'a> {
             }
         };
         for clip in content.visual.iter_mut().flat_map(|lane| &mut lane.clips) {
+            if self.is_adjustment(clip) {
+                return Err(ComposeError::new(path, ADJUSTMENT_TAKES_NO_MATTE));
+            }
             clip.matte = Some(alpha2_model::Matte {
                 source: matte.clone(),
                 mode,
@@ -1177,6 +1263,38 @@ impl<'a> Context<'a> {
         }
         out.stack(content);
         Ok(())
+    }
+
+    fn placed_masks(
+        &self,
+        shapes: &[MaskShapePrim],
+        rect: Rect,
+        clip: TimeRange,
+        path: &str,
+    ) -> Result<Vec<ShapeMask>, ComposeError> {
+        let place = Placement::new(rect, self.canvas_px());
+        let length = clip.end().ticks() - clip.start().ticks();
+        for shape in shapes {
+            keys_fit(shape.last_keys(length), clip, path)?;
+        }
+        Ok(shapes
+            .iter()
+            .map(|shape| ShapeMask {
+                shape: place.geometry(&shape.geometry, clip),
+                feather: map_animated(animated(&shape.feather, clip), |feather| {
+                    place.length(feather)
+                }),
+                invert: shape.invert,
+                mode: shape.mode,
+                fill_rule: alpha2_model::FillRule::default(),
+            })
+            .collect())
+    }
+
+    fn is_adjustment(&self, clip: &Clip) -> bool {
+        self.sources
+            .iter()
+            .any(|source| source.id == clip.source_id && source.kind == ModelKind::Adjustment)
     }
 
     /// Draws a box as layout segments in paint order, each placed child in its measured place
@@ -1875,6 +1993,14 @@ impl<'a> Context<'a> {
             if mattes.contains(&clip.id) {
                 continue;
             }
+            if self.is_adjustment(clip) {
+                let backdrop = graph.add(NodeOp::Merge {
+                    layers: std::mem::take(&mut layers),
+                });
+                let adjusted = self.group_adjustment(graph, clip, backdrop, len, path)?;
+                layers.push(MergeLayer::new(Some(adjusted)));
+                continue;
+            }
             let mut node = self.group_layer(graph, clip, len, path)?;
             if let Some(matte) = &clip.matte {
                 let matte_clip = clips
@@ -1905,6 +2031,67 @@ impl<'a> Context<'a> {
             ));
         }
         Ok(graph.add(NodeOp::Merge { layers }))
+    }
+
+    fn group_adjustment(
+        &self,
+        graph: &mut Graph,
+        clip: &Clip,
+        backdrop: NodeId,
+        len: i64,
+        path: &str,
+    ) -> Result<NodeId, ComposeError> {
+        let Some(used) = &clip.composition else {
+            return Ok(backdrop);
+        };
+        let composition = self
+            .compositions
+            .iter()
+            .find(|composition| composition.id == used.id)
+            .expect("a clip's composition is in the project");
+        let (start, end) = (
+            clip.timeline_range.start().ticks(),
+            clip.timeline_range.end().ticks(),
+        );
+        if start != 0 {
+            return Err(ComposeError::new(
+                path,
+                "an adjustment in a group takes its effects at the group's own time, so it \
+                 starts with the group; a later start is not available in a group yet",
+            ));
+        }
+        let mut adjusted = graph.inline(composition, &backdrop);
+        if clip.blend_mode != alpha2_model::ClipBlendMode::Normal {
+            adjusted = graph.add(NodeOp::Merge {
+                layers: vec![
+                    MergeLayer::new(Some(backdrop.clone())),
+                    MergeLayer {
+                        input: Some(adjusted),
+                        blend_mode: clip.blend_mode,
+                        opacity: constant(1.0),
+                    },
+                ],
+            });
+        }
+        let mask = (!clip.masks.is_empty()).then(|| {
+            let frame = graph.add(NodeOp::Generator {
+                generator: Generator::Fill {
+                    paint: Paint::Solid {
+                        color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+                    },
+                },
+            });
+            graph.add(NodeOp::ShapeMask {
+                input: Some(frame),
+                masks: clip.masks.clone(),
+            })
+        });
+        Ok(graph.add(NodeOp::KeyMix {
+            backdrop: Some(backdrop),
+            input: Some(adjusted),
+            mask,
+            opacity: windowed(&clip.visual.opacity, start, end, len),
+        }))
     }
 
     /// One clip of a group as nodes: its picture at the group's time, its composition, masks
@@ -3234,6 +3421,9 @@ fn sample_scalar(animation: &Animated<f32>, time: i64) -> f32 {
 
 /// Whether `source` shows the same picture at every time: a still, or a generated picture with
 /// nothing keyed or animated.
+const ADJUSTMENT_TAKES_NO_MATTE: &str =
+    "an adjustment takes no matte; wrap it in a mask, or put it in a group with what it adjusts";
+
 fn still_source(source: &MediaSource) -> bool {
     match source.kind {
         ModelKind::Image => true,
@@ -3715,6 +3905,16 @@ fn remap_inputs(op: &mut NodeOp, ids: &BTreeMap<NodeId, NodeId>) {
         NodeOp::Matte { input, matte, .. } => {
             rename(input);
             rename(matte);
+        }
+        NodeOp::KeyMix {
+            backdrop,
+            input,
+            mask,
+            ..
+        } => {
+            rename(backdrop);
+            rename(input);
+            rename(mask);
         }
         NodeOp::Group { inputs, .. } => inputs.iter_mut().for_each(rename),
         _ => {}
@@ -4343,6 +4543,14 @@ fn assemble(
     let name = spec.name.clone().unwrap_or_else(|| "video".to_owned());
     let settings = context.settings.clone();
     let mut sources = std::mem::take(&mut context.sources);
+    if let Some(adjustment) = &context.adjustment_source
+        && !tracks
+            .iter()
+            .flat_map(|track| &track.clips)
+            .any(|clip| &clip.source_id == adjustment)
+    {
+        sources.retain(|source| &source.id != adjustment);
+    }
     sources.extend(raw_sources);
     let mut compositions = std::mem::take(&mut context.compositions);
     compositions.extend(raw_compositions);

@@ -236,13 +236,18 @@ export type Result<T> =
 /** Deep-freezes `value` in place and returns it. Already frozen objects are not descended into. */
 /**
  * Whether a source's media is a file the session must hold. The engine draws generated and
- * composition sources, and a provider that reads no file (such as LaTeX) draws from its settings.
+ * composition sources, an adjustment source has no media, and a provider that reads no file
+ * (such as LaTeX) draws from its settings.
  */
 export function readsMediaFile(source: {
   readonly kind: string;
   readonly provider?: { readonly format: string } | null;
 }): boolean {
-  if (source.kind === "generated" || source.kind === "composition")
+  if (
+    source.kind === "generated" ||
+    source.kind === "composition" ||
+    source.kind === "adjustment"
+  )
     return false;
   return source.provider == null || providerReadsFile(source.provider);
 }

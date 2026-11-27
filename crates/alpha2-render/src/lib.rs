@@ -123,9 +123,10 @@ pub use graph::{
 pub use graph_plan::RenderPlan;
 pub use graph_submit::FrameSubmitTimings;
 pub use masking::{
+    KEY_MIX_BACKDROP, KEY_MIX_EFFECT_ID, KEY_MIX_MASK, KEY_MIX_OPACITY, KEY_MIX_UNMASKED_EFFECT_ID,
     MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES, MASK_MODES, MAX_SHAPE_MASKS, MaskCombineNames,
-    TRACK_MATTE_EFFECT_ID, mask_combine_definition, mask_combine_definitions,
-    track_matte_definition,
+    TRACK_MATTE_EFFECT_ID, key_mix_definition, key_mix_definitions, mask_combine_definition,
+    mask_combine_definitions, track_matte_definition,
 };
 pub use pipeline::{PipelineCacheStats, WarmupReport};
 pub use pool::{ReadbackBufferPoolStats, TexturePoolStats, UploadTexture, UploadTexturePoolStats};

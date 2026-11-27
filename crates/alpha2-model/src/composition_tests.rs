@@ -880,3 +880,91 @@ fn validating_the_longest_chain_of_compositions_keeps_to_a_small_stack() {
         Err(ModelError::CompositionNestedTooDeep { .. })
     ));
 }
+
+#[test]
+fn a_key_mix_node_lists_its_inputs_and_bypasses_to_its_backdrop() {
+    let key_mix = |mask: Option<NodeId>, opacity: f32| NodeOp::KeyMix {
+        backdrop: input("clip"),
+        input: input("blur"),
+        mask,
+        opacity: Animated::Constant { value: opacity },
+    };
+    let op = key_mix(input("grade"), 1.0);
+    assert_eq!(
+        op.inputs()
+            .into_iter()
+            .map(|input| (input.name(), input.node().map(NodeId::as_str)))
+            .collect::<Vec<_>>(),
+        [
+            ("backdrop".to_owned(), Some("clip")),
+            ("input".to_owned(), Some("blur")),
+            ("mask".to_owned(), Some("grade")),
+        ]
+    );
+    assert_eq!(
+        op.bypass_input().and_then(NodeInput::node),
+        Some(&node_id("clip"))
+    );
+    let mut node = CompositionNode::new(node_id("mix"), key_mix(None, 1.0));
+    assert_eq!(
+        node.needed_inputs()
+            .into_iter()
+            .map(NodeInput::name)
+            .collect::<Vec<_>>(),
+        ["backdrop", "input"],
+        "an unconnected mask covers everywhere"
+    );
+    node.bypass = true;
+    assert_eq!(
+        node.needed_inputs()
+            .into_iter()
+            .filter_map(NodeInput::node)
+            .collect::<Vec<_>>(),
+        [&node_id("clip")]
+    );
+    let value = serde_json::to_value(&node).expect("serializes");
+    assert_eq!(value["op"]["type"], "key_mix");
+    assert_eq!(
+        serde_json::from_value::<CompositionNode>(value).expect("round trip"),
+        node
+    );
+    let defaults: CompositionNode =
+        serde_json::from_str(r#"{"id":"m","op":{"type":"key_mix"}}"#).expect("defaults");
+    assert_eq!(
+        defaults.op,
+        NodeOp::KeyMix {
+            backdrop: None,
+            input: None,
+            mask: None,
+            opacity: Animated::Constant { value: 1.0 },
+        }
+    );
+
+    let mut project = branched();
+    project.compositions[0].nodes.push(CompositionNode::new(
+        node_id("mix"),
+        key_mix(input("grade"), 0.5),
+    ));
+    project.compositions[0].output = input("mix");
+    project.validate().expect("a key mix");
+    for opacity in [-0.1, 1.5] {
+        project.compositions[0].nodes.last_mut().expect("mix").op = key_mix(None, opacity);
+        assert!(
+            matches!(
+                project.validate(),
+                Err(ModelError::InvalidNode { node, .. }) if node.as_str() == "mix"
+            ),
+            "{opacity}"
+        );
+    }
+    project.compositions[0].nodes.last_mut().expect("mix").op = NodeOp::KeyMix {
+        backdrop: input("clip"),
+        input: input("nowhere"),
+        mask: None,
+        opacity: Animated::Constant { value: 1.0 },
+    };
+    assert!(matches!(
+        project.validate(),
+        Err(ModelError::UnknownNodeInput { input, .. }) if input == "input"
+    ));
+}

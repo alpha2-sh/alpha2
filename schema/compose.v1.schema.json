@@ -8122,6 +8122,72 @@
         },
         {
           "additionalProperties": false,
+          "description": "No picture of its own: its effects apply to everything under it.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "blend": {
+              "anyOf": [
+                {
+                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/ClipBlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How the result meets the picture under it. Default `normal`."
+            },
+            "duration": {
+              "description": "Length in seconds. Default: what its parent gives it.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "effects": {
+              "description": "Effects on the picture under it, in order. None changes nothing.",
+              "items": {
+                "$ref": "#/$defs/EffectUse"
+              },
+              "type": "array"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How much of the result replaces the picture under it, 0..=1. Default 1."
+            },
+            "type": {
+              "const": "adjustment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Shapes drawn with one fill and one stroke: bars, frames, dividers, badges, icons.",
           "properties": {
             "at": {

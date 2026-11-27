@@ -905,6 +905,7 @@ pub(crate) fn node_keyed(
                 visit_keyed(&format!("layers[{index}].opacity"), &layer.opacity, visit);
             }
         }
+        crate::NodeOp::KeyMix { opacity, .. } => visit_keyed("opacity", opacity, visit),
         crate::NodeOp::ShapeMask { masks, .. } => {
             for (index, mask) in masks.iter().enumerate() {
                 mask.shape

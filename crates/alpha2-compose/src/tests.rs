@@ -2143,3 +2143,146 @@ fn a_file_named_as_sound_and_then_as_a_picture_is_listed_once_as_the_picture() {
         json!([{"path": "clip.mp4", "kind": "video"}])
     );
 }
+
+fn clip_composition<'a>(project: &'a Value, clip: &Value) -> &'a Value {
+    project["project"]["compositions"]
+        .as_array()
+        .expect("compositions")
+        .iter()
+        .find(|composition| composition["id"] == clip["composition"]["id"])
+        .expect("the clip's composition")
+}
+
+fn source_of<'a>(project: &'a Value, clip: &Value) -> &'a Value {
+    project["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find(|source| source["id"] == clip["source_id"])
+        .expect("the clip's source")
+}
+
+#[test]
+fn a_top_level_adjustment_is_an_adjustment_clip() {
+    let compiled = compile(&json!({
+        "canvas": "youtube-1080p",
+        "duration": 4,
+        "body": {"type": "media", "path": "wide.mp4"},
+        "overlays": [
+            {"type": "adjustment", "effects": [{"effect": "gaussian-blur", "radius": 0.05}],
+             "opacity": 0.5, "blend": "screen", "at": 1, "duration": 2},
+            {"type": "mask", "shapes": [{"shape": "ellipse"}],
+             "content": {"type": "adjustment", "opacity": {"from": 0, "to": 1},
+                         "effects": [{"effect": "invert"}]}},
+        ],
+    }));
+    let tracks = tracks(&compiled);
+    let adjustments = tracks
+        .iter()
+        .flat_map(|track| track["clips"].as_array().expect("clips"))
+        .filter(|clip| source_of(&compiled, clip)["kind"] == "adjustment")
+        .collect::<Vec<_>>();
+    assert_eq!(adjustments.len(), 2);
+    let [blurred, masked] = [adjustments[0], adjustments[1]];
+    assert_eq!(source_of(&compiled, blurred)["locator"], "");
+    assert_eq!(
+        blurred["source_id"], masked["source_id"],
+        "one source backs them all"
+    );
+    assert_eq!(blurred["blend_mode"], "screen");
+    assert_eq!(
+        blurred["timeline_range"],
+        json!({"start": SECOND, "end": 3 * SECOND})
+    );
+    assert_eq!(blurred["visual"]["opacity"]["value"], 0.5);
+    assert_eq!(
+        ops(clip_composition(&compiled, blurred)),
+        ["clip", "effect"]
+    );
+    assert!(blurred["matte"].is_null() && masked["matte"].is_null());
+    assert_eq!(masked["masks"].as_array().expect("masks").len(), 1);
+    assert_eq!(
+        ops(clip_composition(&compiled, masked)),
+        ["clip", "effect", "key_mix"],
+        "keyed opacity mixes inside the composition"
+    );
+    let video = tracks
+        .iter()
+        .position(|track| source_of(&compiled, &track["clips"][0])["kind"] == "video")
+        .expect("the video's track");
+    let first = tracks
+        .iter()
+        .position(|track| track["clips"][0]["id"] == blurred["id"])
+        .expect("the adjustment's track");
+    assert!(video < first, "the adjustment sits above what it adjusts");
+
+    let matted = compile_error(&json!({
+        "body": {"type": "matte", "by": {"type": "color"},
+                 "content": {"type": "adjustment", "effects": [{"effect": "invert"}]}},
+    }));
+    assert!(matted.contains("takes no matte"), "{matted}");
+}
+
+#[test]
+fn an_adjustment_in_a_group_reaches_only_the_children_before_it() {
+    let compiled = compile(&json!({
+        "duration": 3,
+        "body": {"type": "stack", "children": [
+            {"type": "color"},
+            {"type": "group", "children": [
+                {"type": "media", "path": "logo.png"},
+                {"type": "adjustment", "effects": [{"effect": "invert"}], "opacity": 0.75,
+                 "blend": "multiply"},
+                {"type": "text", "text": "Over"},
+            ]},
+        ]},
+    }));
+    let sources = compiled["project"]["sources"].as_array().expect("sources");
+    assert!(
+        sources.iter().all(|source| source["kind"] != "adjustment"),
+        "a group's adjustment is a node, not a clip"
+    );
+    let group_clip = tracks(&compiled)
+        .iter()
+        .flat_map(|track| track["clips"].as_array().expect("clips"))
+        .find(|clip| source_of(&compiled, clip)["kind"] == "composition")
+        .expect("the group's clip");
+    let group = composition(&compiled, group_clip);
+    let nodes = group["nodes"].as_array().expect("nodes");
+    let node = |id: &Value| {
+        nodes
+            .iter()
+            .find(|node| &node["id"] == id)
+            .unwrap_or_else(|| panic!("node {id}"))
+    };
+    let top = node(&group["output"]);
+    let top = node(&top["op"]["input"]);
+    let layers = top["op"]["layers"]
+        .as_array()
+        .expect("the children's merge");
+    assert_eq!(layers.len(), 2, "the mix, then the text over it");
+    let mix = node(&layers[0]["input"]);
+    assert_eq!(mix["op"]["type"], "key_mix");
+    assert_eq!(mix["op"]["opacity"]["value"], 0.75);
+    let backdrop = node(&mix["op"]["backdrop"]);
+    assert_eq!(backdrop["op"]["type"], "merge");
+    assert_eq!(
+        backdrop["op"]["layers"].as_array().expect("layers").len(),
+        1,
+        "only the picture before it"
+    );
+    let blended = node(&mix["op"]["input"]);
+    assert_eq!(blended["op"]["layers"][1]["blend_mode"], "multiply");
+    let inverted = node(&blended["op"]["layers"][1]["input"]);
+    assert_eq!(inverted["op"]["effect"]["id"], "alpha2.effect.invert");
+    assert_eq!(inverted["op"]["input"], mix["op"]["backdrop"]);
+
+    let late = compile_error(&json!({
+        "duration": 3,
+        "body": {"type": "group", "children": [
+            {"type": "media", "path": "logo.png"},
+            {"type": "adjustment", "effects": [{"effect": "invert"}], "at": 1},
+        ]},
+    }));
+    assert!(late.contains("starts with the group"), "{late}");
+}

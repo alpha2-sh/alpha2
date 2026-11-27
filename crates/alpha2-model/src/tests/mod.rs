@@ -7,6 +7,7 @@ use crate::{
 };
 use alpha2_media::SourceId;
 
+mod adjustments;
 mod audio_projects;
 mod bounds;
 mod captions;

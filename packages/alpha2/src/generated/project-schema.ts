@@ -537,6 +537,7 @@ export const MEDIA_KIND_VALUES: readonly MediaKind[] = [
   "image",
   "generated",
   "composition",
+  "adjustment",
 ];
 
 /** Every {@link MissingFrames}, in the model's order. */
@@ -2666,7 +2667,7 @@ export interface MediaFingerprint {
  * The payload domain of a source.
  */
 export type MediaKind =
-  "video" | "audio" | "image" | "generated" | "composition";
+  "video" | "audio" | "image" | "generated" | "composition" | "adjustment";
 
 /**
  * A host-resolved media resource.
@@ -2716,7 +2717,8 @@ export interface MediaSource {
   readonly kind: MediaKind;
   /**
    * Opaque URI or host locator; the engine does not open it. Required except for
-   * `MediaKind::Generated` and `MediaKind::Composition` sources.
+   * `MediaKind::Generated`, `MediaKind::Composition` and `MediaKind::Adjustment` sources,
+   * which have none.
    *
    * @defaultValue `""`
    */
@@ -2776,7 +2778,8 @@ export type NodeOp =
   | {
       /**
        * The picture of the clip showing the composition: its source at the time-mapped source
-       * time, or what its generated source draws.
+       * time, or what its generated source draws. For an adjustment clip, the scene composited
+       * beneath it.
        */
       readonly type: "clip";
     }
@@ -2905,6 +2908,39 @@ export type NodeOp =
        * The input kept where a second image says.
        */
       readonly type: "matte";
+    }
+  | {
+      /**
+       * The picture replaced.
+       *
+       * @defaultValue `null`
+       */
+      readonly backdrop?: NodeId | null;
+      /**
+       * The picture that replaces it.
+       *
+       * @defaultValue `null`
+       */
+      readonly input?: NodeId | null;
+      /**
+       * The image whose alpha is coverage; unconnected, the coverage is `opacity` everywhere.
+       *
+       * @defaultValue `null`
+       */
+      readonly mask?: NodeId | null;
+      /**
+       * Scales the coverage, in `0..=1`.
+       *
+       * @defaultValue `{"mode":"constant","value":1}`
+       */
+      readonly opacity?: Animated<number>;
+      /**
+       * The backdrop replaced by the input by `k = opacity x mask alpha`, as
+       * `(1 - k) backdrop + k input` on premultiplied values: exactly the backdrop where `k` is 0
+       * and the input where it is 1 (Nuke's `KeyMix` with an opacity). Bypassed, it passes the
+       * backdrop through.
+       */
+      readonly type: "key_mix";
     }
   | {
       /**

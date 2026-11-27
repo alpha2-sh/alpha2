@@ -1955,6 +1955,7 @@ export const PROJECT_SHAPE: unknown = {
         { const: "image", type: "string" },
         { const: "generated", type: "string" },
         { const: "composition", type: "string" },
+        { const: "adjustment", type: "string" },
       ],
     },
     MediaSource: {
@@ -2130,6 +2131,30 @@ export const PROJECT_SHAPE: unknown = {
             type: { const: "matte", type: "string" },
           },
           required: ["type", "mode"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            backdrop: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
+            input: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
+            mask: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
+            opacity: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 1 },
+            },
+            type: { const: "key_mix", type: "string" },
+          },
+          required: ["type"],
           type: "object",
         },
         {

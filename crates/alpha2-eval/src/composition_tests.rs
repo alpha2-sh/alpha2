@@ -156,6 +156,59 @@ fn a_bypassed_node_is_its_pass_through_input_and_needs_nothing_else() {
 }
 
 #[test]
+fn a_key_mix_plans_its_mask_only_when_connected_and_bypasses_to_its_backdrop() {
+    let key_mix = |mask: Option<&str>| {
+        node(
+            "mix",
+            NodeOp::KeyMix {
+                backdrop: Some(node_id("clip")),
+                input: Some(node_id("blur")),
+                mask: mask.map(node_id),
+                opacity: alpha2_model::Animated::Constant { value: 0.5 },
+            },
+        )
+    };
+    let nodes = |mix: CompositionNode| {
+        vec![
+            node("clip", NodeOp::Clip {}),
+            node("blur", effect("clip")),
+            node(
+                "cover",
+                NodeOp::Media {
+                    source_id: SourceId::new("other").expect("non-empty"),
+                    start: MediaTime::ZERO,
+                },
+            ),
+            mix,
+        ]
+    };
+    let masked = plan(&project(composition(nodes(key_mix(Some("cover"))), "mix")))
+        .expect("a masked key mix");
+    assert_eq!(step_nodes(&masked), ["clip", "blur", "cover", "mix"]);
+    assert_eq!(
+        masked.steps[3].op,
+        StepOp::KeyMix {
+            backdrop: 0,
+            input: 1,
+            mask: Some(2),
+            opacity: alpha2_model::Animated::Constant { value: 0.5 },
+        }
+    );
+    let unmasked =
+        plan(&project(composition(nodes(key_mix(None)), "mix"))).expect("an unmasked key mix");
+    assert_eq!(step_nodes(&unmasked), ["clip", "blur", "mix"]);
+    assert!(matches!(
+        unmasked.steps[2].op,
+        StepOp::KeyMix { mask: None, .. }
+    ));
+    let mut bypassed = key_mix(Some("cover"));
+    bypassed.bypass = true;
+    let bypassed = plan(&project(composition(nodes(bypassed), "mix"))).expect("bypassed");
+    assert_eq!(step_nodes(&bypassed), ["clip"]);
+    assert_eq!(bypassed.output, 0);
+}
+
+#[test]
 fn an_incomplete_output_fails_only_the_frames_that_show_it() {
     let mut project = project(composition(
         vec![
