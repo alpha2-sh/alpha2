@@ -3164,9 +3164,12 @@ class Host {
               track(
                 extraction.progress({
                   phase: "extract",
+                  stage: message.stage ?? "pass",
                   pass: message.pass ?? 0,
                   completed: message.completed,
                   total: message.total,
+                  covered: message.covered ?? 0,
+                  span: message.span ?? 0,
                 }),
               );
             } catch (cause) {

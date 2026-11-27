@@ -2569,6 +2569,79 @@ test("parseHostMessage reads state messages and a response's host state", () => 
     );
 });
 
+test("parseHostMessage needs an extract progress's stage, pass and covered span", () => {
+  const full = {
+    protocolVersion: 2,
+    type: "progress",
+    requestId: "r",
+    phase: "extract",
+    stage: "pass",
+    pass: 0,
+    completed: 2,
+    total: null,
+    covered: 4_000,
+    span: 40_000,
+  };
+  assert.deepEqual(parseHostMessage(JSON.stringify(full)), full);
+  for (const message of [
+    { ...full, stage: undefined },
+    { ...full, stage: "load" },
+    { ...full, pass: undefined },
+    { ...full, covered: undefined },
+    { ...full, span: -1 },
+    { ...full, covered: 40_001 },
+  ])
+    assert.throws(
+      () => parseHostMessage(JSON.stringify(message)),
+      /invalid progress message/,
+      JSON.stringify(message),
+    );
+});
+
+const ENDING_HOST = `import { respond, send, serve } from ${IO};
+let extract;
+serve((request) => {
+  if (request.operation === "extract") {
+    extract = request;
+    send({ type: "progress", requestId: request.requestId, phase: "extract", stage: "end", pass: 1, completed: 4, total: null, covered: 9, span: 9 });
+    send({ type: "extract.step", requestId: request.requestId, seq: 0, step: "end" });
+    return;
+  }
+  if (request.operation === "extract.ack") {
+    respond(extract, { ok: true, result: { dataSets: [], timings: {} } });
+    return;
+  }
+  respond(request, { ok: true, result: {} });
+});
+`;
+
+test("an extract progress reaches onProgress with its stage and covered span", async () => {
+  const root = await scratch("alpha2-node-extract-progress-");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, ENDING_HOST),
+  });
+  const heard = [];
+  await client.extract(
+    {
+      project: exportRequest().project,
+      request: { extractor: "example.levels", version: 1 },
+      onProgress: (progress) => heard.push(progress),
+    },
+    emittingExtractor(() => {}),
+  );
+  assert.deepEqual(heard, [
+    {
+      phase: "extract",
+      stage: "end",
+      pass: 1,
+      completed: 4,
+      total: null,
+      covered: 9,
+      span: 9,
+    },
+  ]);
+});
+
 test(
   "a host that never writes is HOST_START_TIMEOUT and is killed",
   { timeout: 20_000 },

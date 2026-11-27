@@ -43,7 +43,7 @@ export interface ProtocolError {
 
 /**
  * `frames` while encoding; `finalizing` while the output is flushed and closed; `extract` while an
- * extraction pass runs.
+ * extraction runs.
  */
 export type ProgressPhase = "frames" | "finalizing" | "extract";
 
@@ -57,8 +57,12 @@ export interface ProgressMessage {
   readonly completed: number;
   /** `null` for an extraction pass over source frames, whose count is not known ahead. */
   readonly total: number | null;
-  /** The extraction pass, for phase `extract`. */
+  /** The pass the report concerns, for phase `extract`. */
   readonly pass?: number;
+  /** For phase `extract`: the part of the run, and the ticks of the pass's span it has read. */
+  readonly stage?: "begin" | "pass" | "end";
+  readonly covered?: number;
+  readonly span?: number;
   /** The export started over on the readback path; `completed` is 0. */
   readonly restarted?: true;
 }
@@ -177,7 +181,17 @@ export function parseHostMessage(header: string): HostMessage {
       (value.phase !== undefined &&
         value.phase !== "frames" &&
         value.phase !== "finalizing" &&
-        !extract)
+        !extract) ||
+      (extract &&
+        !(
+          (value.stage === "begin" ||
+            value.stage === "pass" ||
+            value.stage === "end") &&
+          nonNegativeInteger(value.pass) &&
+          nonNegativeInteger(value.covered) &&
+          nonNegativeInteger(value.span) &&
+          value.covered <= value.span
+        ))
     ) {
       throw new Error("invalid progress message");
     }

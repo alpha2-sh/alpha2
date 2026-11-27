@@ -150,12 +150,22 @@ export interface Extractor {
   madeByPlugin?(): MadeByPlugin;
 }
 
-/** Progress of one pass; `total` is `null` for source frames, whose count is not known ahead. */
+/**
+ * Where an extraction is. `stage` is `begin` while the extractor's `begin` runs, `pass` while a
+ * pass is read and `end` while its `end` runs; `pass` is the pass that concerns, the first
+ * under `begin` and the last under `end`. `completed` of `total` deliveries are made; `total` is
+ * `null` for source frames, whose count is not known ahead. `covered` of `span` ticks are read:
+ * `span` is the part of the range the pass reads, and `covered` never decreases and reaches it
+ * when the pass ends. `span` is 0 for a backward pass from the range's start.
+ */
 export interface ExtractProgress {
   readonly phase: "extract";
+  readonly stage: "begin" | "pass" | "end";
   readonly pass: number;
   readonly completed: number;
   readonly total: number | null;
+  readonly covered: number;
+  readonly span: number;
 }
 
 /** How the browser decoded one source's video for an extraction. */
