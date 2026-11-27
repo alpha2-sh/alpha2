@@ -365,7 +365,7 @@ class Server:
         read = [
             item
             for item in [*project.get("sources", []), *project.get("effect_resources", [])]
-            if item.get("kind") not in ("generated", "composition")
+            if item.get("kind") not in ("generated", "composition", "adjustment")
             and item.get("id") not in compiled.assets
         ]
         for path in [*compiled.assets.values(), *(item.get("locator") for item in read)]:

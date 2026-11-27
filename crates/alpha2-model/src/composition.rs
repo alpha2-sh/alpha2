@@ -166,7 +166,8 @@ impl CompositionNode {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NodeOp {
     /// The picture of the clip showing the composition: its source at the time-mapped source
-    /// time, or what its generated source draws.
+    /// time, or what its generated source draws. For an adjustment clip, the scene composited
+    /// beneath it.
     Clip {},
     /// Another visual source, read at `start` plus the composition time. Adds no sound to the
     /// mix.

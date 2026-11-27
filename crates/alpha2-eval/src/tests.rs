@@ -102,6 +102,92 @@ fn frame_needs_are_deduplicated() {
 }
 
 #[test]
+fn an_adjustment_clip_needs_no_source_frame_and_reports_its_media_steps() {
+    use alpha2_model::{
+        ClipComposition, Composition, CompositionId, CompositionNode, NodeId, NodeOp,
+    };
+    let node = |name: &str| id(NodeId::new, name);
+    let mut project = project();
+    let adjust = id(SourceId::new, "adjust");
+    let grain = id(SourceId::new, "grain");
+    project
+        .sources
+        .push(MediaSource::adjustment(adjust.clone()));
+    project.sources.push(MediaSource::new(
+        grain.clone(),
+        "asset://grain",
+        MediaKind::Video,
+    ));
+    let look = id(CompositionId::new, "look");
+    project.compositions.push(Composition {
+        id: look.clone(),
+        nodes: vec![
+            CompositionNode::new(node("clip"), NodeOp::Clip {}),
+            CompositionNode::new(
+                node("grain"),
+                NodeOp::Media {
+                    source_id: grain.clone(),
+                    start: MediaTime(500),
+                },
+            ),
+            CompositionNode::new(
+                node("mix"),
+                NodeOp::KeyMix {
+                    backdrop: Some(node("clip")),
+                    input: Some(node("grain")),
+                    mask: None,
+                    opacity: Animated::Constant { value: 0.5 },
+                },
+            ),
+        ],
+        output: Some(node("mix")),
+        inputs: Vec::new(),
+        controls: Vec::new(),
+    });
+    let mut track = Track::new(id(TrackId::new, "v2"), "adjust", TrackKind::Video);
+    let mut clip = Clip::new(
+        id(ClipId::new, "clip-adjust"),
+        adjust.clone(),
+        range(100, 200),
+        range(7_000, 7_100),
+    );
+    clip.composition = Some(ClipComposition::new(look));
+    track.clips.push(clip);
+    project.timeline.tracks.push(track);
+    project.validate().expect("an adjustment layer");
+    let index = ActiveIndex::build(&project).expect("valid project");
+    let frame = evaluate(&project, &index, MediaTime(175)).expect("matching index");
+    let adjustment = &frame.visual[1];
+    assert!(adjustment.adjustment && !frame.visual[0].adjustment);
+    assert!(!adjustment.needs_source());
+    assert_eq!(
+        (
+            adjustment.generator,
+            adjustment.plan,
+            adjustment.source_composition,
+            adjustment.correction
+        ),
+        (None, None, None, None)
+    );
+    let needs = frame_needs(&project, &index, MediaTime(175)).expect("matching index");
+    assert_eq!(
+        needs
+            .iter()
+            .map(|need| (
+                need.clip_id.as_str(),
+                need.reader.as_ref().map(NodeId::as_str),
+                need.source_id.as_str(),
+                need.media_time
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("clip-v", None, "video", MediaTime(1_150)),
+            ("clip-adjust", Some("grain"), "grain", MediaTime(575)),
+        ]
+    );
+}
+
+#[test]
 fn frame_needs_preserve_consumers_of_distinct_source_times() {
     let mut project = project();
     let mut copied_track = project.timeline.tracks[0].clone();

@@ -38,6 +38,7 @@ fn frame(source: &SourceId, cache: CacheIntent, opacity: f32) -> FrameDesc<'stat
         canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            adjustment: false,
             data: alpha2_eval::SampleContext::NONE,
             correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),

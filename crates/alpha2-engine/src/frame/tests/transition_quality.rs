@@ -13,6 +13,7 @@ impl FrameProvider for Frames {
 
 fn clip(id: &str, time: i64, visual: EvaluatedVisual, mode: ClipBlendMode) -> ActiveClip<'static> {
     ActiveClip {
+        adjustment: false,
         data: alpha2_eval::SampleContext::NONE,
         correction: None,
         clip_id: leak(ClipId::new(id).unwrap()),

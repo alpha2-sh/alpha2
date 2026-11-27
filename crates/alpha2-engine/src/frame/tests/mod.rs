@@ -18,6 +18,7 @@ use alpha2_time::MediaTime;
 
 use super::{FrameProvider, FrameRenderer, GpuFrameRenderer};
 
+mod adjustments;
 mod alpha_exports;
 mod backgrounds;
 mod cache;

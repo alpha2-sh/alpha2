@@ -10,9 +10,15 @@ All notable changes to this project are documented in this file.
   `opacity` times its `mask`'s alpha (`(1 - k) backdrop + k input`, the whole picture when `mask`
   is unconnected); bypassed, it passes the backdrop through. Hosts and engines of 0.7.x refuse
   documents that use it.
-- **Breaking:** a source of kind `adjustment` (an id and its kind, nothing else) backs adjustment
-  clips on video tracks. Such a clip takes no matte and is no clip's matte, and a transition from
-  or to it is `alpha2.transition.fade`. Hosts and engines of 0.7.x refuse documents that use it.
+- **Breaking:** adjustment layers. A source of kind `adjustment` (an id and its kind, nothing
+  else) backs clips on video tracks that have no picture of their own. Such a clip draws its
+  composition with its `clip` nodes reading everything composited beneath it (lower tracks with
+  their transitions, and captions on earlier tracks, over the project background), meets the
+  result with that scene by its blend mode, and mixes it in by its opacity over the frame, cut by
+  its masks and placed by its transform, which move the area it affects and never the scene. An
+  adjustment with no effect or at opacity 0 leaves every byte as it was. It takes no matte and is
+  no clip's matte, and a transition from or to it is `alpha2.transition.fade`, run on the composed
+  scenes. Hosts and engines of 0.7.x refuse documents that use it.
 - `alpha2.transcribe` 1.1.0 runs whisper.cpp on the GPU on Apple silicon (Metal), about 1.2x to
   2.6x faster there by model size. A new param `device` (`auto`, the default, or `cpu`) turns it
   off. Words and times can differ from the CPU's in a fraction of a percent of words, as they do

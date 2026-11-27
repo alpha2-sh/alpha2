@@ -33,6 +33,7 @@ fn effect_timing_instrumentation_never_changes_the_rendered_result() {
             canvas: None,
             time: MediaTime::ZERO,
             visual: vec![ActiveClip {
+                adjustment: false,
                 data: alpha2_eval::SampleContext::NONE,
                 correction: None,
                 clip_id: leak(ClipId::new("clip").expect("valid ID")),
@@ -121,6 +122,7 @@ fn pass_timing_is_off_by_default_and_never_alters_the_result() {
         canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            adjustment: false,
             data: alpha2_eval::SampleContext::NONE,
             correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),

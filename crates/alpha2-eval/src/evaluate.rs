@@ -135,12 +135,13 @@ fn active_clip<'a>(
         masks: &entry.masks,
         matte: entry.matte.as_ref(),
         is_matte: entry.is_matte,
+        adjustment: entry.adjustment,
         generator: entry.generator.as_ref(),
         plan: entry.plan.as_deref(),
         source_composition: active_source_composition(entry, source_time)?
             .map(|plan| plan.with_data(*context)),
         data: *context,
-        correction: (entry.track_kind == TrackKind::Video)
+        correction: (entry.track_kind == TrackKind::Video && !entry.adjustment)
             .then(|| {
                 crate::data::clip_correction(
                     &entry.visual,

@@ -2058,7 +2058,8 @@ NodeId: TypeAlias = str
 
 class NodeOpClip(TypedDict):
     """The picture of the clip showing the composition: its source at the time-mapped source
-    time, or what its generated source draws.
+    time, or what its generated source draws. For an adjustment clip, the scene composited
+    beneath it.
     """
 
     type: Literal["clip"]
@@ -2164,7 +2165,7 @@ class NodeOpMatte(TypedDict):
 class NodeOpKeyMix(TypedDict):
     """The backdrop replaced by the input by `k = opacity x mask alpha`, as
     `(1 - k) backdrop + k input` on premultiplied values: exactly the backdrop where `k` is 0
-    and the input where it is 1 (Nuke's KeyMix with an opacity). Bypassed, it passes the
+    and the input where it is 1 (Nuke's `KeyMix` with an opacity). Bypassed, it passes the
     backdrop through.
     """
 
