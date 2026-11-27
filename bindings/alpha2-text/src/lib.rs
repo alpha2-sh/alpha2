@@ -40,7 +40,7 @@ const MAX_FONT_SIZE: f32 = 2_048.0;
 const MAX_LINE_HEIGHT: f32 = 10.0;
 /// Combined stroke width limit, in pixels.
 const MAX_STROKE_EXTENT: f32 = 64.0;
-const MAX_STROKES: usize = 4;
+const MAX_STROKES: usize = 8;
 /// Most spans one request holds.
 pub const MAX_TEXT_SPANS: usize = 512;
 const MAX_BACKGROUND_PADDING: f32 = 256.0;
@@ -120,7 +120,7 @@ pub struct TextRasterRequest {
     pub emoji_policy: EmojiPolicy,
     /// Caller-managed version. Change it whenever content/style/font inputs change.
     pub content_version: u64,
-    /// Outlines, innermost first, each drawn behind the previous. At most 4, reaching at most 64
+    /// Outlines, innermost first, each drawn behind the previous. At most 8, reaching at most 64
     /// pixels together.
     pub strokes: Vec<TextStroke>,
     /// A box behind each line, drawn behind the strokes.

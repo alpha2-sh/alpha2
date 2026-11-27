@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 /// Most stops in one gradient.
-pub const MAX_GRADIENT_STOPS: usize = 8;
+pub const MAX_GRADIENT_STOPS: usize = 16;
 
 /// A straight (not premultiplied), sRGB-encoded color with alpha, each component in `0..=1`.
 ///

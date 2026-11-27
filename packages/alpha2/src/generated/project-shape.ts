@@ -1756,7 +1756,7 @@ export const PROJECT_SHAPE: unknown = {
         shape: { anyOf: [{ $ref: "#/$defs/LayoutShape" }, { type: "null" }] },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
-          maxItems: 4,
+          maxItems: 8,
           type: ["array", "null"],
         },
         text: {
@@ -2216,7 +2216,7 @@ export const PROJECT_SHAPE: unknown = {
             start: { $ref: "#/$defs/Vec2" },
             stops: {
               items: { $ref: "#/$defs/GradientStop" },
-              maxItems: 8,
+              maxItems: 16,
               type: "array",
             },
             type: { const: "linear_gradient", type: "string" },
@@ -2232,7 +2232,7 @@ export const PROJECT_SHAPE: unknown = {
             spread: { $ref: "#/$defs/Spread", default: "pad" },
             stops: {
               items: { $ref: "#/$defs/GradientStop" },
-              maxItems: 8,
+              maxItems: 16,
               type: "array",
             },
             type: { const: "radial_gradient", type: "string" },
@@ -2247,7 +2247,7 @@ export const PROJECT_SHAPE: unknown = {
             center: { $ref: "#/$defs/Vec2" },
             stops: {
               items: { $ref: "#/$defs/GradientStop" },
-              maxItems: 8,
+              maxItems: 16,
               type: "array",
             },
             type: { const: "conic_gradient", type: "string" },
@@ -2888,7 +2888,7 @@ export const PROJECT_SHAPE: unknown = {
         line_through: { type: ["boolean", "null"] },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
-          maxItems: 4,
+          maxItems: 8,
           type: ["array", "null"],
         },
         underline: { type: ["boolean", "null"] },
@@ -3015,7 +3015,7 @@ export const PROJECT_SHAPE: unknown = {
         },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
-          maxItems: 4,
+          maxItems: 8,
           type: "array",
         },
         underline: { type: "boolean" },
@@ -3066,7 +3066,7 @@ export const PROJECT_SHAPE: unknown = {
         },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
-          maxItems: 4,
+          maxItems: 8,
           type: ["array", "null"],
         },
         underline: { type: ["boolean", "null"] },

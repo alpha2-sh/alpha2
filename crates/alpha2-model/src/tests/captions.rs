@@ -194,7 +194,7 @@ fn a_caption_look_is_held_to_its_limits() {
         assert!(invalid(&project));
     }
     let mut look = style.clone();
-    look.strokes = vec![stroke(0.125); crate::MAX_TEXT_STROKES];
+    look.strokes = vec![stroke(0.0625); crate::MAX_TEXT_STROKES];
     look.shadows = vec![shadow(crate::Vec2::new(-1.0, 1.0), 1.0); crate::MAX_TEXT_SHADOWS];
     project.timeline.tracks[caption_track]
         .captions

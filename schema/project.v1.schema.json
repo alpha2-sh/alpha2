@@ -4188,7 +4188,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": [
             "array",
             "null"
@@ -5286,7 +5286,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -5325,7 +5325,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -5360,7 +5360,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -6913,7 +6913,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": [
             "array",
             "null"
@@ -7239,7 +7239,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": "array"
         },
         "underline": {
@@ -7432,7 +7432,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": [
             "array",
             "null"

@@ -1613,7 +1613,7 @@ fn requests_outside_the_limits_are_refused() {
         ("strokes 40 + 25", |r| {
             r.strokes = vec![outline(40.0), outline(25.0)];
         }),
-        ("five strokes", |r| r.strokes = vec![outline(1.0); 5]),
+        ("nine strokes", |r| r.strokes = vec![outline(1.0); 9]),
         ("a gradient with one stop", |r| {
             r.fill = TextFill::Gradient(linear_gradient(vec![stop(0.0, [1.0; 4])]));
         }),

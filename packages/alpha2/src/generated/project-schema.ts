@@ -159,7 +159,7 @@ export const MAX_FRAME_INLINED_NODES = 65536;
 export const MAX_GAIN = 16;
 
 /** Mirrors `alpha2_model::MAX_GRADIENT_STOPS`. */
-export const MAX_GRADIENT_STOPS = 8;
+export const MAX_GRADIENT_STOPS = 16;
 
 /** Mirrors `alpha2_model::MAX_GRID_TRACKS`. */
 export const MAX_GRID_TRACKS = 64;
@@ -309,7 +309,7 @@ export const MAX_TEXT_SHADOW_BLUR = 1;
 export const MAX_TEXT_SHADOW_OFFSET = 1;
 
 /** Mirrors `alpha2_model::MAX_TEXT_STROKES`. */
-export const MAX_TEXT_STROKES = 4;
+export const MAX_TEXT_STROKES = 8;
 
 /** Mirrors `alpha2_model::MAX_TEXT_STROKE_EXTENT`. */
 export const MAX_TEXT_STROKE_EXTENT = 0.5;

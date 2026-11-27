@@ -29,10 +29,13 @@ const SLOTS_PER_ROW: u32 = ATLAS_WIDTH / 16;
 /// Slot of a full tile: no atlas read, coverage one.
 const FULL_SLOT: u32 = u32::MAX;
 
-/// One op's uniform: fifteen `vec4`s.
-pub(crate) const VECTOR_UNIFORM_BYTES: u64 = 15 * 16;
+const VECTOR_UNIFORM_HEAD: usize = 20;
 
-const VECTOR_UNIFORM_WORDS: usize = 60;
+const VECTOR_UNIFORM_WORDS: usize =
+    VECTOR_UNIFORM_HEAD + crate::MAX_GENERATOR_STOPS + 4 * crate::MAX_GENERATOR_STOPS;
+
+/// One op's uniform: twenty-five `vec4`s.
+pub(crate) const VECTOR_UNIFORM_BYTES: u64 = VECTOR_UNIFORM_WORDS as u64 * 4;
 
 const _: () = assert!(
     size_of::<[u32; VECTOR_UNIFORM_WORDS]>() as u64 == VECTOR_UNIFORM_BYTES,
@@ -83,8 +86,8 @@ struct VectorUniform {{
     paint_ab: vec4f,
     // Kind, spread, stop count.
     paint_info: vec4u,
-    offsets: array<vec4f, 2>,
-    colors: array<vec4f, 8>,
+    offsets: array<vec4f, {offset_vectors}>,
+    colors: array<vec4f, {stops}>,
 }};
 
 @group(0) @binding(0) var<uniform> op: VectorUniform;
@@ -115,15 +118,13 @@ fn vs_tile(@builtin(vertex_index) index: u32, @location(0) tile: vec2u, @locatio
 }}
 
 fn builtin_op_paint() -> AlphaPaint {{
-    let o0 = op.offsets[0];
-    let o1 = op.offsets[1];
     return AlphaPaint(
         op.paint_info.x,
         op.paint_ab.xy,
         op.paint_ab.zw,
         op.paint_info.y,
         op.paint_info.z,
-        array<f32, 8>(o0.x, o0.y, o0.z, o0.w, o1.x, o1.y, o1.z, o1.w),
+        array<f32, {stops}>({offsets}),
         op.colors,
     );
 }}
@@ -173,6 +174,9 @@ fn fs_encode(in: FullOut) -> @location(0) vec4f {{
 }}
 ",
         paint = crate::paint_wgsl::paint_wgsl(),
+        stops = crate::MAX_GENERATOR_STOPS,
+        offset_vectors = crate::generator::OFFSET_VECTORS,
+        offsets = crate::generator::offset_list(|vector| format!("op.offsets[{vector}]")),
     )
 }
 
@@ -1020,8 +1024,9 @@ fn op_uniform(
         .take(crate::MAX_GENERATOR_STOPS)
         .enumerate()
     {
-        floats[20 + index] = stop.offset;
-        floats[28 + index * 4..32 + index * 4].copy_from_slice(&stop.color);
+        let colors = VECTOR_UNIFORM_HEAD + crate::MAX_GENERATOR_STOPS + index * 4;
+        floats[VECTOR_UNIFORM_HEAD + index] = stop.offset;
+        floats[colors..colors + 4].copy_from_slice(&stop.color);
     }
     let mut words = floats.map(f32::to_bits);
     words[16..20].copy_from_slice(&[kind, paint.spread, count, 0]);

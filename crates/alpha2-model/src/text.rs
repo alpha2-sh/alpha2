@@ -22,7 +22,7 @@ pub const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
 pub const FONT_WEIGHT_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 
 /// Most strokes around one text.
-pub const MAX_TEXT_STROKES: usize = 4;
+pub const MAX_TEXT_STROKES: usize = 8;
 
 /// Widest a text's strokes reach together (the sum of their widths), as a fraction of the
 /// font size.

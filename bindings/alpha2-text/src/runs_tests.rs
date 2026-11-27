@@ -704,3 +704,67 @@ fn a_run_background_covers_its_em_box_per_line() {
         "the unspanned word has none"
     );
 }
+
+#[test]
+fn eight_strokes_stack_within_the_extent() {
+    let mut rasterizer = rasterizer(&["Alpha2Fixture.ttf"]);
+    let band = |width: f32, shade: u8| TextStroke {
+        color: [shade, shade, shade, 255],
+        width,
+    };
+    let eight = TextRasterRequest {
+        strokes: (0..8).map(|index| band(8.0, index * 30)).collect(),
+        ..request("I", 40.0)
+    };
+    let drawn = rasterizer
+        .rasterize(&eight)
+        .expect("eight bands reaching 64 pixels");
+    let plain = rasterizer
+        .measure(&TextRasterRequest {
+            strokes: Vec::new(),
+            ..eight.clone()
+        })
+        .expect("measures")
+        .ink
+        .expect("ink");
+    let outlined = rasterizer
+        .measure(&eight)
+        .expect("measures")
+        .ink
+        .expect("ink");
+    assert_eq!(
+        outlined[2] - plain[2],
+        65.0,
+        "the outermost band reaches 64 pixels and a rim"
+    );
+    assert!(drawn.descriptor.layout_x >= 64.0);
+    for strokes in [
+        (0..9).map(|_| band(1.0, 0)).collect::<Vec<_>>(),
+        (0..8).map(|_| band(8.125, 0)).collect(),
+    ] {
+        let refused = TextRasterRequest {
+            strokes,
+            content_version: 2,
+            ..eight.clone()
+        };
+        assert_eq!(
+            rasterizer.rasterize(&refused),
+            Err(TextRasterError::InvalidRequest)
+        );
+    }
+    let span = TextRasterRequest {
+        spans: vec![TextSpan {
+            strokes: eight.strokes.clone(),
+            ..span(&request("I", 40.0), 0..1)
+        }],
+        content_version: 3,
+        ..request("I", 40.0)
+    };
+    assert_eq!(
+        rasterizer
+            .measure(&span)
+            .expect("a span with eight bands")
+            .ink,
+        rasterizer.measure(&eight).expect("measures").ink
+    );
+}

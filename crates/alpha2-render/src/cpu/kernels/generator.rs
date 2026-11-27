@@ -16,8 +16,8 @@ struct Generator;
 /// `builtin_fill_paint()`: the paint the `fill_*` parameters carry.
 fn fill_paint(context: &KernelContext<'_>) -> Paint {
     let names = FILL_PAINT_PARAMS;
-    let [o0, o1] = [context.vec4(names.offsets0), context.vec4(names.offsets1)];
-    // `u32(clamp(count, 0.0, 8.0))`: truncated.
+    let vectors = names.offsets.map(|name| context.vec4(name));
+    // `u32(clamp(count, 0.0, 16.0))`: truncated.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -32,7 +32,7 @@ fn fill_paint(context: &KernelContext<'_>) -> Paint {
         context.vec2(names.b),
         context.choice(names.spread),
         count,
-        [o0[0], o0[1], o0[2], o0[3], o1[0], o1[1], o1[2], o1[3]],
+        std::array::from_fn(|stop| vectors[stop / 4][stop % 4]),
         names.colors.map(|name| context.vec4(name)),
     )
 }

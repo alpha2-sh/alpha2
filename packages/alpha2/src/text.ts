@@ -138,7 +138,7 @@ export interface WasmTextRequest {
    * draws outlines in the fill, `replace` draws one U+FFFD per emoji grapheme.
    */
   readonly emojiPolicy?: "color" | "monochrome" | "replace";
-  /** Outline bands, innermost first: at most 4, with widths summing to at most 64 pixels. */
+  /** Outline bands, innermost first: at most 8, with widths summing to at most 64 pixels. */
   readonly strokes?: readonly {
     readonly color: WasmTextColor;
     readonly width: number;
