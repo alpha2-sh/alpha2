@@ -1630,16 +1630,20 @@ fn capabilities_report_the_adapter_choice() {
     let explanation = adapters["explanation"].as_str().expect("an explanation");
     assert!(explanation.contains(&report.gpu.adapter), "{adapters}");
     let candidates = adapters["candidates"].as_array().expect("candidates");
-    match adapters["chosen"].as_u64() {
-        Some(index) => {
-            let chosen = candidates
-                .iter()
-                .find(|candidate| candidate["index"].as_u64() == Some(index))
-                .expect("the chosen adapter is a candidate");
-            assert_eq!(chosen["name"], json!(report.gpu.adapter), "{adapters}");
-            assert_eq!(chosen["renders"], json!(true), "{adapters}");
-        }
-        None => assert_eq!(adapters["reason"], json!("no-shared-device"), "{adapters}"),
+    if let Some(index) = adapters["chosen"].as_u64() {
+        let chosen = candidates
+            .iter()
+            .find(|candidate| candidate["index"].as_u64() == Some(index))
+            .expect("the chosen adapter is a candidate");
+        assert_eq!(chosen["name"], json!(report.gpu.adapter), "{adapters}");
+        assert_eq!(chosen["renders"], json!(true), "{adapters}");
+    } else {
+        let reason = if crate::adapter_choice::AdapterPolicy::from_env().is_pin() {
+            "pinned"
+        } else {
+            "no-shared-device"
+        };
+        assert_eq!(adapters["reason"], json!(reason), "{adapters}");
     }
     for candidate in candidates {
         for key in [
