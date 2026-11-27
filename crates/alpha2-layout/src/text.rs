@@ -126,6 +126,7 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         letter_spacing,
         font_weight,
         clamp,
+        spans,
     } = request;
     feed(text.as_bytes());
     feed(&[0xff]);
@@ -169,6 +170,55 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         feed(&clamp.max_height.to_bits().to_le_bytes());
         feed(clamp.ellipsis.as_deref().unwrap_or_default().as_bytes());
         feed(&[0xff, u8::from(clamp.ellipsis.is_some())]);
+    }
+    feed_spans(feed, spans);
+}
+
+fn feed_spans(feed: &mut impl FnMut(&[u8]), spans: &[alpha2_text::TextSpan]) {
+    if spans.is_empty() {
+        return;
+    }
+    feed(&[0xf8]);
+    feed(&spans.len().to_le_bytes());
+    for span in spans {
+        let alpha2_text::TextSpan {
+            bytes,
+            font_family,
+            font_weight,
+            font_style,
+            font_size,
+            letter_spacing,
+            fill,
+            strokes,
+            background_color,
+            underline,
+            line_through,
+        } = span;
+        feed(&bytes.start.to_le_bytes());
+        feed(&bytes.end.to_le_bytes());
+        feed(font_family.as_deref().unwrap_or_default().as_bytes());
+        feed(&[0xff, u8::from(font_family.is_some())]);
+        feed(&font_weight.to_le_bytes());
+        feed(&[*font_style as u8]);
+        feed(&font_size.to_bits().to_le_bytes());
+        feed(&letter_spacing.to_bits().to_le_bytes());
+        match fill {
+            TextFill::Solid(color) => feed(color),
+            TextFill::Gradient(gradient) => feed_text_gradient(feed, gradient),
+        }
+        feed_count(feed, strokes.len());
+        for stroke in strokes {
+            feed(&stroke.color);
+            feed(&stroke.width.to_bits().to_le_bytes());
+        }
+        match background_color {
+            Some(color) => {
+                feed(&[1]);
+                feed(color);
+            }
+            None => feed(&[0]),
+        }
+        feed(&[u8::from(*underline), u8::from(*line_through)]);
     }
 }
 
@@ -488,6 +538,7 @@ pub fn text_request_at(
             .line_clamp
             .as_ref()
             .map(|clamp| crate::fit::text_clamp(clamp, box_height(style, size))),
+        spans: Vec::new(),
     }
 }
 

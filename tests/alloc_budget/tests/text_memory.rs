@@ -91,6 +91,7 @@ fn request(text: &str, font_size: f32, strokes: Vec<TextStroke>) -> TextRasterRe
         letter_spacing: 0.0,
         font_weight: 400,
         clamp: None,
+        spans: Vec::new(),
     }
 }
 

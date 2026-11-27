@@ -138,6 +138,7 @@ pub(crate) fn text_request(
         letter_spacing: text.letter_spacing * font_size,
         font_weight: text.font_weight,
         clamp,
+        spans: Vec::new(),
     }
 }
 

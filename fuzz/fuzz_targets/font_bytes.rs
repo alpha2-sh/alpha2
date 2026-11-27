@@ -42,6 +42,7 @@ fuzz_target!(|data: &[u8]| {
             letter_spacing: 0.0,
             font_weight: 400,
             clamp: None,
+            spans: Vec::new(),
         });
     }
 });

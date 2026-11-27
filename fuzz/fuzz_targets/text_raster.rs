@@ -108,6 +108,7 @@ fuzz_target!(|data: &[u8]| {
         letter_spacing: spacing,
         font_weight: 400,
         clamp: None,
+        spans: Vec::new(),
     };
     let mut rasterizer = rasterizer()
         .lock()

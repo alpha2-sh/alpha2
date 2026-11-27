@@ -10,11 +10,11 @@
 //! bilinearly in fixed point. Integer and `libm` arithmetic keep native and wasm output identical.
 
 use super::{
-    Drawing, Faces, HashMap, HostTexture, HostTexturePixels, Layout, PixelBox, PixelLook,
-    Premultiplication, RasterColorSpace, RequestLook, TextFill, TextRasterError, TextRasterRequest,
-    TextRasterResult, TextRasterizer, TextTexture, decoration_extents, dilate, disc_extent,
-    gradient, normalize_mapped, over, point, raster_bytes_per_pixel, raster_pixels, stroke_radius,
-    validate_request,
+    Drawing, DrawingKey, Faces, HashMap, HostTexture, HostTexturePixels, Layout, PixelBox,
+    PixelLook, Premultiplication, RasterColorSpace, RequestLook, TextFill, TextRasterError,
+    TextRasterRequest, TextRasterResult, TextRasterizer, TextTexture, decoration_extents, dilate,
+    disc_extent, drawing_key, gradient, normalize_mapped, over, point, raster_bytes_per_pixel,
+    raster_pixels, stroke_radius, validate_request,
 };
 use std::ops::Range;
 use std::sync::Arc;
@@ -49,6 +49,8 @@ pub struct ClusterInfo {
     pub advance: f32,
     /// Line baseline in pixels from the layout box's top.
     pub baseline: f32,
+    /// Font size in pixels: its span's, else the request's.
+    pub font_size: f32,
     /// Whether it is the ellipsis a [`crate::TextClamp`] ends a cut line with. Its byte range
     /// is empty, at the cut, and it is in no word.
     pub ellipsis: bool,
@@ -459,9 +461,9 @@ impl TextRasterizer {
         if self.fonts.is_empty() {
             return Err(TextRasterError::NoFonts);
         }
-        let faces = Faces::new(&self.fonts, request.font_weight)?;
-        let layout = self.lay_out(&faces, request)?;
-        Ok(text_layout(&layout, request))
+        let (faces, shaping) = self.prepare(request)?;
+        let layout = Self::lay_out(&faces, &shaping, request)?;
+        Ok(text_layout(&layout, &shaping, request))
     }
 
     /// [`Self::rasterize`] with one state per [`Self::layout`] cluster, in logical order. Identity
@@ -516,19 +518,17 @@ impl TextRasterizer {
         states: &[ClusterState],
         cache: &mut TileCache,
     ) -> Result<TextRasterResult, TextRasterError> {
-        let faces = Faces::new(&self.fonts, request.font_weight)?;
-        let layout = self.lay_out(&faces, request)?;
+        let (faces, shaping) = self.prepare(request)?;
+        let layout = Self::lay_out(&faces, &shaping, request)?;
         if states.len() != layout.clusters.len() {
             return Err(TextRasterError::InvalidRequest);
         }
         let (box_width, box_height) = (layout.box_width, layout.box_height);
-        let ascent = layout.ascent;
-        let pivot_drop = request.font_size * 0.3;
         let mut placed = vec![(Vec::<Placed>::new(), [0.0_f32; 6]); states.len()];
-        let mut drawings = HashMap::<(usize, u16), Drawing>::new();
+        let mut drawings = HashMap::<DrawingKey, Drawing>::new();
         let (mut ink_ascent, mut ink_descent) = (layout.ascent, layout.descent);
         for (index, line) in layout.lines.iter().enumerate() {
-            let baseline = layout.line_top(index) + ascent;
+            let baseline = layout.baseline(index);
             // Tracking goes after each cluster except the line's last, in visual order.
             let mut shifts = Vec::with_capacity(line.glyphs.len());
             let mut shift = 0.0_f32;
@@ -553,21 +553,22 @@ impl TextRasterizer {
                 let (left, right) = extents[&glyph.cluster];
                 let affine = cluster_affine(
                     &states[glyph.cluster],
-                    [f32::midpoint(left, right), baseline - pivot_drop],
+                    [f32::midpoint(left, right), baseline - glyph.size * 0.3],
                 );
+                let key = drawing_key(&shaping, glyph);
                 let drawing = drawings
-                    .entry((glyph.font, glyph.glyph_index))
-                    .or_insert_with(|| Drawing::of(&faces, glyph.font, glyph.glyph_index, request));
+                    .entry(key)
+                    .or_insert_with(|| Drawing::of(&faces, key, request.emoji_policy));
                 let Some(bounds) = drawing.bounds() else {
                     continue;
                 };
-                let scale = request.font_size / faces.units_per_em(glyph.font);
+                let scale = glyph.size / faces.units_per_em(glyph.font);
                 ink_ascent = ink_ascent.max(bounds[3] * scale + glyph.y_offset);
                 ink_descent = ink_descent.max(-(bounds[1] * scale + glyph.y_offset));
                 let slot = &mut placed[glyph.cluster];
                 slot.1 = affine;
                 slot.0.push(Placed {
-                    key: (glyph.font, glyph.glyph_index),
+                    key,
                     origin: [
                         glyph.x + shift + glyph.x_offset + offset,
                         baseline - glyph.y_offset,
@@ -597,7 +598,7 @@ impl TextRasterizer {
             ];
             let (bounds, color) = cluster_box(&drawings, glyphs, local);
             planned.push(Some(PlannedCluster {
-                key: cluster_key(look_key, glyphs, local),
+                key: cluster_key(look_key, &faces, glyphs, local),
                 whole: [whole[0] as i64, whole[1] as i64],
                 local,
                 bounds,
@@ -745,16 +746,7 @@ impl TextRasterizer {
                 place_max((band, owners, width), margins, &padded, dilated, cluster);
             }
         }
-        let mut line_boxes = Vec::with_capacity(layout.lines.len());
-        for (index, line) in layout.lines.iter().enumerate() {
-            if line.width > 0.0 {
-                line_boxes.push((
-                    layout.line_offset(line, request.align),
-                    line.width,
-                    layout.line_top(index),
-                ));
-            }
-        }
+        let line_boxes = layout.line_boxes(request.align);
         let base = RequestLook::of(request, [layout.width, layout.height]);
         let solid = match &request.fill {
             TextFill::Solid(color) => states
@@ -810,7 +802,7 @@ impl TextRasterizer {
                 layout_y: margin_y as f32,
                 layout_width: layout.width,
                 layout_height: layout.height,
-                first_baseline: layout.half_leading + layout.ascent,
+                first_baseline: layout.baseline(0),
                 ascent: ink_ascent,
                 descent: ink_descent,
                 line_count: layout.line_count,
@@ -869,7 +861,7 @@ impl PlannedCluster {
 
 /// The tile box [`draw_cluster`] draws `glyphs` into through `affine`, and whether any has color.
 fn cluster_box(
-    drawings: &HashMap<(usize, u16), Drawing>,
+    drawings: &HashMap<DrawingKey, Drawing>,
     glyphs: &[Placed],
     affine: Affine,
 ) -> (Option<PixelBox>, bool) {
@@ -898,7 +890,7 @@ fn cluster_box(
 /// A glyph with its origin before the cluster's map and its pixels per font unit.
 #[derive(Clone, Debug)]
 struct Placed {
-    key: (usize, u16),
+    key: DrawingKey,
     origin: [f32; 2],
     scale: f32,
 }
@@ -1041,12 +1033,17 @@ fn look_key(request: &TextRasterRequest) -> u64 {
     hash.0
 }
 
-fn cluster_key(look: u64, glyphs: &[Placed], affine: Affine) -> u64 {
+fn cluster_key(look: u64, faces: &Faces<'_>, glyphs: &[Placed], affine: Affine) -> u64 {
     let mut hash = Fnv(look);
     let first = glyphs.first().map_or([0.0; 2], |glyph| glyph.origin);
     for glyph in glyphs {
-        hash.feed(&glyph.key.0.to_le_bytes());
-        hash.feed(&glyph.key.1.to_le_bytes());
+        let (font, weight, italic) = faces.of[glyph.key.face];
+        hash.feed(&font.to_le_bytes());
+        hash.feed(&weight.to_le_bytes());
+        hash.feed(&[u8::from(italic), u8::from(glyph.key.shear)]);
+        hash.feed(&glyph.key.size.to_le_bytes());
+        hash.feed(&glyph.key.foreground);
+        hash.feed(&glyph.key.glyph.to_le_bytes());
         hash.feed(&glyph.scale.to_bits().to_le_bytes());
         for value in [glyph.origin[0] - first[0], glyph.origin[1] - first[1]] {
             hash.feed(&value.to_bits().to_le_bytes());
@@ -1085,7 +1082,7 @@ impl Fnv {
 )]
 fn draw_cluster(
     request: &TextRasterRequest,
-    drawings: &HashMap<(usize, u16), Drawing>,
+    drawings: &HashMap<DrawingKey, Drawing>,
     glyphs: &[Placed],
     affine: Affine,
 ) -> DrawnCluster {
@@ -1204,7 +1201,11 @@ fn line_start(layout: &Layout, rtl: bool, width: f32, request: &TextRasterReques
     }
 }
 
-fn text_layout(layout: &Layout, request: &TextRasterRequest) -> TextLayout {
+fn text_layout(
+    layout: &Layout,
+    shaping: &super::runs::Shaping,
+    request: &TextRasterRequest,
+) -> TextLayout {
     let mut map = Vec::new();
     normalize_mapped(&request.text, request.emoji_policy, Some(&mut map));
     let original = |at: usize| map.get(at).copied().unwrap_or(request.text.len());
@@ -1238,6 +1239,7 @@ fn text_layout(layout: &Layout, request: &TextRasterRequest) -> TextLayout {
                 x: 0.0,
                 advance: 0.0,
                 baseline: 0.0,
+                font_size: shaping.looks[usize::from(span.look)].size,
                 ellipsis: span.ellipsis,
             }
         })
@@ -1246,7 +1248,7 @@ fn text_layout(layout: &Layout, request: &TextRasterRequest) -> TextLayout {
     let mut first_cluster = 0;
     for (index, line) in layout.lines.iter().enumerate() {
         let left = layout.line_offset(line, request.align);
-        let baseline = layout.line_top(index) + layout.ascent;
+        let baseline = layout.baseline(index);
         let line_number = u32::try_from(index).unwrap_or(u32::MAX);
         let last_cluster = clusters[first_cluster..]
             .iter()

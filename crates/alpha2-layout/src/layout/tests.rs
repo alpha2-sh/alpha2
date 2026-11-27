@@ -70,6 +70,7 @@ fn shaped(rasterizer: &TextRasterizer, content: &str, pixels: f32) -> ShapedText
             letter_spacing: 0.0,
             font_weight: 400,
             clamp: None,
+            spans: Vec::new(),
         })
         .expect("shapes")
 }

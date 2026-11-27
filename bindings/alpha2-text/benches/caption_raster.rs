@@ -68,6 +68,7 @@ fn animated(rasterizer: &mut TextRasterizer, strokes: &[f32]) {
         letter_spacing: 0.0,
         font_weight: 400,
         clamp: None,
+        spans: Vec::new(),
     };
     let clusters = rasterizer
         .layout(&request)
@@ -155,6 +156,7 @@ fn run(
         letter_spacing: 0.0,
         font_weight: 400,
         clamp: None,
+        spans: Vec::new(),
     };
     let mut best = f64::INFINITY;
     for _ in 0..RUNS {

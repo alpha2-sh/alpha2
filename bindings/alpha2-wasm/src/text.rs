@@ -285,6 +285,7 @@ impl TextRequestWire {
             letter_spacing: self.letter_spacing,
             font_weight: self.font_weight,
             clamp: None,
+            spans: Vec::new(),
         }
     }
 }
