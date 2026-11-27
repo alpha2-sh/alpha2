@@ -77,6 +77,8 @@ pub enum Capability {
     CCompiler,
     /// Two or more GPU adapters.
     MultiAdapter,
+    /// A software GPU adapter the host can pin (lavapipe, WARP).
+    SoftwareAdapter,
     /// 16-bit normalized textures on the test device.
     Unorm16,
     /// Blending into 16-bit float targets on the test device.
@@ -174,6 +176,7 @@ impl Capability {
         Self::HardwareVideoDecode,
         Self::CCompiler,
         Self::MultiAdapter,
+        Self::SoftwareAdapter,
         Self::Unorm16,
         Self::HalfFloatBlend,
         Self::TimestampQuery,
@@ -240,6 +243,7 @@ impl Capability {
             Self::HardwareVideoDecode => "hardware-video-decode",
             Self::CCompiler => "c-compiler",
             Self::MultiAdapter => "multi-adapter",
+            Self::SoftwareAdapter => "software-adapter",
             Self::Unorm16 => "unorm16",
             Self::HalfFloatBlend => "half-float-blend",
             Self::TimestampQuery => "timestamp-query",

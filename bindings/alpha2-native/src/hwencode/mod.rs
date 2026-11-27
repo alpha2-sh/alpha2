@@ -71,6 +71,29 @@ impl HardwareEncodeBackend {
             Self::D3D12Va => "d3d12va",
         }
     }
+
+    /// The backend of `encoder` when it is one of this OS's encoders that take GPU frames only
+    /// (`h264_vulkan` on Linux, `h264_d3d12va` on Windows).
+    #[must_use]
+    pub fn of_gpu_frames_only_encoder(encoder: &str) -> Option<Self> {
+        if cfg!(target_os = "linux") && encoder.ends_with("_vulkan") {
+            Some(Self::Vulkan)
+        } else if cfg!(target_os = "windows") && encoder.ends_with("_d3d12va") {
+            Some(Self::D3D12Va)
+        } else {
+            None
+        }
+    }
+
+    /// The shared device its sessions open on, as messages name it.
+    #[must_use]
+    pub const fn device_name(self) -> &'static str {
+        match self {
+            Self::Vulkan => "Vulkan",
+            Self::VideoToolbox => "Metal",
+            Self::D3D12Va => "D3D12",
+        }
+    }
 }
 
 /// How the pixels of an encoder-input surface are laid out.

@@ -1614,7 +1614,12 @@ fn capabilities_are_the_shared_capability_report() {
     let result = host.handle(request, &mut |_| Ok(())).expect("capabilities");
     let report = &result["capabilities"];
     assert_eq!(report["schema"], json!("alpha2-capabilities"));
-    assert_eq!(report["version"], json!(2));
+    assert_eq!(report["version"], json!(3));
+    assert_eq!(report["release"], json!(env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        report["projectSchemaVersion"],
+        json!(alpha2_model::CURRENT_SCHEMA_VERSION)
+    );
     assert_eq!(report["runtime"], json!("native"));
     assert!(matches!(report["gpu"]["tier"].as_str(), Some("a" | "b")));
     assert_eq!(report["color"]["workingSpace"], json!("linear_bt709_sdr"));

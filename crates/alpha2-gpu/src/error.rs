@@ -35,6 +35,7 @@ enum Cause {
     NoHardwareAdapter {
         software: Vec<String>,
         refusals: Vec<(String, String)>,
+        seen: Vec<crate::AdapterRecord>,
     },
 }
 
@@ -69,8 +70,26 @@ impl GpuError {
     pub(crate) const fn no_hardware(
         software: Vec<String>,
         refusals: Vec<(String, String)>,
+        seen: Vec<crate::AdapterRecord>,
     ) -> Self {
-        Self(Cause::NoHardwareAdapter { software, refusals }, Vec::new())
+        Self(
+            Cause::NoHardwareAdapter {
+                software,
+                refusals,
+                seen,
+            },
+            Vec::new(),
+        )
+    }
+
+    /// Every adapter a request under [`crate::SoftwareAdapters::Refuse`] listed, with why none
+    /// rendered; empty for other errors.
+    #[must_use]
+    pub fn adapters_seen(&self) -> &[crate::AdapterRecord] {
+        match &self.0 {
+            Cause::NoHardwareAdapter { seen, .. } => seen,
+            _ => &[],
+        }
     }
 
     /// This error, also naming every adapter a request tried and why each failed.
@@ -128,7 +147,9 @@ impl GpuError {
                 "the {backend} backend did not start (shader compiler: {compiler}): is the file there?"
             ),
             Cause::Pin(reason) => formatter.write_str(reason),
-            Cause::NoHardwareAdapter { software, refusals } => {
+            Cause::NoHardwareAdapter {
+                software, refusals, ..
+            } => {
                 formatter.write_str("no hardware GPU")?;
                 if !software.is_empty() {
                     write!(

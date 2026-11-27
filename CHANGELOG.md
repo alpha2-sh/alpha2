@@ -29,6 +29,31 @@ All notable changes to this project are documented in this file.
   between CPUs. A model file whisper.cpp refuses after the plugin's own check accepted it no longer
   leaves its buffers allocated, which with Metal made the process abort when it exited.
 - `ExtractResult.sourceDecode`: how the browser decoded each source of an extraction.
+- `scripts/sign-macos-host.sh` signs an unpacked macOS archive for an application with its own
+  identity (every library, then the programs, hardened runtime, timestamp), verifies the signatures
+  and checks that the host answers `capabilities`. `release/macos/` holds the two supported
+  entitlement sets (library validation on; `disable-library-validation` on the host), and
+  `docs/native.md` describes the procedure and what each set means for replacing the FFmpeg
+  libraries and for Cisco's OpenH264. Release archives stay ad hoc signed.
+
+### Changed
+
+- **Breaking:** `alpha2-host --renderer gpu` (`ALPHA2_RENDERER=gpu`, the clients' `renderer: "gpu"`)
+  no longer renders on a software adapter (lavapipe, llvmpipe, WARP, SwiftShader) unless
+  `ALPHA2_GPU_ADAPTER` pins it. Without a hardware adapter the host does not start: it fails with
+  `GPU_INIT_FAILED`, now a permanent failure (class `INVALID_INPUT`), naming every adapter it saw
+  with its backend and whether it is a software one, and the two remedies (`--renderer cpu`, or the
+  pin); `details.adapterChoice` carries the records, with the new reason `no-hardware-adapter`.
+  Results and `capabilities.gpu` report `softwareAdapter`. `auto` is unchanged.
+- An export that pins an encoder taking GPU frames only (`h264_vulkan`, `h264_d3d12va`) on a host
+  whose shared device was not made fails with `GPU_OUTPUT_UNAVAILABLE` naming that device and why
+  it was not made, instead of `INVALID_INPUT` "video encoder ... is unavailable".
+- **Breaking:** the capability report (`alpha2-capabilities`) is version 3 and names the engine's
+  `release` and the project `schema_version` it reads (`projectSchemaVersion`), in the native host
+  and in the browser. The host's `state` details and `status` result add `projectSchemaVersion`
+  beside `hostVersion`. Packages and the host still work together only within one release; the
+  host protocol document and the `alpha2`, `@alpha2-sh/node` and `@alpha2-sh/editor` READMEs now
+  state that policy.
 
 ### Changed
 

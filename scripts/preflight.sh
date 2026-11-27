@@ -42,7 +42,8 @@ gpu_env() {
   if [ -z "${VK_ICD_FILENAMES:-}" ]; then
     local icd
     for icd in /usr/share/vulkan/icd.d/lvp_icd*.json; do
-      [ -f "$icd" ] && export VK_ICD_FILENAMES="$icd" && break
+      [ -f "$icd" ] && export VK_ICD_FILENAMES="$icd" \
+        ALPHA2_GPU_ADAPTER="${ALPHA2_GPU_ADAPTER:-llvmpipe}" && break
     done
   fi
 }

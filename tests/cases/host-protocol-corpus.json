@@ -16,7 +16,9 @@
           "status": "ready",
           "capabilities": {
             "schema": "alpha2-capabilities",
-            "version": 2,
+            "version": 3,
+            "release": "0.8.0",
+            "projectSchemaVersion": 1,
             "runtime": "native",
             "encode": {
               "containers": [

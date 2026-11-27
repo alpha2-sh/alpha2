@@ -440,8 +440,11 @@ report({
     unusedEffects.length === 0 && unused === null &&
     drawnEffects.join() === "page.tint@1" && named(drawn) && named(still) &&
     capability.gpu.backend === "cpu" && capability.features["renderer.cpu"].available &&
-    !capability.features["effects.runtime"].available && !deviceLost,
+    !capability.features["effects.runtime"].available && !deviceLost &&
+    capability.version === 3 && /^\\d+\\.\\d+\\.\\d+/.test(capability.release) &&
+    capability.projectSchemaVersion === 1,
   registered, malformed, unusedEffects, unused, drawnEffects, drawn, still, backend: capability.gpu.backend,
+  version: capability.version, release: capability.release, projectSchemaVersion: capability.projectSchemaVersion,
 });
 `;
 }

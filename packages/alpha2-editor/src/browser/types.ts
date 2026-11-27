@@ -442,10 +442,12 @@ export interface BrowserBridge {
   /** How many times the preview was made again after its GPU device or WebGL context was lost. */
   readonly previewRecoveries: number;
   /**
-   * What this page can do; `gpu`, `color` and `renderer` are `null` until a preview is bound.
-   * `features.preview` and `features.export` need no GPU: without one the engine draws on the CPU.
+   * What this page can do; `release`, `gpu`, `color` and `renderer` are `null` until a preview is
+   * bound. `features.preview` and `features.export` need no GPU: without one the engine draws on
+   * the CPU.
    */
-  readonly capabilities: CapabilityReport<null, null> & {
+  readonly capabilities: Omit<CapabilityReport<null, null>, "release"> & {
+    readonly release: string | null;
     readonly renderer: PreviewRenderer | null;
     readonly features: Readonly<
       Record<

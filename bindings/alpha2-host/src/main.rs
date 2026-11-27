@@ -572,13 +572,11 @@ pub(crate) fn create_host_on(
     adapter_policy: &crate::adapter_choice::AdapterPolicy,
 ) -> Result<Host, HostError> {
     use crate::config::RendererPolicy;
-    use alpha2_gpu::SoftwareAdapters;
-    let create_gpu_host =
-        |policy, software| create_gpu_host_with_adapter(policy, adapter_policy, software);
+    let create_gpu_host = |policy| create_gpu_host_with_adapter(policy, adapter_policy, renderer);
     match renderer {
-        RendererPolicy::Gpu => create_gpu_host(policy, SoftwareAdapters::Allow),
+        RendererPolicy::Gpu => create_gpu_host(policy),
         RendererPolicy::Cpu => create_cpu_host(policy, "requested (--renderer cpu)".to_owned()),
-        RendererPolicy::Auto => match create_gpu_host(policy, SoftwareAdapters::Refuse) {
+        RendererPolicy::Auto => match create_gpu_host(policy) {
             Ok(host) => {
                 let software = host
                     .renderer
@@ -648,10 +646,20 @@ fn create_cpu_host(policy: VideoDecodePolicy, reason: String) -> Result<Host, Ho
 
 /// A pin naming no adapter is the request's error; a DX12 backend whose shader compiler did not
 /// load is an installation defect no renderer policy works around (`details.cause` is
-/// `shader-compiler`); anything else is the GPU's.
-fn gpu_init_error(error: alpha2_gpu::GpuError) -> HostError {
+/// `shader-compiler`); `gpu` without a hardware adapter is [`no_hardware_adapter`]; anything else
+/// is the GPU's.
+fn gpu_init_error(
+    error: alpha2_gpu::GpuError,
+    renderer: crate::config::RendererPolicy,
+    adapter_policy: &crate::adapter_choice::AdapterPolicy,
+) -> HostError {
     match error.step() {
         alpha2_gpu::GpuAcquisitionStep::Pin => HostError::invalid_input(error.to_string()),
+        alpha2_gpu::GpuAcquisitionStep::NoHardwareAdapter
+            if renderer == crate::config::RendererPolicy::Gpu =>
+        {
+            no_hardware_adapter(adapter_policy, error.adapters_seen().to_vec())
+        }
         alpha2_gpu::GpuAcquisitionStep::Instance => HostError::new(
             "GPU_INIT_FAILED",
             format!(
@@ -667,6 +675,117 @@ fn gpu_init_error(error: alpha2_gpu::GpuError) -> HostError {
 
 const SHADER_COMPILER_CAUSE: &str = "shader-compiler";
 
+fn refuse_unpinned_software_adapter(
+    host: &Host,
+    adapter_policy: &crate::adapter_choice::AdapterPolicy,
+) -> Result<(), HostError> {
+    let Some(renderer) = host.renderer.gpu() else {
+        return Ok(());
+    };
+    let capabilities = renderer.gpu_capabilities();
+    let backend = [
+        wgpu::Backend::Vulkan,
+        wgpu::Backend::Metal,
+        wgpu::Backend::Dx12,
+        wgpu::Backend::Gl,
+    ]
+    .into_iter()
+    .find(|backend| format!("{backend:?}") == capabilities.backend)
+    .map_or("unknown", wgpu::Backend::to_str);
+    explicit_gpu_adapter(
+        adapter_policy,
+        capabilities
+            .software_rasterizer
+            .then(|| (capabilities.adapter_name.clone(), backend)),
+        host.adapter_choice
+            .as_ref()
+            .map(|report| report.records.clone())
+            .unwrap_or_default(),
+    )
+}
+
+pub(crate) fn explicit_gpu_adapter(
+    adapter_policy: &crate::adapter_choice::AdapterPolicy,
+    software_renderer_adapter: Option<(String, &'static str)>,
+    mut records: Vec<alpha2_gpu::AdapterRecord>,
+) -> Result<(), HostError> {
+    let Some((name, backend)) = software_renderer_adapter.filter(|_| !adapter_policy.is_pin())
+    else {
+        return Ok(());
+    };
+    if !records.iter().any(|record| record.name == name) {
+        let mut record = alpha2_gpu::AdapterRecord::unasked(records.len(), name, backend, true);
+        record.renders = Ok(());
+        records.push(record);
+    }
+    Err(no_hardware_adapter(adapter_policy, records))
+}
+
+pub(crate) fn no_hardware_adapter(
+    adapter_policy: &crate::adapter_choice::AdapterPolicy,
+    records: Vec<alpha2_gpu::AdapterRecord>,
+) -> HostError {
+    use crate::adapter_choice::AdapterPolicy;
+    let seen = if records.is_empty() {
+        "no adapter".to_owned()
+    } else {
+        records
+            .iter()
+            .map(|record| {
+                let kind = if record.software {
+                    "software"
+                } else {
+                    "hardware"
+                };
+                let base = format!(
+                    "[{}] {} ({}, {kind})",
+                    record.index, record.name, record.backend
+                );
+                match &record.renders {
+                    Err(reason) if !record.software => format!("{base}: {reason}"),
+                    _ => base,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let pin = records.iter().find(|record| record.software).map_or_else(
+        || "ALPHA2_GPU_ADAPTER=<name>".to_owned(),
+        |record| {
+            if record.name.chars().all(|c| c.is_ascii_alphanumeric()) {
+                AdapterPolicy::Name(record.name.clone()).setting()
+            } else {
+                format!("ALPHA2_GPU_ADAPTER=\"{}\"", record.name)
+            }
+        },
+    );
+    let report = crate::adapter_choice::AdapterChoiceReport {
+        policy: adapter_policy.clone(),
+        chosen: None,
+        reason: alpha2_gpu::ChoiceReason::NoHardwareAdapter,
+        explanation: format!(
+            "no hardware adapter renders, and {} pins no software adapter",
+            adapter_policy.setting()
+        ),
+        records,
+    };
+    let mut error = HostError::new(
+        "GPU_INIT_FAILED",
+        format!(
+            "--renderer gpu found no hardware adapter: {seen}; render on the CPU with --renderer \
+             cpu, or pin a software adapter with {pin}"
+        ),
+    )
+    .with_details(json!({
+        "cause": NO_HARDWARE_ADAPTER_CAUSE,
+        "adapterChoice": crate::adapter_choice::adapter_choice_json(&report),
+    }));
+    error.evidence = Some(crate::failure::NO_HARDWARE_ADAPTER);
+    error
+}
+
+const NO_HARDWARE_ADAPTER_CAUSE: &str = "no-hardware-adapter";
+
 #[cfg(test)]
 thread_local! {
     /// Gives the next GPU host this thread makes an 8-bit intermediate, as some adapters have.
@@ -675,18 +794,16 @@ thread_local! {
 }
 
 /// Picks among the DX12 adapters on Windows, the Vulkan adapters that can carry the shared video
-/// device on Linux, and the one Metal device on macOS ([`alpha2_gpu::rank_adapters`]). `software`
-/// says whether a software adapter is acceptable.
+/// device on Linux, and the one Metal device on macOS ([`alpha2_gpu::rank_adapters`]). A software
+/// adapter is taken only when nothing else renders or a pin names it; `gpu` then refuses one
+/// nothing pinned ([`refuse_unpinned_software_adapter`]), and `auto` lets its host go for the CPU
+/// renderer.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn create_gpu_host_with_adapter(
     policy: VideoDecodePolicy,
     adapter_policy: &crate::adapter_choice::AdapterPolicy,
-    software: alpha2_gpu::SoftwareAdapters,
+    renderer_policy: crate::config::RendererPolicy,
 ) -> Result<Host, HostError> {
-    // The Windows scan opens a software adapter only when nothing else renders; `auto` then
-    // lets that host go for the CPU renderer below.
-    #[cfg(all(target_os = "windows", feature = "hwdevice"))]
-    let _ = software;
     // Without hardware decode, `hardware-required` would decode every frame in software under the
     // mode's name.
     if policy.requires_hardware()
@@ -709,11 +826,12 @@ pub(crate) fn create_gpu_host_with_adapter(
     let request_default = || {
         pollster::block_on(alpha2_gpu::GpuContext::request_product_with(
             &alpha2_gpu::ProductRequest {
-                software,
+                software: alpha2_gpu::SoftwareAdapters::Refuse,
+                adapter: Some(adapter_policy.clone()),
                 ..alpha2_gpu::ProductRequest::default()
             },
         ))
-        .map_err(gpu_init_error)
+        .map_err(|error| gpu_init_error(error, renderer_policy, adapter_policy))
     };
     // The renderer goes on the shared Vulkan device, so a non-Vulkan backend skips it.
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
@@ -781,7 +899,7 @@ pub(crate) fn create_gpu_host_with_adapter(
                         format!("DX12 unavailable: {error}"),
                     ));
                 }
-                return Err(gpu_init_error(error));
+                return Err(gpu_init_error(error, renderer_policy, adapter_policy));
             }
         }
     };
@@ -919,6 +1037,9 @@ pub(crate) fn create_gpu_host_with_adapter(
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     report_dx12_encode(&host, encode_on_gpu);
     report_adapter_choice(&host);
+    if renderer_policy == crate::config::RendererPolicy::Gpu {
+        refuse_unpinned_software_adapter(&host, adapter_policy)?;
+    }
     host.device_mut().gpu_log = gpu_log;
     // Read now, before an upgrade can replace the file this process runs.
     if let Err(reason) = crate::host::host_binary_digest() {

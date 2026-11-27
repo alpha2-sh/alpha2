@@ -131,6 +131,7 @@ jobs:
     timeout-minutes: 45
     env:
       ALPHA2_REQUIRE: c-compiler,ffmpeg-tools
+      ALPHA2_GPU_ADAPTER: llvmpipe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free disk space
@@ -254,6 +255,7 @@ jobs:
     timeout-minutes: 45
     env:
       ALPHA2_REQUIRE: wasm,browser,python,host
+      ALPHA2_GPU_ADAPTER: llvmpipe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install native media build dependencies
@@ -337,6 +339,7 @@ jobs:
     timeout-minutes: 30
     env:
       ALPHA2_REQUIRE: openh264,c-compiler
+      ALPHA2_GPU_ADAPTER: llvmpipe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install native media build dependencies
@@ -487,6 +490,7 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_RENDERER: cpu
+          ALPHA2_GPU_ADAPTER: llvmpipe
         run: cargo test --release -p alpha2-host --no-fail-fast 2>&1 | tee target/test-logs/host.log
       - name: Without any graphics driver, and with only lavapipe, auto renders on the CPU
         id: auto-cpu
@@ -529,6 +533,7 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_RENDERER: cpu
+          ALPHA2_GPU_ADAPTER: llvmpipe
         run: >-
           cargo test --release -p alpha2-host --no-default-features --no-fail-fast 2>&1
           | tee target/test-logs/host-minimal.log
@@ -816,7 +821,7 @@ jobs:
           import json, os, struct, subprocess
           header = json.dumps({"protocolVersion": 2, "requestId": "c", "operation": "capabilities"})
           frame = struct.pack("<II", len(header), 0) + header.encode()
-          env = {**os.environ, "ALPHA2_RENDERER": "gpu"}
+          env = {**os.environ, "ALPHA2_RENDERER": "gpu", "ALPHA2_GPU_ADAPTER": "Microsoft Basic Render"}
           run = subprocess.run(["target/debug/alpha2-host", "serve"], input=frame, env=env,
                                capture_output=True, check=True)
           out = run.stdout[run.stdout.index(b"\x89A2HOST\n") + 8:]
@@ -992,6 +997,9 @@ jobs:
           echo "ALPHA2_OPENH264_LIBRARY=$library" >> "$GITHUB_ENV"
       - name: Build the plugins the tests pack
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
+      - name: Pin WARP, the runner's software adapter
+        if: runner.os == 'Windows'
+        run: echo "ALPHA2_GPU_ADAPTER=Microsoft Basic Render" >> "$GITHUB_ENV"
       - uses: ./.github/actions/test-watchdog
       - name: Adapters
         id: ready

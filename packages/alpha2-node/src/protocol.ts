@@ -88,6 +88,8 @@ export type HostState = "ready" | "draining";
 export interface HostStateDetails {
   /** The host's alpha2 release; a client refuses a `ready` host of another one. */
   readonly hostVersion?: string;
+  /** The project `schema_version` the host reads and writes. */
+  readonly projectSchemaVersion?: number;
   readonly activity?: "idle" | "busy";
   readonly requestsServed?: number;
   readonly memory?: {

@@ -1801,7 +1801,8 @@ impl Host {
                         "effect {id}@{version} is a runtime WGSL effect, which has no CPU \
                          implementation, and this host renders on the CPU (no hardware GPU, or \
                          --renderer cpu); remove the effect, or render on a GPU adapter with \
-                         --renderer gpu (a software adapter such as lavapipe works, much slower)"
+                         --renderer gpu (a software adapter such as lavapipe works, much slower, \
+                         once ALPHA2_GPU_ADAPTER pins it)"
                     ),
                 )),
                 Some(_) => Err(crate::protocol::code_tag(
@@ -3433,6 +3434,7 @@ impl Host {
                 "rendererReason": self.renderer_reason,
                 "rendererThreads": self.renderer.cpu().map(CpuRenderer::threads),
                 "adapter": adapter.name,
+                "softwareAdapter": false,
                 "backend": adapter.backend,
                 "driver": adapter.driver,
                 "driverInfo": adapter.driver_info,
@@ -3455,6 +3457,7 @@ impl Host {
             "renderer": "gpu",
             "rendererReason": self.renderer_reason,
             "adapter": diagnostics.adapter.name,
+            "softwareAdapter": renderer.gpu_capabilities().software_rasterizer,
             "backend": diagnostics.adapter.backend,
             "driver": diagnostics.adapter.driver,
             "driverInfo": diagnostics.adapter.driver_info,

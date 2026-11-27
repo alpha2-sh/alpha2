@@ -235,6 +235,12 @@
     }
   },
   {
+    "id": "ready-names-its-schema-version",
+    "kind": "schema-version",
+    "given": { "projectSchemaVersion": 1 },
+    "expect": { "projectSchemaVersion": 1, "releaseIsTheClients": true }
+  },
+  {
     "id": "start-timeout-carries-the-preamble",
     "kind": "start-timeout",
     "given": {

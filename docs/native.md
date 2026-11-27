@@ -30,6 +30,25 @@ gh attestation verify alpha2-<version>-<target>-bundled.tar.gz --repo alpha2-sh/
 
 `checksums.sha256` comes from the same release as the archives, so it catches a damaged download but not a replaced one; the attestation, and the installers' pins below, do.
 
+### Signing the macOS host into an application
+
+The macOS archive is signed ad hoc and not notarized. An application that ships the host inside its own signed, notarized bundle signs it again with its own Developer ID Application identity; the archive needs no rebuild for that. [`scripts/sign-macos-host.sh`](https://github.com/alpha2-sh/alpha2/blob/main/scripts/sign-macos-host.sh) `<archive-root> <identity> [<entitlements>]` does it in this order and checks the result:
+
+1. Every `lib/*.dylib`, then `bin/alpha2`, then `bin/alpha2-host`, each with `codesign --force --sign <identity> --options runtime --timestamp` (the hardened runtime and a secure timestamp, both of which notarization requires; an ad hoc identity, `-`, takes no timestamp). Only `bin/alpha2-host` takes the entitlements file.
+2. `codesign --verify --deep --strict` on every file it signed.
+3. `bin/alpha2-host serve` must answer a `capabilities` request, which proves the signed host loads its signed libraries.
+
+Sign the enclosing application bundle after the script, as its own last step. Keep `bin/` and `lib/` together inside it (in `Contents/Resources` or `Contents/Helpers`, for example): the programs find the libraries at `@executable_path/../lib`.
+
+Two entitlement sets are supported, as files in `release/macos/`:
+
+- `library-validation.entitlements` (no entitlement, the same as passing none): library validation stays on, so the host loads only code signed by the application's own team. A replaced FFmpeg library must be signed again with that team, and Cisco's OpenH264, which Cisco signs with its own team, does not load; encode H.264 with the Mac's hardware encoder instead.
+- `disable-library-validation.entitlements` (`com.apple.security.cs.disable-library-validation` on the host only): replaced libraries and Cisco's OpenH264 load. `bin/alpha2` keeps library validation.
+
+Neither set needs the JIT or unsigned-executable-memory entitlements. After notarizing the application, `spctl --assess --type execute --verbose <application>` reports whether Gatekeeper accepts it, and the host's own `capabilities` run in the installed application shows that it starts there. Notarization and Gatekeeper's verdict depend on the application's team and Apple's service, so this repository does not test them. Which set a distribution offers is the integrator's choice; [FFmpeg and the LGPL](#ffmpeg-and-the-lgpl) states what each means for replacing the libraries.
+
+There is no macOS x64 archive: an Intel Mac has no host.
+
 ### The host cache
 
 `npx @alpha2-sh/node install` downloads the archive of the package's own version for the platform, checks it, and unpacks it into a cache that clients share. A client for another language that installs the host should use the same layout, so one download serves both:
@@ -62,11 +81,11 @@ gh attestation verify alpha2-<version>-<target>-bundled.tar.gz --repo alpha2-sh/
 
 - `auto` (the default) renders on a hardware GPU when the machine has one, and otherwise on the CPU. It never takes a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader), which draws the same pictures many times slower.
 - `cpu` renders on the CPU and opens no graphics driver at all: a CPU-only server, a container or a serverless function needs nothing but the host archive.
-- `gpu` renders on whatever GPU adapter it finds, software ones included, and fails with `GPU_INIT_FAILED` when there is none.
+- `gpu` renders on a hardware GPU adapter. When no hardware adapter renders, the host does not start: it fails with `GPU_INIT_FAILED`, a permanent failure (class `INVALID_INPUT`), whose message lists every adapter it saw with its backend and whether it is a software adapter, and names the two remedies, `--renderer cpu` or a pin; `details.adapterChoice` carries the same records as `capabilities.adapters`. A software adapter renders under `gpu` only when `ALPHA2_GPU_ADAPTER` pins it (by name or number, as below), and every result and `capabilities.gpu` then say `softwareAdapter: true`.
 
 The CPU renderer draws the same render graph as the GPU, pass for pass, and its pictures are the same bytes on every machine and for any number of threads. It draws every built-in effect and transition; an effect defined as WGSL in the export request needs a GPU, and an export that uses one on a CPU host fails with `EFFECT_ERROR` before any output is written (render it with `--renderer gpu`). It decodes video in software and feeds the encoders that take frames in memory, so H.264 needs an H.264 encoder that does (OpenH264 below, NVENC, or `libx264` from a system FFmpeg). `ALPHA2_RENDER_THREADS` sets its threads; it takes every thread the process may run on by default.
 
-Every result says which renderer drew it: `renderer` (`gpu` or `cpu`), `rendererReason` (why `auto` chose the CPU), and on the CPU `rendererThreads` and, in `performance`, `cpuRenderMs`. `capabilities` reports `renderer.gpu`, `renderer.cpu` and `effects.runtime` in `features`.
+Every result says which renderer drew it: `renderer` (`gpu` or `cpu`), `rendererReason` (why `auto` chose the CPU), `softwareAdapter` (whether the adapter rasterizes in software), and on the CPU `rendererThreads` and, in `performance`, `cpuRenderMs`. `capabilities` reports `renderer.gpu`, `renderer.cpu` and `effects.runtime` in `features`.
 
 ### Which GPU adapter
 
@@ -76,7 +95,15 @@ On a machine with several GPUs, `alpha2-host` chooses the adapter it renders on 
 - `performance` (the default on Windows) takes the first hardware adapter in the high-performance order, whatever it encodes or decodes. Windows does not default to `auto` because, with the wgpu version this release builds on, some Intel integrated GPUs draw leftover memory into DX12 textures that should start cleared, and `auto` would put a hybrid laptop's renderer on such a GPU; set `ALPHA2_GPU_ADAPTER=auto` there to render on the GPU that encodes, accepting that risk.
 - A number takes the adapter at that position of the backend's enumeration (DX12 on Windows, Vulkan on Linux), and any other text the first adapter whose name contains it, ignoring case. A setting that names no adapter refuses to start with `INVALID_INPUT` listing the adapters.
 
-Software adapters come last unless named. `capabilities` reports the choice as `adapters`: the policy, the chosen adapter's index, the reason (`most-gpu-encoders`, `decodes`, `high-performance-order`, `performance-policy`, `pinned`, `only-adapter` or `no-shared-device`), a sentence naming the chosen adapter and the runner-up (on Windows with the setting unset, also where `auto` would render), and every candidate with what it renders, decodes and encodes on the GPU, or why not. A failure report carries the same object as `environment.adapterChoice`, and the host's start line on standard error states it.
+Software adapters come last unless named. `capabilities` reports the choice as `adapters`: the policy, the chosen adapter's index, the reason (`most-gpu-encoders`, `decodes`, `high-performance-order`, `performance-policy`, `pinned`, `only-adapter` or `no-shared-device`, and in the details of a `gpu` host that does not start, `no-hardware-adapter`), a sentence naming the chosen adapter and the runner-up (on Windows with the setting unset, also where `auto` would render), and every candidate with what it renders, decodes and encodes on the GPU, or why not. A failure report carries the same object as `environment.adapterChoice`, and the host's start line on standard error states it.
+
+### GPU containers
+
+A container sees the GPU only through the driver files its runtime mounts. With the NVIDIA Container Toolkit:
+
+- `NVIDIA_DRIVER_CAPABILITIES` must include `graphics` (the Vulkan and EGL driver), `video` (NVENC and NVDEC) and `compute`; the toolkit's default, `utility,compute`, mounts neither the Vulkan driver nor the video encoder. `NVIDIA_DRIVER_CAPABILITIES=all` includes them.
+- The Vulkan loader finds the driver through its ICD manifest, `/usr/share/vulkan/icd.d/nvidia_icd.json` (or `/etc/vulkan/icd.d/`), which names `libGLX_nvidia.so.0`; GL and EGL find it through the glvnd vendor file `/usr/share/glvnd/egl_vendor.d/10_nvidia.json`, which names `libEGL_nvidia.so.0`. An image built on a base without the driver packages may lack both files; the toolkit mounts the libraries, not always the manifests, so the image adds them. Without them the only adapters left are Mesa's software ones (lavapipe, llvmpipe).
+- Check the result before sending work: `capabilities.adapters.candidates` lists every adapter the host saw with `software` and `renders`, `capabilities.gpu.adapter` and `softwareAdapter` name the one it renders on, and the host's start line on standard error (`alpha2-host GPU: <adapter> (<backend>), ...`) says the same. `--renderer gpu` (`ALPHA2_RENDERER=gpu`) on a container that sees only software adapters fails at start with `GPU_INIT_FAILED` listing them, where `auto` would render on the CPU.
 
 ### Hardware decoding and encoding
 
@@ -105,7 +132,7 @@ The runtime is LGPL and has no software H.264 encoder of its own. H.264 (the def
 - Windows: Media Foundation's `h264_mf`, which is a software transform unless `ALPHA2_VIDEO_ENCODER_HYBRID=hardware` asks for the hardware one, D3D12 Video on the GPU-resident path, and NVENC (driver 531.61 or newer).
 - Everywhere: OpenH264, when it is installed (below).
 
-The order is hardware encoders first, then `libx264` (from a system FFmpeg a source build links), then OpenH264. When no encoder takes the export's frames, the export fails with `INVALID_INPUT` naming why the GPU-resident path was not taken, what the runtime offers, whether OpenH264 is installed, and the ways out. `capabilities` reports the same before any export: `encode.h264.status` is `available`, `gpu-only` (only the GPU-resident path encodes H.264, so an export it declines fails) or `unavailable`, with `reason` and `remedy`.
+The order is hardware encoders first, then `libx264` (from a system FFmpeg a source build links), then OpenH264. When no encoder takes the export's frames, the export fails with `INVALID_INPUT` naming why the GPU-resident path was not taken, what the runtime offers, whether OpenH264 is installed, and the ways out. `capabilities` reports the same before any export: `encode.h264.status` is `available`, `gpu-only` (only the GPU-resident path encodes H.264, so an export it declines fails) or `unavailable`, with `reason` and `remedy`. A pinned encoder that takes GPU frames only (`--video-encoder h264_vulkan` on Linux, `h264_d3d12va` on Windows) needs the GPU-resident path: without its shared device the export fails with `GPU_OUTPUT_UNAVAILABLE` naming the device that was not made and why, the reason the host's start line on standard error also gives.
 
 ### OpenH264 (software H.264)
 
@@ -161,7 +188,7 @@ The archives are the way to get the programs with the FFmpeg runtime alpha2 is r
 
 ## FFmpeg and the LGPL
 
-The FFmpeg in the archives is FFmpeg 8 built as shared libraries under the LGPL 2.1 or later, with its GPL and nonfree components disabled. alpha2 links it dynamically, and the libraries of a `bundled` archive can be replaced with a build of the same FFmpeg release series (8.1.x) and the same configuration. Another series, FFmpeg 8.0 among them, can change the layout of structures the hardware paths read while keeping the same library names.
+The FFmpeg in the archives is FFmpeg 8 built as shared libraries under the LGPL 2.1 or later, with its GPL and nonfree components disabled. alpha2 links it dynamically, and the libraries of a `bundled` archive can be replaced with a build of the same FFmpeg release series (8.1.x) and the same configuration. In a macOS application that signs the host with library validation on, a replaced library loads only once it is signed with the same identity as the host, which means signing the application again ([`release/ffmpeg-lgpl/README.md`](https://github.com/alpha2-sh/alpha2/blob/main/release/ffmpeg-lgpl/README.md#signing-on-macos)). Another series, FFmpeg 8.0 among them, can change the layout of structures the hardware paths read while keeping the same library names.
 
 Each archive's `compliance/` directory holds:
 

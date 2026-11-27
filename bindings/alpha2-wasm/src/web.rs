@@ -2012,18 +2012,18 @@ impl WebEffectRegistry {
     /// throws.
     #[wasm_bindgen(js_name = capabilityReport)]
     pub fn capability_report(&self) -> Result<String, JsValue> {
-        let report = alpha2_engine::CapabilityReport::new(
-            alpha2_engine::Runtime::Browser,
-            &self.renderer,
-        )
-        .with_feature("renderer.gpu", alpha2_engine::Feature::available())
-        .with_feature(
-            "renderer.cpu",
-            alpha2_engine::Feature::unavailable(
-                "this renderer draws on a GPU; createCpu makes the one that draws on the CPU",
-            ),
-        )
-        .with_feature("effects.runtime", alpha2_engine::Feature::available());
+        let mut report =
+            alpha2_engine::CapabilityReport::new(alpha2_engine::Runtime::Browser, &self.renderer);
+        report.gpu.software_adapter |= self.adapter_info.software();
+        let report = report
+            .with_feature("renderer.gpu", alpha2_engine::Feature::available())
+            .with_feature(
+                "renderer.cpu",
+                alpha2_engine::Feature::unavailable(
+                    "this renderer draws on a GPU; createCpu makes the one that draws on the CPU",
+                ),
+            )
+            .with_feature("effects.runtime", alpha2_engine::Feature::available());
         let report = if self.browser_webgpu {
             report
         } else {

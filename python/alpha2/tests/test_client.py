@@ -2631,6 +2631,18 @@ def versioned_host(pids: Path, host_version: str | None) -> str:
     """
 
 
+def schema_version_host(project_schema_version: int) -> str:
+    named = {"release": alpha2.__version__, "projectSchemaVersion": project_schema_version}
+    details = {"hostVersion": named["release"], "projectSchemaVersion": project_schema_version}
+    capabilities = {"schema": "alpha2-capabilities", "version": 3, **named}
+    result = {"status": "ready", "capabilities": capabilities, "effectCatalog": {}}
+    return f"""
+    begin()
+    write_message({{"type": "state", "state": "ready", "reason": "started", "details": {details!r}}})
+    serve(lambda request: send(request, ok=True, result={result!r}))
+    """
+
+
 def refused(client: HostClient) -> Alpha2HostError:
     with pytest.raises(Alpha2HostError) as caught:
         client.export(**export_args("out.mp4"))
@@ -2989,6 +3001,15 @@ def run_host_version(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHo
             assert_hosts_ended(pids)
 
 
+def run_schema_version(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    host = schema_version_host(scenario["given"]["projectSchemaVersion"])
+    host_path = fake_host(tmp_path, host, ready=False)
+    capabilities = HostClient(host_path=host_path).capabilities()["capabilities"]
+    assert capabilities["projectSchemaVersion"] == scenario["expect"]["projectSchemaVersion"]
+    if scenario["expect"]["releaseIsTheClients"]:
+        assert capabilities["release"] == alpha2.__version__
+
+
 def run_start_timeout(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
     given = scenario["given"]
     host = preamble_host(tmp_path / "pids", given["stdout"], given["stderr"])
@@ -3135,6 +3156,7 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "cache-directory": run_cache_directory,
     "install-generation": run_install_generation,
     "host-version": run_host_version,
+    "schema-version": run_schema_version,
     "start-timeout": run_start_timeout,
 }
 

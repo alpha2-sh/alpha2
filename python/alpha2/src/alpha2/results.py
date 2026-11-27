@@ -52,7 +52,8 @@ class AdapterCandidate(TypedDict):
     index: int
     """Its position in the backend's enumeration, which an ``ALPHA2_GPU_ADAPTER`` number names."""
     name: str
-    backend: Literal["dx12", "vulkan", "metal"]
+    backend: Literal["dx12", "vulkan", "metal", "gl"]
+    """``gl`` only in the details of a failed start."""
     luid: str | None
     """The DXGI adapter LUID as hex (``0x...``); ``None`` off Windows."""
     software: bool
@@ -85,6 +86,7 @@ class AdapterChoice(TypedDict):
         "pinned",
         "only-adapter",
         "no-shared-device",
+        "no-hardware-adapter",
     ]
     explanation: str
     """One sentence naming the chosen adapter, and the runner-up where the reason compares them."""
@@ -115,6 +117,9 @@ class ExportResult(TypedDict):
     """The encoders tried before ``videoEncoder``, in the order tried."""
     adapter: str
     """The GPU adapter that rendered, or the CPU renderer's name."""
+    softwareAdapter: bool
+    """Whether ``adapter`` rasterizes in software, which happens only when ``ALPHA2_GPU_ADAPTER``
+    pins it; ``False`` on the CPU renderer."""
     hardwareDecodeReady: NotRequired[bool]
     """Whether the host could decode video on the GPU when the export ran."""
     hardwareDecodeUnavailable: NotRequired[str | None]

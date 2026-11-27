@@ -299,10 +299,12 @@ decoded, on `HostClient(...)` for every request or per call to `export`, `still`
 `auto` renderer, and `auto` decode on Linux and macOS, `software` on Windows.
 
 - `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software
-  GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader). `gpu` takes whatever adapter the host finds
-  and fails with `GPU_INIT_FAILED` without one; `cpu` opens no graphics driver.
+  GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader). `gpu` renders on a hardware adapter, or on a
+  software one only when `ALPHA2_GPU_ADAPTER` pins it, and fails with `GPU_INIT_FAILED` otherwise;
+  `cpu` opens no graphics driver.
 - Results and capabilities report `renderer` (`"gpu"` or `"cpu"`), `rendererReason` (why the host
-  renders on the CPU) and, on the CPU, `rendererThreads`; the capability report's
+  renders on the CPU), `softwareAdapter` (a pinned software adapter renders) and, on the CPU,
+  `rendererThreads`; the capability report's
   `["capabilities"]["features"]` has `renderer.gpu`, `renderer.cpu` and `effects.runtime`. A
   runtime WGSL effect cannot run on the CPU renderer: such an export fails with `EFFECT_ERROR`.
 - Under `auto` decode, an export whose hardware decoder stalls runs once more decoding in software.

@@ -7,6 +7,7 @@ import {
 } from "../core/document.js";
 import { captionsAsset } from "../core/captions.js";
 import {
+  CURRENT_SCHEMA_VERSION,
   MAX_CAPTION_FILE_BYTES,
   providerKind,
   providerReadsFile,
@@ -872,12 +873,14 @@ export function createBrowserBridge(options) {
         "Codec availability is checked at export, which renders on the CPU where the browser offers no hardware GPU; output streams to a temporary origin-private file unless a file or memory output is chosen",
     },
   });
-  /** The page's capability report; GPU and color are known once a preview is bound. */
+  /** The page's capability report; release, GPU and color are known once a preview is bound. */
   let capabilities = capabilityReport(null);
   function capabilityReport(rendered) {
     return Object.freeze({
       schema: "alpha2-capabilities",
-      version: 2,
+      version: 3,
+      release: rendered?.release ?? null,
+      projectSchemaVersion: CURRENT_SCHEMA_VERSION,
       runtime: "browser",
       gpu: rendered?.gpu ?? null,
       color: rendered?.color ?? null,
