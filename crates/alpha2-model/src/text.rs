@@ -196,9 +196,9 @@ pub(crate) const fn default_animator_pivot() -> Vec2 {
     Vec2::new(0.5, 0.5)
 }
 
-#[expect(
+#[allow(
     clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if passes a reference"
+    reason = "serde passes a reference; the lint fires only where a pointer is as wide as a Vec2"
 )]
 pub(crate) fn is_default_animator_pivot(pivot: &Vec2) -> bool {
     *pivot == default_animator_pivot()
