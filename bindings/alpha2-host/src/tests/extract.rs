@@ -65,13 +65,42 @@ fn run_client(
             }
             continue;
         }
-        let emits = if message["step"] == "video" {
-            let [hi, lo] = digest_values(fnv1a(attachments.iter().copied()));
-            json!([{ "output": "digest", "time": message["time"], "values": [hi, lo] }])
-        } else {
-            json!([])
-        };
-        serving.write(&json!({ "protocolVersion": 2, "operation": "extract.ack", "requestId": id, "seq": seq, "emits": emits }).to_string());
+        answer_step(serving, id, &message, &attachments);
+    }
+}
+
+fn answer_step(serving: &mut ServeChild, id: &str, message: &Value, attachments: &[u8]) {
+    let emits = if message["step"] == "video" {
+        let [hi, lo] = digest_values(fnv1a(attachments.iter().copied()));
+        json!([{ "output": "digest", "time": message["time"], "values": [hi, lo] }])
+    } else {
+        json!([])
+    };
+    serving.write(&json!({ "protocolVersion": 2, "operation": "extract.ack", "requestId": id, "seq": message["seq"], "emits": emits }).to_string());
+}
+
+fn run_recording(serving: &mut ServeChild, id: &str) -> (Value, Vec<Value>) {
+    let mut seen = Vec::new();
+    loop {
+        let (message, attachments) = serving.message_with_attachments(Duration::from_secs(120));
+        if message["type"] == "state" || message["requestId"] != id {
+            continue;
+        }
+        if message["type"] == "progress" {
+            let mut report = message.clone();
+            let fields = report.as_object_mut().expect("object");
+            for envelope in ["protocolVersion", "type", "requestId", "phase"] {
+                fields.remove(envelope);
+            }
+            assert_eq!(message["phase"], "extract", "{message}");
+            seen.push(report);
+            continue;
+        }
+        if message["type"] != "extract.step" {
+            return (message, seen);
+        }
+        seen.push(message["step"].clone());
+        answer_step(serving, id, &message, &attachments);
     }
 }
 
@@ -121,6 +150,32 @@ fn a_client_extractor_gives_the_data_the_rust_one_does() {
     assert!(sets[0].made_from.is_some());
     // begin, pass, ten frames, end.
     assert_eq!(steps, 13);
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn a_run_reports_its_begin_each_pass_each_delivery_and_its_end() {
+    let _gpu = gpu_test_lock();
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    serving.write(&extract("x", 40_000));
+    let (answer, seen) = run_recording(&mut serving, "x");
+    assert_eq!(answer["ok"], true, "{answer}");
+    let report = |stage: &str, completed: u64, covered: u64| {
+        json!({ "stage": stage, "pass": 0, "completed": completed, "total": null,
+                "covered": covered, "span": 40_000 })
+    };
+    let mut expected = vec![
+        report("begin", 0, 0),
+        json!("begin"),
+        report("pass", 0, 0),
+        json!("pass"),
+    ];
+    for frame in 0..10 {
+        expected.push(json!("video"));
+        expected.push(report("pass", frame + 1, frame * 4_000));
+    }
+    expected.extend([report("end", 10, 40_000), json!("end")]);
+    assert_eq!(seen, expected);
     assert_eq!(serving.finish(), Some(0));
 }
 
