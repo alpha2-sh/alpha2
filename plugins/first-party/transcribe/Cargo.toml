@@ -1,7 +1,7 @@
 [package]
 name = "alpha2-plugin-transcribe"
 description = "Words with their times, from a whisper.cpp model the caller supplies, as an alpha2 plugin."
-version = "1.0.1"
+version = "1.0.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -9,6 +9,11 @@ publish.workspace = true
 
 [package.metadata.alpha2-plugin]
 wasm = false
+
+[package.metadata.alpha2-plugin.native-env]
+GGML_NATIVE = "OFF"
+GGML_CCACHE = "OFF"
+CMAKE_PROJECT_INCLUDE = { path = "cmake/whisper.cmake" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]

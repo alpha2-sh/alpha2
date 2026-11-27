@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-transcribe"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "alpha2-plugin-abi",
  "alpha2-plugin-sdk",
