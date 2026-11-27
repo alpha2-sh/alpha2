@@ -3,7 +3,8 @@
 Specs and templates compile in this process and ``alpha2-host`` renders. Relative paths are read
 from the server's working directory. Every file a tool reads or writes (a spec, template or project
 file, the media and caption files a spec names, an output) must lie under one of the server's roots
-once links are resolved; the template directories and fonts given at start are read without one.
+once links are resolved, which a URL never does; the template directories and fonts given at start
+are read without one.
 A file argument must be a regular file of at most ``MAX_PROJECT_JSON_BYTES``. Every request with an
 ``id`` gets one reply: a failure inside a tool is a tool error, any other a JSON-RPC error, and only
 the end of input, ``KeyboardInterrupt`` or ``SystemExit`` ends the server.
@@ -27,7 +28,7 @@ from typing import IO, Any, cast
 from . import _native
 from . import compose as _compose
 from .builder import TICKS_PER_SECOND, seconds_to_ticks, ticks
-from .client import HostClient, _absolute
+from .client import _URL_SCHEME, HostClient, _absolute
 from .errors import Alpha2ComposeError, Alpha2HostError, Alpha2InternalError
 
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -281,7 +282,7 @@ class Server:
             return self._client
 
     def confined(self, path: str, real: str) -> str:
-        if not any(_under(real, root) for root in self._real_roots):
+        if _URL_SCHEME.match(path) or not any(_under(real, root) for root in self._real_roots):
             raise ToolError(
                 f"{path} is outside the directories this server may use "
                 f"({', '.join(self._real_roots)}); start it with --root to add one",

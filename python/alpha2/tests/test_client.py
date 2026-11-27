@@ -184,6 +184,56 @@ def test_the_plugins_option_becomes_the_serve_flags_and_a_malformed_one_starts_n
     assert lines_in(starts) == []
 
 
+def test_the_remote_media_option_becomes_the_serve_flags_and_a_malformed_one_starts_no_host(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    starts = tmp_path / "starts"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+    record({str(starts)!r}, json.dumps(sys.argv[1:]))
+    request, _ = read_request()
+    send(request, ok=True, result={{"status": "ready", "capabilities": {{}}, "effectCatalog": {{}}}})
+    """,
+    )
+
+    def flags(remote_media: Any) -> list[list[str]]:
+        starts.unlink(missing_ok=True)
+        with HostClient(host_path=host_path, remote_media=remote_media) as client:
+            client.capabilities()
+        return [json.loads(line) for line in lines_in(starts)]
+
+    assert flags(None) == [[]]
+    assert flags(
+        {
+            "origins": ["https://media.example", "https://cdn.example:8443"],
+            "private_addresses": "allow",
+        }
+    ) == [
+        [
+            "--media-origins",
+            "https://media.example,https://cdn.example:8443",
+            "--media-private-addresses",
+            "allow",
+        ]
+    ]
+    assert flags({"origins": "none"}) == [["--media-origins", "none"]]
+    starts.unlink(missing_ok=True)
+    for refused in [
+        {"origins": []},
+        {"origins": ["http://media.example"]},
+        {"origins": "https://media.example"},
+        {"private_addresses": "some"},
+        {"privateAddresses": "allow"},
+        "listed",
+    ]:
+        with pytest.raises(Alpha2HostError) as caught:
+            HostClient(host_path=host_path, remote_media=refused)  # type: ignore[arg-type]
+        assert caught.value.code == "INVALID_INPUT"
+        assert caught.value.message.startswith("remote_media"), caught.value.message
+    assert lines_in(starts) == []
+
+
 def test_the_client_refuses_every_invalid_export_request_of_the_corpus_before_a_host_starts(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:

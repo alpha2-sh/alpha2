@@ -34,6 +34,10 @@ All notable changes to this project are documented in this file.
   `remoteReadWaitMs`. The render cache keys a remote source by origin, path, validator and
   length, so a new signature of the same object is a hit. A `conform` reading a remote source can
   be cancelled.
+- `@alpha2-sh/node` takes `remoteMedia: { origins, privateAddresses }` and the Python client
+  `remote_media={"origins": [...], "private_addresses": ...}`, passed as `--media-origins` and
+  `--media-private-addresses` to every host they start. `python -m alpha2 mcp` refuses a media URL
+  a tool argument or a spec names as outside its roots, before any host call.
 
 ### Changed
 
@@ -43,6 +47,9 @@ All notable changes to this project are documented in this file.
   info; its fragment is dropped. A URL in `proxies`, `frames`, `effectAssets`, `fonts`, an output or
   `renderCache.directory` is `INVALID_REQUEST`. Under `--media-origins none` every media URL is
   refused with `MEDIA_REFUSED` before anything is contacted.
+- **Breaking:** `@alpha2-sh/node` and the Python client send a value of `assets` or `resources`
+  that starts with `https://` or `http://` (any case) unchanged, where they made it a path under
+  the working directory; every other value is still resolved against it.
 
 ### Fixed
 

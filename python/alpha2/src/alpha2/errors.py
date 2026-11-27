@@ -160,9 +160,9 @@ class Alpha2HostError(Exception):
     classifies it for a retry policy. ``stderr`` is the tail of the host's standard error;
     ``exit_code`` and ``signal`` say how a host that ended before answering ended. For
     ``OUTPUT_PUBLISH_FAILED``, ``kept_path`` is where the finished render was kept, for the caller
-    to move or remove. For ``RESOURCE_BUSY`` (``ENCODER_BUSY``, ``MEDIA_BUSY``), :attr:`retry_after_ms` is how long
-    to wait before retrying. ``details`` is what the host sent besides the code, such as
-    ``{"slot", "reason"}`` for ``PLUGIN_RESOURCE_INVALID``.
+    to move or remove. For ``RESOURCE_BUSY`` (``ENCODER_BUSY``, ``MEDIA_BUSY``),
+    :attr:`retry_after_ms` is how long to wait before retrying. ``details`` is what the host sent
+    besides the code, such as ``{"slot", "reason"}`` for ``PLUGIN_RESOURCE_INVALID``.
     """
 
     code: str

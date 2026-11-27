@@ -397,6 +397,27 @@ def test_files_a_spec_names_outside_the_roots_are_refused_before_any_read(
     assert "is outside the directories" in refusal(project)
 
 
+def test_a_media_url_a_spec_names_is_refused_as_outside_the_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _ = rooted(tmp_path)
+
+    def no_read(*_arguments: Any, **_options: Any) -> Any:
+        raise AssertionError("a file was read")
+
+    monkeypatch.setattr(mcp._compose, "gather_facts", no_read)
+    monkeypatch.chdir(root)
+    server = Server(roots=[str(root)], host_path=sys.executable)
+    for url in ("https://media.example/clip.mp4?signature=1", "http://media.example/clip.mp4"):
+        body = {"type": "media", "path": url}
+        refused = answer(server, "check", {"spec": {"duration": 1, "body": body}})
+        assert "is outside the directories" in refusal(refused), url
+        assert refused["structuredContent"] == {"path": url}
+    project = answer(server, "describe_project", {"project": "https://media.example/p.json"})
+    assert "is outside the directories" in refusal(project)
+    assert server._client is None
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="making a link needs a privilege on Windows")
 def test_a_link_inside_a_root_that_points_outside_is_refused_for_reads_and_writes(
     tmp_path: Path, fake_host: FakeHost
