@@ -12,6 +12,23 @@ All notable changes to this project are documented in this file.
   between CPUs. A model file whisper.cpp refuses after the plugin's own check accepted it no longer
   leaves its buffers allocated, which with Metal made the process abort when it exited.
 - `ExtractResult.sourceDecode`: how the browser decoded each source of an extraction.
+- `alpha2-host serve`, `export` and `conform` take `--media-origins none|<https origins>` (default
+  `none`) and `--media-private-addresses refuse|allow` (default `refuse`), the origins remote media
+  may be read from and whether an address that is not global unicast may be connected to; no
+  request can widen them. `capabilities` reports them as `remoteMedia`. New protocol codes
+  `MEDIA_REFUSED`, `MEDIA_TLS_FAILED`, `MEDIA_UNREACHABLE`, `MEDIA_BUSY` (with `retryAfterMs`),
+  `MEDIA_RANGE_UNSUPPORTED`, `MEDIA_REJECTED` and `MEDIA_CHANGED`, each with `details.source`,
+  `details.url` (without user info, query or fragment) and `details.status` when the server
+  answered.
+
+### Changed
+
+- **Breaking:** `alpha2-host` reads a value of a request's `assets` or `resources` that starts with
+  `https://` as a URL, and refuses one that starts with `http://` (`INVALID_REQUEST`, "only https:
+  media URLs are read"). A URL there is absolute, at most 8192 bytes, with an ASCII host and no user
+  info; its fragment is dropped. A URL in `proxies`, `frames`, `effectAssets`, `fonts`, an output or
+  `renderCache.directory` is `INVALID_REQUEST`. Under `--media-origins none` every media URL is
+  refused with `MEDIA_REFUSED` before anything is contacted.
 
 ### Fixed
 

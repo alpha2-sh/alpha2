@@ -25,7 +25,7 @@ pub struct StillRequest {
     /// The project to draw.
     pub project: ProjectJson,
     /// Originals by source ID.
-    pub assets: HashMap<String, PathBuf>,
+    pub assets: HashMap<String, super::MediaLocation>,
     /// Proxies by source ID.
     #[serde(default)]
     pub proxies: HashMap<String, Vec<ProxyRequest>>,
@@ -34,7 +34,7 @@ pub struct StillRequest {
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
     /// Files an SVG or a Lottie file names, by source ID and then by locator.
     #[serde(default)]
-    pub resources: HashMap<String, HashMap<String, PathBuf>>,
+    pub resources: HashMap<String, HashMap<String, super::MediaLocation>>,
     /// Which media the still reads.
     #[serde(default)]
     pub media: ExportMedia,
@@ -96,6 +96,15 @@ impl StillRequest {
             return Err(RequestError::invalid_request(
                 "invalid request: the operation is not `still`",
             ));
+        }
+        super::refuse_urls(
+            &self.proxies,
+            &self.frames,
+            &self.effect_assets,
+            &self.font_files,
+        )?;
+        for output in self.stills.iter().filter_map(|still| still.output.as_ref()) {
+            super::refuse_url("a still's output", output)?;
         }
         if self.stills.is_empty() || self.stills.len() > MAX_STILLS {
             return Err(RequestError::invalid_input(format!(

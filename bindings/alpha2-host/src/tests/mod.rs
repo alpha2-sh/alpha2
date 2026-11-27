@@ -396,7 +396,7 @@ fn resolve(
     let project = Project::from_json(&project.to_string()).expect("project");
     let originals = originals
         .iter()
-        .map(|(id, path)| ((*id).to_owned(), path.clone()))
+        .map(|(id, path)| ((*id).to_owned(), path.clone().into()))
         .collect::<HashMap<_, _>>();
     let mut proxy_map = HashMap::<String, Vec<crate::assets::ProxyRequest>>::new();
     for (id, path) in proxies {

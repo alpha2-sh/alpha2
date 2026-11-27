@@ -234,7 +234,8 @@ pub struct RemoteError {
 }
 
 impl RemoteError {
-    fn new(failure: RemoteFailure, message: impl Into<String>) -> Self {
+    /// A failure with no status.
+    pub fn new(failure: RemoteFailure, message: impl Into<String>) -> Self {
         Self {
             failure,
             message: message.into(),
@@ -242,7 +243,9 @@ impl RemoteError {
         }
     }
 
-    const fn with_status(mut self, status: u16) -> Self {
+    /// The failure with the status the server answered.
+    #[must_use]
+    pub const fn with_status(mut self, status: u16) -> Self {
         self.status = Some(status);
         self
     }
@@ -265,6 +268,21 @@ impl std::fmt::Display for RemoteError {
 }
 
 impl std::error::Error for RemoteError {}
+
+impl From<TransportFailure> for RemoteError {
+    fn from(failure: TransportFailure) -> Self {
+        match failure {
+            TransportFailure::Refused { policy, message } => {
+                Self::new(RemoteFailure::Refused(policy), message)
+            }
+            TransportFailure::Tls(message) => Self::new(RemoteFailure::TlsFailed, message),
+            TransportFailure::Unreachable(message) => {
+                Self::new(RemoteFailure::Unreachable, message)
+            }
+            TransportFailure::Rejected(message) => Self::new(RemoteFailure::Rejected, message),
+        }
+    }
+}
 
 impl From<RemoteError> for std::io::Error {
     fn from(error: RemoteError) -> Self {

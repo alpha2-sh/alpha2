@@ -69,14 +69,14 @@ pub trait DerivativeProvider {
 }
 
 pub struct RequestMedia<'a> {
-    pub originals: &'a HashMap<String, PathBuf>,
+    pub originals: &'a HashMap<String, alpha2_host_core::requests::MediaLocation>,
     pub proxies: &'a HashMap<String, Vec<ProxyRequest>>,
     pub frames: &'a HashMap<String, Vec<Option<PathBuf>>>,
 }
 
 impl AssetResolver for RequestMedia<'_> {
     fn original(&self, source: &SourceId) -> Option<&Path> {
-        self.originals.get(source.as_str()).map(PathBuf::as_path)
+        self.originals.get(source.as_str())?.path()
     }
 
     fn sequence_frames(&self, source: &SourceId) -> Option<&[Option<PathBuf>]> {

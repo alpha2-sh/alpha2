@@ -7,6 +7,7 @@
 mod effect;
 mod export;
 mod extract;
+mod location;
 mod media;
 mod settings;
 mod still;
@@ -24,6 +25,8 @@ pub use effect::{
 };
 pub use export::{ExportRequest, ResolvedFormat};
 pub use extract::{ExtractHostRequest, PluginRequest};
+pub use location::{MAX_MEDIA_URL_BYTES, MediaLocation};
+use location::{refuse_url, refuse_urls};
 pub use media::{
     ComposeRequest, ConformRequest, EditRequest, ExportMedia, ProjectJson, ProxyRequest, output_key,
 };
@@ -308,7 +311,11 @@ pub fn parse_request(line: &str) -> Result<Request, RequestError> {
             export.check()?;
             Request::Export(Box::new(export))
         }
-        Some("conform") => Request::Conform(serde_json::from_str(line).map_err(invalid)?),
+        Some("conform") => {
+            let conform: ConformRequest = serde_json::from_str(line).map_err(invalid)?;
+            refuse_urls(&conform.proxies, &conform.frames, &HashMap::new(), [])?;
+            Request::Conform(conform)
+        }
         Some("compose") => Request::Compose(Box::new(serde_json::from_str(line).map_err(invalid)?)),
         Some("edit") => Request::Edit(Box::new(serde_json::from_str(line).map_err(invalid)?)),
         Some("still") => {

@@ -1347,8 +1347,8 @@ fn conform_refuses_a_sequence_whose_files_miss_a_frame_the_project_lists() {
     let project = Project::from_json(&extension_project().to_string()).expect("project");
     let resolve = |frames: Vec<Option<PathBuf>>| {
         let originals = HashMap::from([
-            ("gif".to_owned(), extension_corpus("animation.gif")),
-            ("logo".to_owned(), extension_corpus("shapes.svg")),
+            ("gif".to_owned(), extension_corpus("animation.gif").into()),
+            ("logo".to_owned(), extension_corpus("shapes.svg").into()),
         ]);
         let proxies = HashMap::new();
         let frames = HashMap::from([("seq".to_owned(), frames)]);

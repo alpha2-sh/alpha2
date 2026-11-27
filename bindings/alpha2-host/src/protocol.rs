@@ -47,7 +47,7 @@ pub const HARDWARE_DECODE_STALL_MARKER: &str = "holding hardware decode sessions
 /// evidence, not from these words.
 pub const HARDWARE_ENCODE_STALL_MARKER: &str = "holding a hardware encode session";
 
-pub const PROTOCOL_CODES: [&str; 41] = [
+pub const PROTOCOL_CODES: [&str; 48] = [
     "UNSUPPORTED_PROTOCOL",
     "INVALID_REQUEST",
     "INVALID_INPUT",
@@ -87,6 +87,13 @@ pub const PROTOCOL_CODES: [&str; 41] = [
     "PLUGIN_TRAPPED",
     "PLUGIN_LIMIT",
     "PLUGIN_RESOURCE_INVALID",
+    "MEDIA_REFUSED",
+    "MEDIA_TLS_FAILED",
+    "MEDIA_UNREACHABLE",
+    "MEDIA_BUSY",
+    "MEDIA_RANGE_UNSUPPORTED",
+    "MEDIA_REJECTED",
+    "MEDIA_CHANGED",
     "INTERNAL",
     "ALPHA2_ERROR",
 ];

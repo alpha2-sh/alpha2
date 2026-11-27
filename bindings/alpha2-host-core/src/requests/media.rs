@@ -98,7 +98,7 @@ pub struct ConformRequest {
     pub project: ProjectJson,
     /// Originals by source ID.
     #[serde(default)]
-    pub assets: HashMap<String, PathBuf>,
+    pub assets: HashMap<String, super::MediaLocation>,
     /// Proxies by source ID.
     #[serde(default)]
     pub proxies: HashMap<String, Vec<ProxyRequest>>,

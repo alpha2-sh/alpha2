@@ -35,7 +35,7 @@ pub struct ExportRequest {
     /// The project to export.
     pub project: ProjectJson,
     /// Originals by source ID.
-    pub assets: HashMap<String, PathBuf>,
+    pub assets: HashMap<String, super::MediaLocation>,
     /// Proxies by source ID.
     #[serde(default)]
     pub proxies: HashMap<String, Vec<ProxyRequest>>,
@@ -45,7 +45,7 @@ pub struct ExportRequest {
     /// Files an SVG's `<image href>` or a Lottie file's image assets name, by source ID and then by
     /// locator.
     #[serde(default)]
-    pub resources: HashMap<String, HashMap<String, PathBuf>>,
+    pub resources: HashMap<String, HashMap<String, super::MediaLocation>>,
     /// Originals unless the caller asks for proxies.
     #[serde(default)]
     pub media: ExportMedia,
@@ -124,9 +124,19 @@ impl ExportRequest {
     /// before a device or encoder opens.
     ///
     /// # Errors
-    /// `INVALID_INPUT` naming the rule: loudness needs `includeAudio`, and the container and codecs
-    /// must resolve ([`Self::format`]).
+    /// `INVALID_REQUEST` for a URL in a path field; `INVALID_INPUT` naming the rule: loudness
+    /// needs `includeAudio`, and the container and codecs must resolve ([`Self::format`]).
     pub fn check(&self) -> Result<(), RequestError> {
+        super::refuse_urls(
+            &self.proxies,
+            &self.frames,
+            &self.effect_assets,
+            &self.font_files,
+        )?;
+        super::refuse_url("output", &self.output)?;
+        if let Some(cache) = &self.render_cache {
+            super::refuse_url("renderCache.directory", &cache.directory)?;
+        }
         if self.loudness.is_some() && !self.include_audio {
             return Err(RequestError::invalid_input(
                 "loudness normalizes the export's audio and needs includeAudio: true",

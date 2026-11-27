@@ -180,7 +180,7 @@ impl Drop for Host {
 
 struct ExportRequestFacts<'a> {
     project: &'a str,
-    assets: &'a HashMap<String, PathBuf>,
+    assets: &'a HashMap<String, alpha2_host_core::requests::MediaLocation>,
     start_ticks: i64,
     end_ticks: i64,
     frame_rate: RateRequest,
@@ -856,6 +856,12 @@ impl Host {
         media: crate::protocol::ExportMedia,
         outputs: &[&Path],
     ) -> Result<PreparedRequest, HostError> {
+        crate::media_policy::refuse_unlisted(
+            &crate::media_policy::current(),
+            inputs.assets,
+            inputs.resources,
+        )
+        .map_err(|error| self.attach_failure(error, None))?;
         for output in outputs {
             inputs
                 .refuse_output(output)
@@ -880,7 +886,19 @@ impl Host {
             originals: resolved.paths.clone(),
             frames: inputs.frames.clone(),
             fonts: Vec::new(),
-            resources: inputs.resources.clone(),
+            resources: inputs
+                .resources
+                .iter()
+                .map(|(id, locators)| {
+                    let paths = locators
+                        .iter()
+                        .filter_map(|(locator, location)| {
+                            Some((locator.clone(), location.path()?.to_path_buf()))
+                        })
+                        .collect();
+                    (id.clone(), paths)
+                })
+                .collect(),
         };
         self.conformed_video_frames = Some(resolved.video_frames.clone());
         Ok(PreparedRequest {
@@ -967,15 +985,16 @@ impl Host {
     pub(crate) fn extract_media(
         &mut self,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::requests::MediaLocation>,
         proxies: &HashMap<String, Vec<ProxyRequest>>,
         frames: &HashMap<String, Vec<Option<PathBuf>>>,
-        resources: &HashMap<String, HashMap<String, PathBuf>>,
+        resources: &HashMap<String, HashMap<String, alpha2_host_core::requests::MediaLocation>>,
         effect_assets: &HashMap<String, PathBuf>,
         font_files: &[PathBuf],
         media: crate::protocol::ExportMedia,
         source: Option<&alpha2_media::SourceId>,
     ) -> Result<(HashMap<String, PathBuf>, Option<MediaFingerprint>), HostError> {
+        crate::media_policy::refuse_unlisted(&crate::media_policy::current(), assets, resources)?;
         self.begin_request(crate::memory::MemoryRequest::default(), None)?;
         // A source extraction reads its one source, placed on the timeline or not.
         if let Some(source) = source {
@@ -1059,7 +1078,7 @@ impl Host {
     fn conform_export(
         &self,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::requests::MediaLocation>,
         proxies: &HashMap<String, Vec<ProxyRequest>>,
         frames: &HashMap<String, Vec<Option<PathBuf>>>,
         media: crate::protocol::ExportMedia,
@@ -3964,6 +3983,11 @@ fn conform_answer(
     }: crate::protocol::ConformRequest,
     policy: VideoDecodePolicy,
 ) -> Result<Value, HostError> {
+    crate::media_policy::refuse_unlisted(
+        &crate::media_policy::current(),
+        &assets,
+        &HashMap::new(),
+    )?;
     let resolved = request_media(
         project.text(),
         &assets,
@@ -3991,7 +4015,7 @@ pub fn conform_hardware(policy: VideoDecodePolicy) -> HardwareVideoDecode {
 /// A project that does not parse, or a proxy whose `madeFrom` is malformed.
 fn request_media(
     project: &str,
-    assets: &HashMap<String, PathBuf>,
+    assets: &HashMap<String, alpha2_host_core::requests::MediaLocation>,
     proxies: &HashMap<String, Vec<ProxyRequest>>,
     frames: &HashMap<String, Vec<Option<PathBuf>>>,
     purpose: MediaPurpose,
