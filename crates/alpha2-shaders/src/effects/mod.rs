@@ -17,3 +17,6 @@ pub use stylize::*;
 pub const EFFECT_HELPERS: &str = include_str!("../../shaders/runtime/effects/helpers.wgsl");
 /// Body of a public effect the render graph expands into internal passes.
 pub const EXPANDED_EFFECT: &str = include_str!("../../shaders/runtime/effects/expanded.wgsl");
+/// `builtin_key_mix(backdrop, picture, coverage)`: the backdrop replaced by the picture by the
+/// coverage, premultiplied, exactly the backdrop at no coverage and the picture at full.
+pub const KEY_MIX: &str = include_str!("../../shaders/runtime/effects/key-mix.wgsl");

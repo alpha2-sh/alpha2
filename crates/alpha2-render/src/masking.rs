@@ -1,4 +1,4 @@
-//! Internal effects behind clip shape masks and track mattes.
+//! Internal effects behind clip shape masks, track mattes and key mixes.
 //!
 //! The timeline engine inserts these from a clip's `masks` and `matte`. Mask outlines are drawn
 //! as coverage by the vector pass and feathered by the Gaussian blur; these passes combine the
@@ -12,6 +12,21 @@ use crate::{EffectDef, EffectKind, InputSpec, ParamSpec, ParamType, ParamUnit, P
 
 /// Internal identifier of the track-matte pass.
 pub const TRACK_MATTE_EFFECT_ID: &str = "alpha2.internal.track-matte";
+
+/// Internal identifier of the key-mix pass whose coverage is its opacity times a mask's alpha.
+pub const KEY_MIX_EFFECT_ID: &str = "alpha2.internal.key-mix";
+
+/// Internal identifier of the key-mix pass whose coverage is its opacity alone.
+pub const KEY_MIX_UNMASKED_EFFECT_ID: &str = "alpha2.internal.key-mix-unmasked";
+
+/// Named input of a key-mix pass holding the picture its source replaces.
+pub const KEY_MIX_BACKDROP: &str = "backdrop";
+
+/// Named input of [`KEY_MIX_EFFECT_ID`] whose alpha scales the coverage.
+pub const KEY_MIX_MASK: &str = "mask";
+
+/// Parameter of a key-mix pass scaling the coverage, in `0..=1`.
+pub const KEY_MIX_OPACITY: &str = "opacity";
 
 /// Most masks one mask-combine pass takes, each a named input.
 pub const MAX_SHAPE_MASKS: usize = 8;
@@ -203,6 +218,57 @@ fn transition(uv: vec2f) -> vec4f {
         tier_min: CapabilityTier::TierB,
         license: Some(crate::builtins::ALPHA2_EFFECT_LICENSE.into()),
     }
+}
+
+/// A key-mix pass: the `backdrop` input replaced by the source by `k = opacity x mask.a`
+/// (`k = opacity` when not `masked`), as `(1 - k) backdrop + k source` on premultiplied values,
+/// exactly the backdrop at `k = 0` and the source at `k = 1`.
+#[must_use]
+pub fn key_mix_definition(masked: bool) -> EffectDef {
+    let (id, coverage) = if masked {
+        (
+            KEY_MIX_EFFECT_ID,
+            format!("params.{KEY_MIX_OPACITY} * sample_{KEY_MIX_MASK}(uv).a"),
+        )
+    } else {
+        (
+            KEY_MIX_UNMASKED_EFFECT_ID,
+            format!("params.{KEY_MIX_OPACITY}"),
+        )
+    };
+    let inputs = std::iter::once(KEY_MIX_BACKDROP)
+        .chain(masked.then_some(KEY_MIX_MASK))
+        .map(|name| InputSpec { name: name.into() })
+        .collect();
+    EffectDef {
+        id: id.into(),
+        version: 1,
+        kind: EffectKind::Effect,
+        inputs,
+        params: vec![ParamSpec {
+            min: Some(0.0),
+            max: Some(1.0),
+            ..param(
+                KEY_MIX_OPACITY.into(),
+                ParamType::Float,
+                ParamValue::Float(1.0),
+            )
+        }],
+        resources: Vec::new(),
+        wgsl_body: format!(
+            "{}\nfn effect(uv: vec2f, src: vec4f) -> vec4f {{\n    \
+             return builtin_key_mix(sample_{KEY_MIX_BACKDROP}(uv), src, {coverage});\n}}\n",
+            alpha2_shaders::KEY_MIX
+        ),
+        tier_min: CapabilityTier::TierB,
+        license: Some(crate::builtins::ALPHA2_EFFECT_LICENSE.into()),
+    }
+}
+
+/// Both key-mix passes, with and without a mask.
+#[must_use]
+pub fn key_mix_definitions() -> [EffectDef; 2] {
+    [key_mix_definition(true), key_mix_definition(false)]
 }
 
 #[cfg(test)]

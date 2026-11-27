@@ -379,6 +379,7 @@ pub(crate) fn internal_effect_definitions() -> Vec<EffectDef> {
         crate::generator::generator_definition(),
     ];
     definitions.extend(crate::masking::mask_combine_definitions());
+    definitions.extend(crate::masking::key_mix_definitions());
     definitions
 }
 
