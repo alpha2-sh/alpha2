@@ -34,7 +34,8 @@ mod runs;
 mod unicode_tables;
 
 pub use animated::{
-    ClusterGrouping, ClusterInfo, ClusterState, ColorMix, LineInfo, MAX_CLUSTER_SCALE, TextLayout,
+    ClusterGrouping, ClusterInfo, ClusterState, ColorMix, LineInfo, MAX_CLUSTER_SCALE,
+    MAX_REVEAL_EDGES, RevealEdge, TextLayout,
 };
 pub use gradient::{TextGradient, TextGradientKind, TextGradientStop, TextSpread};
 

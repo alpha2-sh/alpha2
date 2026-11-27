@@ -273,6 +273,7 @@ fn animator(selector: SampledSelector) -> SampledAnimator {
         stroke: None,
         tracking: None,
         advance_follows_scale: false,
+        reveal: None,
     }
 }
 
@@ -616,4 +617,46 @@ fn headroom_holds_at_the_cluster_scale_limit() {
         &[],
     );
     assert_eq!(headroom, alpha2_text::MAX_CLUSTER_SCALE);
+}
+
+fn revealing(selector: SampledSelector, progress: f32) -> SampledAnimator {
+    SampledAnimator {
+        reveal: Some(alpha2_eval::SampledReveal {
+            progress,
+            angle_degrees: 90.0,
+            feather: 0.25,
+        }),
+        ..animator(selector)
+    }
+}
+
+#[test]
+fn reveal_progress_follows_the_selection() {
+    let layout = row(4);
+    let ramp = range(RangeShape::RampUp, RangeUnits::Index, 0.0, 4.0);
+    let weights = selection(&ramp, &layout, &[], MediaTime::ZERO);
+    let (states, hash) =
+        cluster_states(&layout, &[], &[revealing(ramp, 0.2)], MediaTime::ZERO, 20.0);
+    for (state, weight) in states.iter().zip(weights) {
+        let progress = 1.0 + weight * (0.2 - 1.0);
+        match state.reveals[0] {
+            Some(edge) => {
+                assert!((edge.progress - progress).abs() < 1e-6);
+                assert!(edge.direction[0].abs() < 1e-6 && (edge.direction[1] - 1.0).abs() < 1e-6);
+                assert_eq!(edge.feather, 5.0, "a quarter of 20 pixels");
+            }
+            None => assert_eq!(weight, 0.0, "an unselected cluster is whole"),
+        }
+    }
+    assert_ne!(hash, 0);
+}
+
+#[test]
+fn an_all_revealed_text_hashes_as_identity() {
+    let layout = row(4);
+    let all = range(RangeShape::Square, RangeUnits::Percent, 0.0, 100.0);
+    let (states, hash) =
+        cluster_states(&layout, &[], &[revealing(all, 1.0)], MediaTime::ZERO, 20.0);
+    assert_eq!(hash, 0);
+    assert!(states.iter().all(ClusterState::is_identity));
 }

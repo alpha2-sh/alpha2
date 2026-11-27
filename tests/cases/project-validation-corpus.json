@@ -38907,5 +38907,342 @@
         ]
       }
     }
+  },
+  {
+    "name": "text-animator-reveal-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "animators": [
+                  {
+                    "selector": {
+                      "type": "range",
+                      "end": {
+                        "mode": "keyframes",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "value": 0,
+                            "interpolation": {
+                              "type": "linear"
+                            }
+                          },
+                          {
+                            "time": 120000,
+                            "value": 100,
+                            "interpolation": {
+                              "type": "hold"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "properties": {
+                      "reveal": {
+                        "progress": {
+                          "mode": "constant",
+                          "value": 0
+                        },
+                        "angle_degrees": {
+                          "mode": "constant",
+                          "value": 30
+                        },
+                        "feather": {
+                          "mode": "constant",
+                          "value": 0.2
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi there"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-animator-reveal-progress-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs has invalid captions"
+    ],
+    "error": "track subs has invalid captions",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "animators": [
+                  {
+                    "selector": {
+                      "type": "range",
+                      "end": {
+                        "mode": "keyframes",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "value": 0,
+                            "interpolation": {
+                              "type": "linear"
+                            }
+                          },
+                          {
+                            "time": 120000,
+                            "value": 100,
+                            "interpolation": {
+                              "type": "hold"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "properties": {
+                      "reveal": {
+                        "progress": {
+                          "mode": "constant",
+                          "value": 1.5
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi there"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-animator-reveal-feather-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs has invalid captions"
+    ],
+    "error": "track subs has invalid captions",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "animators": [
+                  {
+                    "selector": {
+                      "type": "range",
+                      "end": {
+                        "mode": "keyframes",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "value": 0,
+                            "interpolation": {
+                              "type": "linear"
+                            }
+                          },
+                          {
+                            "time": 120000,
+                            "value": 100,
+                            "interpolation": {
+                              "type": "hold"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "properties": {
+                      "reveal": {
+                        "feather": {
+                          "mode": "constant",
+                          "value": 2
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi there"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-text-animator-reveal-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "mode": "constant",
+                    "value": "Range"
+                  },
+                  "text_animators": [
+                    {
+                      "selector": {
+                        "type": "range",
+                        "based_on": "words"
+                      },
+                      "properties": {
+                        "reveal": {
+                          "progress": {
+                            "mode": "constant",
+                            "value": 0.5
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
   }
 ]

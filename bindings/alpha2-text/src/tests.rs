@@ -3342,6 +3342,13 @@ fn cluster_state(value: &serde_json::Value) -> ClusterState {
         stroke: mix("stroke"),
         tracking: number("tracking", 0.0),
         advance_scale: number("advanceScale", 1.0),
+        reveals: std::array::from_fn(|index| {
+            value["reveals"].get(index).map(|edge| RevealEdge {
+                direction: [0, 1].map(|axis| edge["direction"][axis].as_f64().expect("x") as f32),
+                progress: edge["progress"].as_f64().expect("progress") as f32,
+                feather: edge["feather"].as_f64().unwrap_or(0.0) as f32,
+            })
+        }),
     }
 }
 
@@ -3750,4 +3757,279 @@ fn the_default_grouping_and_pivot_draw_todays_bytes() {
     );
     assert_eq!(by_character.pixels.rgba8, by_word.pixels.rgba8);
     assert!(total_ink(&default) > 0);
+}
+
+fn edge(degrees: f32, progress: f32, feather: f32) -> RevealEdge {
+    let angle = degrees.to_radians();
+    RevealEdge {
+        direction: [libm::cosf(angle), libm::sinf(angle)],
+        progress,
+        feather,
+    }
+}
+
+fn revealing(states: &mut [ClusterState], degrees: f32, progress: f32) {
+    for state in states {
+        state.reveals[0] = Some(edge(degrees, progress, 0.0));
+    }
+}
+
+fn row_inked(result: &TextRasterResult, y: i64) -> bool {
+    ink_span(result, y).is_some()
+}
+
+#[test]
+fn a_reveal_at_progress_zero_hides_its_unit() {
+    let mut rasterizer = fixture();
+    let text = request("IIII", 40.0);
+    let hidden = animated_with(&mut rasterizer, &text, |states| {
+        states[1].reveals[0] = Some(edge(0.0, 0.0, 0.0));
+    });
+    let faded = animated_with(&mut rasterizer, &text, |states| states[1].opacity = 0.0);
+    assert_eq!(hidden.pixels.rgba8, faded.pixels.rgba8);
+    assert!(total_ink(&hidden) < total_ink(&rasterizer.rasterize(&text).expect("draws")));
+}
+
+#[test]
+fn a_reveal_at_progress_one_draws_the_static_bytes() {
+    let mut rasterizer = fixture();
+    let text = TextRasterRequest {
+        strokes: vec![TextStroke {
+            color: [0, 0, 0, 255],
+            width: 2.0,
+        }],
+        ..request("Revealed", 40.0)
+    };
+    let plain = rasterizer.rasterize(&text).expect("draws");
+    let whole = animated_with(&mut rasterizer, &text, |states| {
+        revealing(states, 30.0, 1.0);
+    });
+    assert_eq!(whole.pixels.rgba8, plain.pixels.rgba8);
+    assert_eq!(
+        whole.descriptor.texture.width,
+        plain.descriptor.texture.width
+    );
+    assert_eq!(whole.descriptor.layout_x, plain.descriptor.layout_x);
+}
+
+#[test]
+fn a_rightward_reveal_keeps_the_left_of_each_cluster() {
+    let mut rasterizer = fixture();
+    let text = TextRasterRequest {
+        line_height: 1.0,
+        ..request("HHH", 40.0)
+    };
+    let half = animated_with(&mut rasterizer, &text, |states| revealing(states, 0.0, 0.5));
+    let layout = rasterizer.layout(&text).expect("lays out");
+    for cluster in &layout.clusters {
+        #[allow(clippy::cast_possible_truncation)]
+        let (left, middle, right) = (
+            cluster.x.ceil() as i64,
+            (cluster.x + cluster.advance / 2.0) as i64,
+            (cluster.x + cluster.advance).floor() as i64,
+        );
+        let inked = |x: i64| (5..35).any(|y| pixel_at(&half, x, y)[3] > 0);
+        assert!((left..middle - 1).any(inked), "the left half shows");
+        assert!(!(middle + 2..right).any(inked), "the right half is cut");
+    }
+}
+
+#[test]
+fn reveal_edges_cross_a_line_at_one_height() {
+    let mut rasterizer = fixture();
+    let text = TextRasterRequest {
+        line_height: 1.0,
+        ..request("Hold gaze", 40.0)
+    };
+    let plain = rasterizer.rasterize(&text).expect("draws");
+    let half = animated_with(&mut rasterizer, &text, |states| {
+        revealing(states, 90.0, 0.5);
+    });
+    assert!(row_inked(&plain, 30));
+    assert!(row_inked(&half, 19));
+    assert!(!row_inked(&half, 21) && !row_inked(&half, 30));
+}
+
+#[test]
+fn a_reveal_cuts_strokes_and_color_glyphs_with_the_fill() {
+    let mut rasterizer = color_stack();
+    let text = TextRasterRequest {
+        line_height: 1.0,
+        strokes: vec![TextStroke {
+            color: [255, 0, 0, 255],
+            width: 4.0,
+        }],
+        ..request("H\u{e000}", 60.0)
+    };
+    let half = animated_with(&mut rasterizer, &text, |states| revealing(states, 0.0, 0.5));
+    let layout = rasterizer.layout(&text).expect("lays out");
+    for cluster in &layout.clusters {
+        #[allow(clippy::cast_possible_truncation)]
+        let (middle, right) = (
+            (cluster.x + cluster.advance / 2.0) as i64,
+            (cluster.x + cluster.advance) as i64 - 5,
+        );
+        let cut = (middle + 2..right).all(|x| (-4..64).all(|y| pixel_at(&half, x, y)[3] == 0));
+        assert!(cut, "nothing of {:?} past its edge", cluster.bytes);
+    }
+    assert!(total_ink(&half) > 0);
+}
+
+#[test]
+fn a_reveal_scales_and_turns_with_its_cluster() {
+    let mut rasterizer = fixture();
+    let text = TextRasterRequest {
+        line_height: 1.0,
+        ..request("H", 40.0)
+    };
+    let plain = animated_with(&mut rasterizer, &text, |states| revealing(states, 0.0, 0.5));
+    let turned = animated_with(&mut rasterizer, &text, |states| {
+        revealing(states, 0.0, 0.5);
+        states[0].rotation = std::f32::consts::PI;
+    });
+    let (plain_left, plain_right) = ink_span(&plain, 20).expect("ink");
+    let (left, right) = ink_span(&turned, 20).expect("ink");
+    let centre = plain_left + plain_right;
+    assert!(
+        (left + right - centre).abs() > 10,
+        "turned half a turn about the cluster's centre, the kept half lies on the other side"
+    );
+    let grown = animated_with(&mut rasterizer, &text, |states| {
+        revealing(states, 0.0, 0.5);
+        states[0].scale = [2.0, 2.0];
+    });
+    let (grown_left, grown_right) = ink_span(&grown, 20).expect("ink");
+    assert!(
+        ((grown_right - grown_left) - 2 * (plain_right - plain_left)).abs() <= 3,
+        "the kept half doubles with the cluster"
+    );
+}
+
+#[test]
+fn two_reveals_intersect_in_any_order() {
+    let mut rasterizer = fixture();
+    let text = request("Both edges", 40.0);
+    let one = animated_with(&mut rasterizer, &text, |states| {
+        for state in states.iter_mut() {
+            state.reveals[0] = Some(edge(0.0, 0.7, 3.0));
+            state.reveals[1] = Some(edge(90.0, 0.6, 0.0));
+        }
+    });
+    let other = animated_with(&mut rasterizer, &text, |states| {
+        for state in states.iter_mut() {
+            state.reveals[0] = Some(edge(90.0, 0.6, 0.0));
+            state.reveals[1] = Some(edge(0.0, 0.7, 3.0));
+        }
+    });
+    assert_eq!(one.pixels.rgba8, other.pixels.rgba8);
+    let across = animated_with(&mut rasterizer, &text, |states| revealing(states, 0.0, 0.7));
+    assert!(total_ink(&one) < total_ink(&across));
+}
+
+#[test]
+fn a_feathered_edge_ramps_over_its_width() {
+    let mut rasterizer = fixture();
+    let text = TextRasterRequest {
+        line_height: 1.0,
+        fill: TextFill::Solid([255, 255, 255, 255]),
+        ..request("\u{2588}", 40.0)
+    };
+    let full = rasterizer.layout(&text).expect("lays out").clusters[0].clone();
+    let soft = animated_with(&mut rasterizer, &text, |states| {
+        states[0].reveals[0] = Some(edge(0.0, 0.5, 16.0));
+    });
+    #[allow(clippy::cast_possible_truncation)]
+    let middle = (full.x + full.advance / 2.0) as i64;
+    let alpha = |x: i64| pixel_at(&soft, x, 20)[3];
+    let ramp = (middle - 6..=middle + 6).map(alpha).collect::<Vec<_>>();
+    assert!(ramp.windows(2).all(|pair| pair[0] >= pair[1]), "{ramp:?}");
+    assert!(ramp[0] > 200 && ramp[12] < 60, "{ramp:?}");
+    assert!(
+        ramp.iter()
+            .filter(|&&value| value > 20 && value < 235)
+            .count()
+            >= 8,
+        "{ramp:?}"
+    );
+}
+
+#[test]
+fn a_hidden_part_never_takes_a_pixel_from_a_neighbour() {
+    let mut rasterizer = fixture();
+    let text = TextRasterRequest {
+        letter_spacing: -12.0,
+        ..request("WW", 40.0)
+    };
+    let both = animated_with(&mut rasterizer, &text, |_| {});
+    let second_hidden = animated_with(&mut rasterizer, &text, |states| {
+        states[1].reveals[0] = Some(edge(0.0, 0.0, 0.0));
+    });
+    let first_alone = rasterizer
+        .rasterize(&TextRasterRequest {
+            content_version: 77,
+            ..request("W", 40.0)
+        })
+        .expect("draws");
+    assert!(total_ink(&both) > total_ink(&second_hidden));
+    assert_eq!(total_ink(&second_hidden), total_ink(&first_alone));
+}
+
+#[test]
+fn a_word_grouped_reveal_wipes_each_word_across_its_box() {
+    let mut rasterizer = fixture();
+    let text = TextRasterRequest {
+        line_height: 1.0,
+        animator_grouping: ClusterGrouping::Word,
+        ..request("HHHH HHHH", 40.0)
+    };
+    let half = animated_with(&mut rasterizer, &text, |states| revealing(states, 0.0, 0.5));
+    let layout = rasterizer.layout(&text).expect("lays out");
+    let inked = |cluster: &ClusterInfo| {
+        #[allow(clippy::cast_possible_truncation)]
+        let (left, right) = (cluster.x as i64, (cluster.x + cluster.advance) as i64);
+        (left..right).any(|x| (5..35).any(|y| pixel_at(&half, x, y)[3] > 0))
+    };
+    let shown = layout.clusters.iter().map(inked).collect::<Vec<_>>();
+    assert_eq!(
+        shown,
+        [true, true, false, false, false, true, true, false, false],
+        "each word's first half shows"
+    );
+}
+
+#[test]
+fn a_revealing_cluster_draws_from_its_cached_tile() {
+    let mut rasterizer = fixture();
+    let text = request("Cached", 40.0);
+    let warm_up = animated_with(&mut rasterizer, &text, |states| revealing(states, 0.0, 0.2));
+    let warm = animated_with(&mut rasterizer, &text, |states| revealing(states, 0.0, 0.6));
+    let mut cold_rasterizer = fixture();
+    let cold = animated_with(&mut cold_rasterizer, &text, |states| {
+        revealing(states, 0.0, 0.6);
+    });
+    assert_eq!(warm.pixels.rgba8, cold.pixels.rgba8);
+    assert!(total_ink(&warm_up) < total_ink(&warm));
+    assert_eq!(
+        rasterizer.tiles.bytes(),
+        cold_rasterizer.tiles.bytes(),
+        "a reveal adds no tiles"
+    );
+}
+
+#[test]
+fn a_reveal_leaves_the_background_boxes_whole() {
+    let mut rasterizer = fixture();
+    let text = TextRasterRequest {
+        background: Some(TextBackground::padded([0, 0, 255, 255], 4.0)),
+        ..request("Boxed", 40.0)
+    };
+    let hidden = animated_with(&mut rasterizer, &text, |states| revealing(states, 0.0, 0.0));
+    let boxed_only = rasterizer
+        .rasterize(&TextRasterRequest {
+            fill: TextFill::Solid([0, 0, 0, 0]),
+            content_version: 91,
+            ..text.clone()
+        })
+        .expect("draws");
+    assert_eq!(hidden.pixels.rgba8, boxed_only.pixels.rgba8);
 }

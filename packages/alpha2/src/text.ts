@@ -237,6 +237,16 @@ export interface WasmClusterState {
    * advances push the groups after it along their line, which is re-aligned.
    */
   readonly advanceScale?: number;
+  /**
+   * Up to 8 straight edges that wipe the cluster's unit (its group's box, outset by the strokes)
+   * in, their shares multiplied: each travels along the unit vector `direction`, shows `progress`
+   * (`0..=1`) of the unit and is softened over `feather` pixels (default 0, a one-pixel step).
+   */
+  readonly reveals?: readonly {
+    readonly direction: readonly [number, number];
+    readonly progress: number;
+    readonly feather?: number;
+  }[];
 }
 
 /** See {@link WasmClusterState}. */

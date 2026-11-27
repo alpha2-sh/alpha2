@@ -6751,6 +6751,17 @@
           ],
           "description": "The opacity a fully selected character takes, in `[0, 1]`."
         },
+        "reveal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextReveal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight\nedge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows\n`progress` of itself."
+        },
         "rotation_degrees": {
           "anyOf": [
             {
@@ -6940,6 +6951,37 @@
         }
       ],
       "description": "A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers (\"0.1 0.3\": top first, clockwise), or the sides object, missing sides 0."
+    },
+    "TextReveal": {
+      "additionalProperties": false,
+      "description": "A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its\nadvances by its em boxes, outset by its strokes) in the direction `angle_degrees`.",
+      "properties": {
+        "angle_degrees": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,\n90 top to bottom. Default 0."
+        },
+        "feather": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel\nantialiased step. Default 0."
+        },
+        "progress": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit\nselected by `w` shows `1 + w (progress - 1)`. Default 0."
+        }
+      },
+      "type": "object"
     },
     "TextRun": {
       "additionalProperties": false,

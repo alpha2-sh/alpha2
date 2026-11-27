@@ -8,7 +8,7 @@
 
 use alpha2_eval::{SampledAnimator, SampledSelector};
 use alpha2_model::{RangeShape, RangeUnits, RunState, TextRun, TextUnit};
-use alpha2_text::{ClusterState, ColorMix, MAX_CLUSTER_SCALE, TextLayout};
+use alpha2_text::{ClusterState, ColorMix, MAX_CLUSTER_SCALE, RevealEdge, TextLayout};
 use alpha2_time::MediaTime;
 
 /// The selection in `[0, 1]` that `selector` gives each cluster of `layout`, at `time` for a
@@ -297,6 +297,19 @@ fn text_states(
             if let Some(tracking) = animator.tracking {
                 state.tracking += weight * tracking * font_size;
             }
+            if let Some(reveal) = animator.reveal {
+                let progress = 1.0 + weight * (reveal.progress - 1.0);
+                if progress < 1.0
+                    && let Some(slot) = state.reveals.iter_mut().find(|slot| slot.is_none())
+                {
+                    let angle = reveal.angle_degrees.to_radians();
+                    *slot = Some(RevealEdge {
+                        direction: [libm::cosf(angle), libm::sinf(angle)],
+                        progress: progress.max(0.0),
+                        feather: reveal.feather * font_size,
+                    });
+                }
+            }
         }
     }
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -329,6 +342,16 @@ fn text_states(
         }
         if state.advance_scale.to_bits() != 1.0_f32.to_bits() {
             feed(state.advance_scale);
+        }
+        for edge in state.reveals.iter().flatten() {
+            for value in [
+                edge.direction[0],
+                edge.direction[1],
+                edge.progress,
+                edge.feather,
+            ] {
+                feed(value);
+            }
         }
     }
     (states, if identity { 0 } else { hash.max(1) })

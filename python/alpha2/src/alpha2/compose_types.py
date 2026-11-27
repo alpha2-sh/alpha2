@@ -118,6 +118,7 @@ from .types import (
     TextContent,
     TextDash,
     TextInsets,
+    TextReveal,
     TextRun,
     TextRunStyle,
     TextSelector,

@@ -251,6 +251,9 @@ export const MAX_RANGE_INDEX = 4096;
 /** Mirrors `alpha2_model::MAX_RANGE_PERCENT`. */
 export const MAX_RANGE_PERCENT = 200;
 
+/** Mirrors `alpha2_model::MAX_REVEAL_FEATHER`. */
+export const MAX_REVEAL_FEATHER = 1;
+
 /** Mirrors `alpha2_model::MAX_RUN_CLASSES`. */
 export const MAX_RUN_CLASSES = 8;
 
@@ -3943,6 +3946,12 @@ export interface TextAnimatorProperties {
    */
   readonly opacity?: Animated<number> | null;
   /**
+   * Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight
+   * edge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows
+   * `progress` of itself.
+   */
+  readonly reveal?: TextReveal | null;
+  /**
    * Turns the character about its centre, clockwise degrees.
    */
   readonly rotation_degrees?: Animated<number> | null;
@@ -4043,6 +4052,34 @@ export type TextInsets =
       readonly right?: number;
       readonly top?: number;
     };
+
+/**
+ * A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its
+ * advances by its em boxes, outset by its strokes) in the direction `angle_degrees`.
+ */
+export interface TextReveal {
+  /**
+   * The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,
+   * 90 top to bottom. Default 0.
+   *
+   * @defaultValue `{"mode":"constant","value":0}`
+   */
+  readonly angle_degrees?: Animated<number>;
+  /**
+   * The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel
+   * antialiased step. Default 0.
+   *
+   * @defaultValue `{"mode":"constant","value":0}`
+   */
+  readonly feather?: Animated<number>;
+  /**
+   * How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit
+   * selected by `w` shows `1 + w (progress - 1)`. Default 0.
+   *
+   * @defaultValue `{"mode":"constant","value":0}`
+   */
+  readonly progress?: Animated<number>;
+}
 
 /**
  * A piece of a text with its own style, that animators' Class and Timing selectors can pick.

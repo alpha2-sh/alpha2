@@ -30,6 +30,19 @@ pub struct SampledAnimator {
     pub tracking: Option<f32>,
     /// Whether the advance follows the horizontal scale.
     pub advance_follows_scale: bool,
+    /// The reveal's edge, its values held to their ranges.
+    pub reveal: Option<SampledReveal>,
+}
+
+/// A text reveal at one time.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct SampledReveal {
+    /// How much of a fully selected unit shows, in `[0, 1]`.
+    pub progress: f32,
+    /// The direction the edge travels, clockwise degrees.
+    pub angle_degrees: f32,
+    /// The edge's softness, font sizes in `[0, MAX_REVEAL_FEATHER]`.
+    pub feather: f32,
 }
 
 /// A selector at one time.
@@ -135,6 +148,13 @@ pub fn sample_text_animators(animators: &[TextAnimator], time: MediaTime) -> Vec
                     .as_ref()
                     .map(|value| sample_scalar(value, time, &SampleContext::NONE)),
                 advance_follows_scale: properties.advance_follows_scale,
+                reveal: properties.reveal.as_ref().map(|reveal| SampledReveal {
+                    progress: sample_scalar(&reveal.progress, time, &SampleContext::NONE)
+                        .clamp(0.0, 1.0),
+                    angle_degrees: sample_scalar(&reveal.angle_degrees, time, &SampleContext::NONE),
+                    feather: sample_scalar(&reveal.feather, time, &SampleContext::NONE)
+                        .clamp(0.0, alpha2_model::MAX_REVEAL_FEATHER),
+                }),
             }
         })
         .collect()
@@ -191,6 +211,12 @@ pub fn hash_sampled_animators(hash: &mut StableHash, animators: &[SampledAnimato
         option(animator.tracking.as_ref().map(std::slice::from_ref));
         if animator.advance_follows_scale {
             hash.u32(0xadf5);
+        }
+        if let Some(reveal) = animator.reveal {
+            hash.u32(0x2e7e);
+            for value in [reveal.progress, reveal.angle_degrees, reveal.feather] {
+                hash.f32(value);
+            }
         }
     }
 }

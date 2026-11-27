@@ -47,6 +47,13 @@ All notable changes to this project are documented in this file.
   animators can widen an advance by, so its lines fit at their largest moment; text and layout
   measurements report it as `advanceHeadroom`. `WasmTextRasterizer.rasterize` takes
   `advanceHeadroom`, `animatorGrouping`, `animatorPivot` and a cluster state's `advanceScale`.
+- Text animators: `reveal` (`progress`, `angle_degrees`, `feather`) wipes each unit in along a
+  straight edge, as a linear wipe: across the character, word, line or whole text that
+  `animator_grouping` makes the unit, in the unit's own frame so the edge scales and turns with
+  it. A unit selected by `w` shows `1 + w (progress - 1)` of itself, 0 hiding it and 1 showing it
+  whole exactly. Fill, strokes, decorations and color glyphs are cut alike, shadows follow from
+  the revealed glyphs, and background boxes are not cut. Several reveals intersect.
+  `WasmTextRasterizer.rasterize` takes a cluster state's `reveals`.
 - `WasmTextMeasurer.layoutText`, Python `TextMeasurer.text_layout` and Rust
   `alpha2_layout::text_layout`: where a text generator's lines, words and grapheme clusters lie
   (boxes, em boxes, baselines, ink and font sizes, in canvas fractions), at the fitted size and

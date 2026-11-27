@@ -98,6 +98,7 @@ import {
   MAX_LETTER_SPACING,
   MAX_LINE_HEIGHT,
   MAX_TEXT_PADDING,
+  MAX_REVEAL_FEATHER,
   MAX_TEXT_BORDER_WIDTH,
   MAX_TEXT_DASH_ENTRY,
   MAX_TEXT_DASH_OFFSET,
@@ -3552,7 +3553,18 @@ function validAnimatorProperties(properties: unknown): boolean {
       MIN_LETTER_SPACING,
       MAX_LETTER_SPACING,
     ) &&
-    (properties.advance_follows_scale !== true || present(properties.scale))
+    (properties.advance_follows_scale !== true || present(properties.scale)) &&
+    (properties.reveal == null || validTextReveal(properties.reveal))
+  );
+}
+
+/** Mirrors `TextReveal::is_valid`. */
+function validTextReveal(reveal: unknown): boolean {
+  return (
+    isRecord(reveal) &&
+    validScalarAnimation(reveal.progress, 0, 1) &&
+    validScalarAnimation(reveal.angle_degrees) &&
+    validScalarAnimation(reveal.feather, 0, MAX_REVEAL_FEATHER)
   );
 }
 

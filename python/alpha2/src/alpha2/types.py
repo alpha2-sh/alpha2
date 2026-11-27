@@ -259,6 +259,9 @@ MAX_RANGE_INDEX = 4096
 MAX_RANGE_PERCENT = 200
 """Mirrors `alpha2_model::MAX_RANGE_PERCENT`."""
 
+MAX_REVEAL_FEATHER = 1
+"""Mirrors `alpha2_model::MAX_REVEAL_FEATHER`."""
+
 MAX_RUN_CLASSES = 8
 """Mirrors `alpha2_model::MAX_RUN_CLASSES`."""
 
@@ -2989,6 +2992,11 @@ class TextAnimatorProperties(TypedDict):
     """Moves the character, in font sizes, +y down."""
     opacity: NotRequired[Animated[float] | None]
     """The opacity a fully selected character takes, in `[0, 1]`."""
+    reveal: NotRequired[TextReveal | None]
+    """Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight
+    edge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows
+    `progress` of itself.
+    """
     rotation_degrees: NotRequired[Animated[float] | None]
     """Turns the character about its centre, clockwise degrees."""
     scale: NotRequired[Animated[Vec2] | None]
@@ -3065,6 +3073,31 @@ class TextInsetsVariant3(TypedDict):
 
 TextInsets: TypeAlias = "float | str | TextInsetsVariant3"
 """A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers ("0.1 0.3": top first, clockwise), or the sides object, missing sides 0."""
+
+
+class TextReveal(TypedDict):
+    """A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its
+    advances by its em boxes, outset by its strokes) in the direction `angle_degrees`.
+    """
+
+    angle_degrees: NotRequired[Animated[float]]
+    """The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,
+    90 top to bottom. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    feather: NotRequired[Animated[float]]
+    """The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel
+    antialiased step. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    progress: NotRequired[Animated[float]]
+    """How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit
+    selected by `w` shows `1 + w (progress - 1)`. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
 
 
 TextRun = TypedDict(

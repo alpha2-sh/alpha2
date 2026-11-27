@@ -72,7 +72,7 @@ const fn centre() -> [f32; 2] {
 /// A cluster's state; omitted fields take their identity value. Offset and tracking are in
 /// pixels, rotation in clockwise radians, color mixes as `keep` and premultiplied linear-light
 /// `add`.
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct StateWire {
     #[serde(default)]
@@ -91,6 +91,19 @@ pub(crate) struct StateWire {
     tracking: f32,
     #[serde(default = "full")]
     advance_scale: f32,
+    #[serde(default)]
+    reveals: Vec<RevealWire>,
+}
+
+/// A reveal edge: the unit vector it travels along, its progress in `[0, 1]` and its feather
+/// in pixels.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevealWire {
+    direction: [f32; 2],
+    progress: f32,
+    #[serde(default)]
+    feather: f32,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -125,6 +138,13 @@ impl StateWire {
             stroke: mix(self.stroke),
             tracking: self.tracking,
             advance_scale: self.advance_scale,
+            reveals: std::array::from_fn(|index| {
+                self.reveals.get(index).map(|edge| alpha2_text::RevealEdge {
+                    direction: edge.direction,
+                    progress: edge.progress,
+                    feather: edge.feather,
+                })
+            }),
         }
     }
 }
@@ -484,7 +504,14 @@ pub(crate) fn animated_request(
     content_version: u64,
     rasterizer: &alpha2_text::TextRasterizer,
 ) -> Result<(TextRasterRequest, Vec<alpha2_text::ClusterState>), alpha2_text::TextRasterError> {
-    let (one, list) = (wire.cluster_state, wire.cluster_states.clone());
+    let (one, list) = (wire.cluster_state.clone(), wire.cluster_states.clone());
+    if one
+        .iter()
+        .chain(list.iter().flatten())
+        .any(|state| state.reveals.len() > alpha2_text::MAX_REVEAL_EDGES)
+    {
+        return Err(alpha2_text::TextRasterError::InvalidRequest);
+    }
     let request = TextRequestWire {
         cluster_state: None,
         cluster_states: None,

@@ -91,6 +91,60 @@ pub struct ColorMix {
 /// Largest scale of a [`ClusterState`] on either axis.
 pub const MAX_CLUSTER_SCALE: f32 = 10.0;
 
+/// Most reveal edges a [`ClusterState`] takes.
+pub const MAX_REVEAL_EDGES: usize = 8;
+
+/// A straight edge that shows a cluster's unit (its group's box, outset by the text's strokes) up
+/// to it, as a linear wipe. In the unit's own frame, before its transform, the edge's centre lies
+/// at `a - w / 2 + progress (b - a + w)` along `direction`, `[a, b]` the box's extent along it and
+/// `w` the feather, at least a pixel; a point at `s` keeps `clamp((e - s) / w + 0.5, 0, 1)` of
+/// itself. Progress 0 hides the unit and 1 shows it whole, exactly.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct RevealEdge {
+    /// The unit vector the edge travels along, +y down.
+    pub direction: [f32; 2],
+    /// How much of the unit shows, in `[0, 1]`.
+    pub progress: f32,
+    /// The edge's softness in pixels, at least 0.
+    pub feather: f32,
+}
+
+impl RevealEdge {
+    fn is_valid(&self) -> bool {
+        let [x, y] = self.direction;
+        x.is_finite()
+            && y.is_finite()
+            && (x != 0.0 || y != 0.0)
+            && (0.0..=1.0).contains(&self.progress)
+            && self.feather.is_finite()
+            && self.feather >= 0.0
+    }
+
+    /// The share of a point at `[x, y]` of a unit whose box is `[left, top, right, bottom]` that
+    /// shows, both in the unit's own frame.
+    fn keep(&self, unit: [f32; 4], [x, y]: [f32; 2]) -> f32 {
+        if self.progress <= 0.0 {
+            return 0.0;
+        }
+        if self.progress >= 1.0 {
+            return 1.0;
+        }
+        let [u, v] = self.direction;
+        let [left, top, right, bottom] = unit;
+        let corners = [
+            left * u + top * v,
+            right * u + top * v,
+            left * u + bottom * v,
+            right * u + bottom * v,
+        ];
+        let low = corners.iter().copied().fold(f32::INFINITY, f32::min);
+        let high = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let width = self.feather.max(1.0);
+        let edge = low - width * 0.5 + self.progress * (high - low + width);
+        ((edge - (x * u + y * v)) / width + 0.5).clamp(0.0, 1.0)
+    }
+}
+
 /// The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
 /// Grouping.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -126,6 +180,8 @@ pub struct ClusterState {
     /// How much its advance widens, in `[0, MAX_CLUSTER_SCALE]`: mapped about its group's pivot,
     /// the advances of a group push the groups after it along their line, which is re-aligned.
     pub advance_scale: f32,
+    /// Edges that reveal its unit; their shares multiply. An edge at progress 1 changes nothing.
+    pub reveals: [Option<RevealEdge>; MAX_REVEAL_EDGES],
 }
 
 impl ClusterState {
@@ -139,12 +195,25 @@ impl ClusterState {
         stroke: None,
         tracking: 0.0,
         advance_scale: 1.0,
+        reveals: [None; MAX_REVEAL_EDGES],
     };
 
     /// Whether the state changes nothing.
     #[must_use]
     pub fn is_identity(&self) -> bool {
-        *self == Self::IDENTITY
+        Self {
+            reveals: Self::IDENTITY.reveals,
+            ..*self
+        } == Self::IDENTITY
+            && !self.reveals()
+    }
+
+    /// Whether an edge cuts its unit: one at progress below 1.
+    fn reveals(&self) -> bool {
+        self.reveals
+            .iter()
+            .flatten()
+            .any(|edge| edge.progress < 1.0)
     }
 
     fn is_valid(&self) -> bool {
@@ -163,6 +232,7 @@ impl ClusterState {
             && (0.0..=1.0).contains(&self.opacity)
             && self.tracking.is_finite()
             && (0.0..=MAX_CLUSTER_SCALE).contains(&self.advance_scale)
+            && self.reveals.iter().flatten().all(RevealEdge::is_valid)
             && mix(&self.fill)
             && mix(&self.stroke)
     }
@@ -834,22 +904,39 @@ impl TextRasterizer {
         let mut colors: Option<Vec<u8>> = None;
         let mut bands = vec![vec![0_u8; pixel_count]; band_count];
         let mut band_owner = vec![vec![u32::MAX; pixel_count]; band_count];
-        for (cluster, (drawn, at)) in tiles
+        let outset = shaping
+            .looks
+            .iter()
+            .filter_map(|look| stroke_radius(&look.strokes))
+            .fold(0.0_f32, f32::max);
+        let keeps = states
+            .iter()
+            .enumerate()
+            .map(|(cluster, state)| {
+                Keep::of(state, affines[cluster], pushed.units[cluster], outset)
+            })
+            .collect::<Vec<_>>();
+        for (index, (drawn, at)) in tiles
             .iter()
             .enumerate()
             .filter_map(|(cluster, tile)| tile.as_ref().map(|tile| (cluster, tile)))
             .chain(decorations.iter().map(|(owner, tile)| (*owner, tile)))
         {
-            let cluster = u32::try_from(cluster).map_err(|_| TextRasterError::TooLarge)?;
+            let keep = &keeps[index];
+            if matches!(keep, Keep::Nothing) {
+                continue;
+            }
+            let cluster = u32::try_from(index).map_err(|_| TextRasterError::TooLarge)?;
             let tile = drawn.tile.moved(*at);
             place_max(
                 (&mut coverage, &mut fill_owner, width),
                 margins,
                 &tile,
-                &drawn.tile.coverage,
+                &keep.applied(&tile, &drawn.tile.coverage, 1),
                 cluster,
             );
             if let Some(held) = &drawn.tile.colors {
+                let held = keep.applied(&tile, held, 4);
                 let plane = colors.get_or_insert_with(|| vec![0; pixel_count * 4]);
                 for row in 0..tile.height {
                     for column in 0..tile.width {
@@ -882,7 +969,13 @@ impl TextRasterizer {
                 .zip(band_owner.iter_mut())
                 .zip(&drawn.bands)
             {
-                place_max((band, owners, width), margins, &padded, dilated, cluster);
+                place_max(
+                    (band, owners, width),
+                    margins,
+                    &padded,
+                    &keep.applied(&padded, dilated, 1),
+                    cluster,
+                );
             }
         }
         let line_boxes = layout.line_boxes(request.align);
@@ -972,6 +1065,94 @@ impl TextRasterizer {
     }
 }
 
+/// How much of a cluster's tiles its reveal edges keep.
+enum Keep {
+    /// All of them: no edge cuts its unit.
+    Whole,
+    /// None: an edge at progress 0 hides its unit, or its transform is degenerate.
+    Nothing,
+    /// The share each tile pixel's centre keeps, mapped back by `inverse` into the unit's frame,
+    /// where its box is `unit`.
+    Part {
+        inverse: Affine,
+        unit: [f32; 4],
+        edges: [Option<RevealEdge>; MAX_REVEAL_EDGES],
+    },
+}
+
+impl Keep {
+    fn of(state: &ClusterState, affine: Affine, unit: [f32; 4], outset: f32) -> Self {
+        if !state.reveals() {
+            return Self::Whole;
+        }
+        if state
+            .reveals
+            .iter()
+            .flatten()
+            .any(|edge| edge.progress <= 0.0)
+        {
+            return Self::Nothing;
+        }
+        let Some(inverse) = invert(affine) else {
+            return Self::Nothing;
+        };
+        let [left, top, right, bottom] = unit;
+        Self::Part {
+            inverse,
+            unit: [left - outset, top - outset, right + outset, bottom + outset],
+            edges: state.reveals,
+        }
+    }
+
+    /// `values` (`channels` bytes per pixel of `tile`) scaled by the share each pixel keeps.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "tile coordinates and bytes scaled by a share in [0, 1]"
+    )]
+    fn applied<'a>(
+        &self,
+        tile: &Tile,
+        values: &'a [u8],
+        channels: usize,
+    ) -> std::borrow::Cow<'a, [u8]> {
+        let Self::Part {
+            inverse,
+            unit,
+            edges,
+        } = self
+        else {
+            return std::borrow::Cow::Borrowed(values);
+        };
+        let mut kept = values.to_vec();
+        for row in 0..tile.height {
+            for column in 0..tile.width {
+                let at = (row * tile.width + column) * channels;
+                let pixel = &mut kept[at..at + channels];
+                if pixel.iter().all(|value| *value == 0) {
+                    continue;
+                }
+                let point = apply(
+                    *inverse,
+                    [
+                        (tile.left + i64::try_from(column).unwrap_or(0)) as f32 + 0.5,
+                        (tile.top + i64::try_from(row).unwrap_or(0)) as f32 + 0.5,
+                    ],
+                );
+                let share = edges
+                    .iter()
+                    .flatten()
+                    .fold(1.0_f32, |share, edge| share * edge.keep(*unit, point));
+                for value in pixel {
+                    *value = (f32::from(*value) * share).round() as u8;
+                }
+            }
+        }
+        std::borrow::Cow::Owned(kept)
+    }
+}
+
 /// Where an animated text's clusters go along their lines: tracked, then pushed apart by their
 /// advance scales, group by group in visual order, and the line re-aligned.
 struct Pushed {
@@ -984,6 +1165,9 @@ struct Pushed {
     moves: Vec<f32>,
     /// Per cluster, the point it scales and turns about.
     pivots: Vec<[f32; 2]>,
+    /// Per cluster, its group's box once pushed, `[left, top, right, bottom]`: its clusters'
+    /// advances by their em boxes.
+    units: Vec<[f32; 4]>,
 }
 
 impl Pushed {
@@ -1013,6 +1197,7 @@ impl Pushed {
             .map(|&group| group_pivots[group])
             .collect::<Vec<_>>();
         let mut offsets = Vec::with_capacity(layout.lines.len());
+        let mut placed = vec![GroupBox::default(); boxes.len()];
         for (line, &(tracked_offset, shift)) in layout.lines.iter().zip(&tracked.lines) {
             let (group_moves, pushed) =
                 push_line(line, &tracked.extents, &groups, &group_pivots, states);
@@ -1028,13 +1213,33 @@ impl Pushed {
                 pivots[cluster][0] =
                     group_pivots[group][0] + group_move + (offset - tracked_offset);
             }
+            for cluster in line.glyphs.iter().map(|glyph| glyph.cluster) {
+                if let Some((left, right)) = tracked.extents[cluster] {
+                    let delta = moves[cluster] + (offset - tracked_offset);
+                    let at = layout.clusters[cluster].line;
+                    placed[groups[cluster]].add(
+                        (left + delta, right + delta),
+                        at,
+                        layout.baseline(at),
+                        tracked.sizes[cluster],
+                    );
+                }
+            }
             offsets.push(offset);
         }
+        let units = groups
+            .iter()
+            .map(|&group| {
+                let [left, right, top, bottom] = placed[group].bounds.unwrap_or_default();
+                [left, top, right, bottom]
+            })
+            .collect();
         Self {
             shifts: tracked.shifts,
             offsets,
             moves,
             pivots,
+            units,
         }
     }
 }

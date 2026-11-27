@@ -36,6 +36,8 @@ pub const RANGE_PERCENT: std::ops::RangeInclusive<f32> = -100.0..=200.0;
 pub const MAX_ANIMATOR_OFFSET: f32 = 1_024.0;
 /// The range an animator's scale takes on each axis.
 pub const ANIMATOR_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
+/// Widest feather of a text reveal's edge, in font sizes.
+pub const MAX_REVEAL_FEATHER: f32 = 1.0;
 
 /// A text: one string, or runs whose texts joined are the text.
 ///
@@ -574,6 +576,41 @@ pub struct TextAnimatorProperties {
     /// text wraps with room for the largest scale this can reach. Needs `scale`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub advance_follows_scale: bool,
+    /// Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight
+    /// edge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows
+    /// `progress` of itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<TextReveal>,
+}
+
+/// A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its
+/// advances by its em boxes, outset by its strokes) in the direction `angle_degrees`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextReveal {
+    /// How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit
+    /// selected by `w` shows `1 + w (progress - 1)`. Default 0.
+    #[serde(default = "zero")]
+    pub progress: Animated<f32>,
+    /// The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,
+    /// 90 top to bottom. Default 0.
+    #[serde(default = "zero")]
+    pub angle_degrees: Animated<f32>,
+    /// The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel
+    /// antialiased step. Default 0.
+    #[serde(default = "zero")]
+    pub feather: Animated<f32>,
+}
+
+impl TextReveal {
+    fn is_valid(&self) -> bool {
+        valid_scalar_values(&self.progress, |value| (0.0..=1.0).contains(&value))
+            && valid_scalar_values(&self.angle_degrees, |_| true)
+            && valid_scalar_values(&self.feather, |value| {
+                (0.0..=MAX_REVEAL_FEATHER).contains(&value)
+            })
+    }
 }
 
 /// The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
@@ -604,6 +641,7 @@ impl TextAnimatorProperties {
             && self.fill.is_none()
             && self.stroke.is_none()
             && self.tracking.is_none()
+            && self.reveal.is_none()
     }
 
     fn is_valid(&self) -> bool {
@@ -647,6 +685,7 @@ impl TextAnimatorProperties {
                 })
             })
             && (!self.advance_follows_scale || self.scale.is_some())
+            && self.reveal.as_ref().is_none_or(TextReveal::is_valid)
     }
 }
 
@@ -739,6 +778,15 @@ pub(crate) fn for_each_keyed_animator(
         }
         if let Some(value) = &properties.tracking {
             visit_keyed(&format!("{at}.tracking"), value, visit);
+        }
+        if let Some(reveal) = &properties.reveal {
+            visit_keyed(&format!("{at}.reveal.progress"), &reveal.progress, visit);
+            visit_keyed(
+                &format!("{at}.reveal.angle_degrees"),
+                &reveal.angle_degrees,
+                visit,
+            );
+            visit_keyed(&format!("{at}.reveal.feather"), &reveal.feather, visit);
         }
     }
 }

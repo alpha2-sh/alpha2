@@ -57,6 +57,6 @@ pub(crate) use retime::{Mirror, map_source_time, picture_line_breaks};
 pub use retime::{picture_source_time, source_instant_to_timeline, source_range_to_timeline};
 pub use shapes::{ShapesPlan, evaluate_geometry, evaluate_item, evaluate_items};
 pub use text_animation::{
-    SampledAnimator, SampledSelector, advance_headroom, hash_sampled_animators,
+    SampledAnimator, SampledReveal, SampledSelector, advance_headroom, hash_sampled_animators,
     sample_text_animators,
 };

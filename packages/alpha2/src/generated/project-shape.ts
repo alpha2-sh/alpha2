@@ -2840,6 +2840,7 @@ export const PROJECT_SHAPE: unknown = {
         opacity: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
+        reveal: { anyOf: [{ $ref: "#/$defs/TextReveal" }, { type: "null" }] },
         rotation_degrees: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
@@ -2915,6 +2916,24 @@ export const PROJECT_SHAPE: unknown = {
           type: "object",
         },
       ],
+    },
+    TextReveal: {
+      additionalProperties: false,
+      properties: {
+        angle_degrees: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        feather: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        progress: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+      },
+      type: "object",
     },
     TextRun: {
       additionalProperties: false,
