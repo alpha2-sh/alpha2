@@ -698,6 +698,56 @@ fn picture_time_places_refuse_data() {
 }
 
 #[test]
+fn text_animator_places_refuse_data() {
+    let bound = json!({ "mode": "data", "data": "t", "channel": "rms" });
+    let animators = json!([{ "selector": { "type": "range", "start": bound }, "properties": { "scale": bound } }]);
+    let holders = [
+        (
+            "/sources",
+            json!({ "id": "title", "locator": "", "kind": "generated", "generator": {
+                "type": "text", "text": "hi", "style": { "font_size": 0.1, "animators": animators } } }),
+            "style.animators[0].selector.start",
+        ),
+        (
+            "/sources",
+            json!({ "id": "card", "locator": "", "kind": "generated", "generator": {
+                "type": "layout", "root": { "text": { "mode": "constant", "value": "hi" },
+                    "text_animators": animators } } }),
+            "root.text_animators[0].selector.start",
+        ),
+        (
+            "/timeline/tracks",
+            json!({ "id": "subs", "name": "Subs", "kind": "caption", "captions": {
+                "style": { "font_size": 0.1, "animators": animators },
+                "cues": [{ "timeline_range": { "start": 0, "end": 4004 }, "text": "hi" }] } }),
+            "captions.style.animators[0].selector.start",
+        ),
+        (
+            "/timeline/tracks",
+            json!({ "id": "subs", "name": "Subs", "kind": "caption", "captions": {
+                "styles": { "loud": { "animators": animators } },
+                "cues": [{ "timeline_range": { "start": 0, "end": 4004 }, "text": "hi",
+                           "style": "loud" }] } }),
+            "captions.styles.loud.animators[0].selector.start",
+        ),
+    ];
+    for anchor in [timeline(), source("source-a")] {
+        for (list, holder, at) in &holders {
+            let mut project = with_data(vec![scalars("t", &anchor)]);
+            project
+                .pointer_mut(list)
+                .and_then(Value::as_array_mut)
+                .expect("a list")
+                .push(holder.clone());
+            assert_eq!(
+                binding_problem(&project),
+                ((*at).to_owned(), BindingProblem::ClockRefusesAnchor)
+            );
+        }
+    }
+}
+
+#[test]
 fn a_correction_needs_similarity_on_the_clips_source() {
     let similarity = |anchor: Value| {
         json!({ "id": "shake", "anchor": anchor, "kind": "similarity",

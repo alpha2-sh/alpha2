@@ -37627,5 +37627,62 @@
         }
       ]
     }
+  },
+  {
+    "name": "data-caption-animator-refuses-data",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs captions.style.animators[0].properties.scale is keyed on a clock that refuses this anchor"
+    ],
+    "error": "track subs captions.style.animators[0].properties.scale is keyed on a clock that refuses this anchor",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "font_size": 0.05,
+                "animators": [
+                  {
+                    "selector": { "type": "range" },
+                    "properties": {
+                      "scale": { "mode": "data", "data": "s", "channel": "rms" }
+                    }
+                  }
+                ]
+              },
+              "cues": [
+                { "timeline_range": { "start": 0, "end": 4000 }, "text": "hi" }
+              ]
+            }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "timeline" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [1.0, 2.0]
+        }
+      ]
+    }
   }
 ]
