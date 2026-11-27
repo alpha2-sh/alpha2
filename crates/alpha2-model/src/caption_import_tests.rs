@@ -1,4 +1,5 @@
 use super::*;
+use crate::TextRunStyle;
 
 fn run(text: &str, class: &[&str]) -> TextRun {
     TextRun {
@@ -6,6 +7,27 @@ fn run(text: &str, class: &[&str]) -> TextRun {
         class: class.iter().map(|&name| name.into()).collect(),
         time: None,
         style: None,
+    }
+}
+
+fn styled(text: &str, class: &[&str], style: TextRunStyle) -> TextRun {
+    TextRun {
+        style: Some(style),
+        ..run(text, class)
+    }
+}
+
+fn italic() -> TextRunStyle {
+    TextRunStyle {
+        font_style: Some(crate::FontStyle::Italic),
+        ..TextRunStyle::default()
+    }
+}
+
+fn bold() -> TextRunStyle {
+    TextRunStyle {
+        font_weight: Some(700),
+        ..TextRunStyle::default()
     }
 }
 
@@ -32,7 +54,7 @@ fn srt_reads_multiline_cues_strips_markup_and_skips_bad_blocks() {
                 timeline_range: range(1_000, 2_500),
                 text: TextContent::Runs(vec![
                     run("Hello ", &[]),
-                    run("there", &["i"]),
+                    styled("there", &["i"], italic()),
                     run("\nGeneral Kenobi", &[]),
                 ]),
                 speaker: None,
@@ -513,9 +535,10 @@ fn webvtt_classes_and_bold_become_run_classes() {
     assert_eq!(
         imported.cues[0].text,
         TextContent::Runs(vec![
-            run("one two", &["a", "b"]),
+            run("one ", &["a", "b"]),
+            styled("two", &["a", "b"], bold()),
             run(" ", &[]),
-            run("three", &["i"]),
+            styled("three", &["i"], italic()),
             run(" ", &[]),
             run("four", &["ok"]),
         ])
@@ -712,4 +735,52 @@ fn every_hostile_caption_input_imports_valid_cues() {
         seen += 1;
     }
     assert!(seen > 0);
+}
+
+#[test]
+fn webvtt_bold_italic_underline_become_styles_and_keep_classes() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:02.000\n<b>a <i>b <u>c</u></i></b> d\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    let all = TextRunStyle {
+        underline: Some(true),
+        font_style: Some(crate::FontStyle::Italic),
+        ..bold()
+    };
+    assert_eq!(
+        imported.cues[0].text,
+        TextContent::Runs(vec![
+            styled("a ", &["b"], bold()),
+            styled(
+                "b ",
+                &["b", "i"],
+                TextRunStyle {
+                    font_style: Some(crate::FontStyle::Italic),
+                    ..bold()
+                }
+            ),
+            styled("c", &["b", "i", "u"], all),
+            run(" d", &[]),
+        ])
+    );
+}
+
+#[test]
+fn srt_bold_italic_underline_become_styles_and_keep_classes() {
+    let text = "1\n00:00:01,000 --> 00:00:02,000\n<B>loud</B> <u>under</u>\n\n";
+    let imported = parse_srt(text).expect("an SRT file");
+    assert_eq!(
+        imported.cues[0].text,
+        TextContent::Runs(vec![
+            styled("loud", &["b"], bold()),
+            run(" ", &[]),
+            styled(
+                "under",
+                &["u"],
+                TextRunStyle {
+                    underline: Some(true),
+                    ..TextRunStyle::default()
+                }
+            ),
+        ])
+    );
 }

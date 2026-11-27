@@ -239,6 +239,46 @@
       "height": 1080,
       "name": "clamp-rtl",
       "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.8294444680213928,\"last\":0.9044445157051086},\"content\":{\"bottom\":0.9194445013999939,\"left\":0.35951918363571167,\"right\":0.6404808163642883,\"top\":0.7394444942474365},\"fontSize\":0.05000000074505806,\"ink\":{\"bottom\":0.9144445061683655,\"left\":0.3622795045375824,\"right\":0.641771674156189,\"top\":0.7552257180213928},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.3499999940395355,\"right\":0.6499999761581421,\"top\":0.7394444942474365},\"lineCount\":2,\"overflow\":false,\"truncated\":false}",
+      "generator": {
+        "style": {
+          "font_size": 0.05,
+          "max_width": 0.3
+        },
+        "text": [
+          {
+            "text": "Rich "
+          },
+          {
+            "style": {
+              "font_scale": {
+                "mode": "constant",
+                "value": 2
+              }
+            },
+            "text": "BIG"
+          },
+          {
+            "style": {
+              "font_style": "italic",
+              "underline": true
+            },
+            "text": " leaning"
+          },
+          {
+            "style": {
+              "background_color": "#2040c0"
+            },
+            "text": " boxed"
+          }
+        ],
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "rich-runs",
+      "width": 1920
     }
   ],
   "font": "tests/fonts/Alpha2Fixture.ttf"

@@ -74,8 +74,13 @@ pub fn measure_text_json(
     };
     let size = PictureSize::new(width, height)
         .map_err(|error| MeasureError::Input(format!("invalid canvas size: {error}")))?;
-    let bounds =
-        crate::measure_text(rasterizer, &text.text(), style, size).map_err(MeasureError::Text)?;
+    let bounds = crate::measure_text(
+        rasterizer,
+        &crate::TextAt::new(text, MediaTime::ZERO),
+        style,
+        size,
+    )
+    .map_err(MeasureError::Text)?;
     Ok(serde_json::json!({
         "layout": rect(bounds.layout),
         "content": rect(bounds.content),

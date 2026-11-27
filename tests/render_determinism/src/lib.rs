@@ -40,6 +40,36 @@ pub const PINNED_PROJECT_HASH: u64 = 10_024_933_701_591_814_599;
 /// [`text_fit_hash`] on linux-x64.
 pub const PINNED_TEXT_FIT_HASH: u64 = 13_886_038_456_557_030_929;
 
+/// [`rich_text_hash`] on linux-x64.
+pub const PINNED_RICH_TEXT_HASH: u64 = 5_665_811_289_508_202_365;
+
+/// A text generator and a caption cue whose runs set faces, sizes (one keyframed), paints,
+/// backgrounds and decorations.
+pub const RICH_TEXT_PROJECT_JSON: &str = include_str!("../../cases/rich-text-project.json");
+
+/// The fonts [`rich_text_hash`] draws with, by family.
+const RICH_TEXT_FONTS: [(&str, &[u8]); 4] = [
+    (
+        "Alpha2 Fixture",
+        include_bytes!("../../fonts/Alpha2Fixture.ttf"),
+    ),
+    (
+        "Alpha2 Fixture Hangul",
+        include_bytes!("../../fonts/Alpha2FixtureHangul.ttf"),
+    ),
+    (
+        "Alpha2 Fixture Styles",
+        include_bytes!("../../fonts/Alpha2FixtureStyles.ttf"),
+    ),
+    (
+        "Alpha2 Fixture Styles",
+        include_bytes!("../../fonts/Alpha2FixtureStylesItalic.ttf"),
+    ),
+];
+
+/// The times [`rich_text_hash`] draws, in ticks. A run grows between the first two.
+pub const RICH_TEXT_TIMES: [i64; 3] = [0, 30_000, 90_000];
+
 /// [`sources_hash`] on linux-x64.
 pub const PINNED_SOURCES_HASH: u64 = 13_512_731_293_498_072_585;
 
@@ -713,6 +743,33 @@ pub fn text_fit_hash() -> u64 {
     hash
 }
 
+/// FNV-1a hash of the rich text project's frames at [`RICH_TEXT_TIMES`], drawn on the CPU.
+///
+/// # Panics
+/// Panics if the engine refuses the fixed project or its fonts.
+#[must_use]
+pub fn rich_text_hash() -> u64 {
+    let project = EngineProject::new(Project::from_json(RICH_TEXT_PROJECT_JSON).expect("project"))
+        .expect("snapshot");
+    let settings = &project.project().settings;
+    let size = RenderSize::new(settings.width, settings.height).expect("size");
+    let renderer = CpuRenderer::new(1);
+    let mut texts = TextTextures::new();
+    for (family, bytes) in RICH_TEXT_FONTS {
+        texts.add_font(family, bytes, 0).expect("font");
+    }
+    let mut hash = FNV_OFFSET;
+    for ticks in RICH_TEXT_TIMES {
+        let frame = project.evaluate(MediaTime(ticks)).expect("frame");
+        texts.prepare(&renderer, &frame, size).expect("text");
+        let output = renderer
+            .render_frame(size, &frame, &FramesWithText::new(&NoFrames, &texts))
+            .expect("render");
+        hash = fnv(hash, &output.texture.expect("complete").read_rgba8());
+    }
+    hash
+}
+
 /// Every frame time of the parity project, in ticks.
 ///
 /// # Panics
@@ -809,6 +866,14 @@ pub fn cpu_text_fit_hash() -> u64 {
     text_fit_hash()
 }
 
+/// The wasm entry point for [`rich_text_hash`], a `BigInt` in JavaScript.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = cpuRichTextHash)]
+#[must_use]
+pub fn cpu_rich_text_hash() -> u64 {
+    rich_text_hash()
+}
+
 /// The wasm entry point for [`project_hash`], a `BigInt` in JavaScript.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = cpuProjectHash)]
@@ -853,5 +918,10 @@ mod tests {
     #[test]
     fn fitted_and_clamped_text_hashes_to_its_pin() {
         assert_eq!(super::text_fit_hash(), super::PINNED_TEXT_FIT_HASH);
+    }
+
+    #[test]
+    fn rich_text_hashes_to_its_pin() {
+        assert_eq!(super::rich_text_hash(), super::PINNED_RICH_TEXT_HASH);
     }
 }

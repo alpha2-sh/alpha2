@@ -3,7 +3,8 @@
 //! A millisecond is exactly 120 ticks, so import is lossless. Markup that says who speaks or
 //! what a word is becomes the cue's speaker and runs: a WebVTT voice (`<v Name>`) sets the
 //! speaker and gives classes `voice` plus the voice's classes, `<c.a.b>` gives `a` and `b`,
-//! `<b>`, `<i>` and `<u>` (also in SRT) give `b`, `i` and `u`, and WebVTT inline timestamps
+//! `<b>`, `<i>` and `<u>` (also in SRT) give `b`, `i` and `u` and draw bold, italic and
+//! underlined (a run style, as WebVTT applies CSS to them), and WebVTT inline timestamps
 //! split the text into runs timed from the cue's start. Other markup is dropped: SRT's other
 //! tags and `{\...}` overrides, WebVTT's `ruby`, `rt` and `lang` tags (text kept) and cue
 //! settings. WebVTT character references are decoded. A `<` in SRT that opens no tag is
@@ -508,12 +509,49 @@ struct Marked {
     notes: ImportNotes,
 }
 
+/// The `<b>`, `<i>` and `<u>` tags open around a piece of text (WebVTT, "Applying CSS
+/// properties to WebVTT Node Objects": bold, italic, underline; SRT alike).
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+struct Emphasis {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+impl Emphasis {
+    fn of<'n>(names: impl IntoIterator<Item = &'n str>) -> Self {
+        let mut emphasis = Self::default();
+        for name in names {
+            match name {
+                "b" => emphasis.bold = true,
+                "i" => emphasis.italic = true,
+                "u" => emphasis.underline = true,
+                _ => {}
+            }
+        }
+        emphasis
+    }
+
+    fn of_open(open: &[String]) -> Self {
+        Self::of(open.iter().map(String::as_str))
+    }
+
+    fn style(self) -> Option<crate::TextRunStyle> {
+        (self != Self::default()).then(|| crate::TextRunStyle {
+            font_weight: self.bold.then_some(700),
+            font_style: self.italic.then_some(crate::FontStyle::Italic),
+            underline: self.underline.then_some(true),
+            ..crate::TextRunStyle::default()
+        })
+    }
+}
+
 /// Builds a cue's text and runs from text pieces, each with its open classes and time segment.
 /// Markup stops being tracked (the cue is imported as plain text) past [`MAX_TEXT_RUNS`] pieces
 /// beyond what trimming can remove.
 struct Runs {
     text: String,
-    pieces: Vec<(String, Vec<String>, usize)>,
+    pieces: Vec<(String, Vec<String>, usize, Emphasis)>,
     tracking: bool,
     notes: ImportNotes,
 }
@@ -537,7 +575,7 @@ impl Runs {
         }
     }
 
-    fn push(&mut self, text: &str, classes: &[String], segment: usize) {
+    fn push(&mut self, text: &str, classes: &[String], segment: usize, emphasis: Emphasis) {
         self.text.push_str(text);
         if !self.tracking {
             return;
@@ -552,7 +590,9 @@ impl Runs {
             return;
         }
         match self.pieces.last_mut() {
-            Some((held, open, at)) if open.as_slice() == classes && *at == segment => {
+            Some((held, open, at, emphasized))
+                if open.as_slice() == classes && *at == segment && *emphasized == emphasis =>
+            {
                 held.push_str(text);
             }
             _ => {
@@ -562,7 +602,7 @@ impl Runs {
                     return;
                 }
                 self.pieces
-                    .push((text.to_owned(), classes.to_vec(), segment));
+                    .push((text.to_owned(), classes.to_vec(), segment, emphasis));
             }
         }
     }
@@ -589,11 +629,11 @@ impl Runs {
                 || self
                     .pieces
                     .iter()
-                    .any(|(_, classes, _)| !classes.is_empty())))
+                    .any(|(_, classes, ..)| !classes.is_empty())))
         .then(|| {
             self.pieces
                 .into_iter()
-                .map(|(text, mut class, segment)| {
+                .map(|(text, mut class, segment, emphasis)| {
                     if class.len() > MAX_RUN_CLASSES {
                         self.notes.dropped_classes += class.len() - MAX_RUN_CLASSES;
                         class.truncate(MAX_RUN_CLASSES);
@@ -605,7 +645,7 @@ impl Runs {
                             start: MediaTime(bounds[segment]),
                             end: MediaTime(bounds[segment + 1]),
                         }),
-                        style: None,
+                        style: emphasis.style(),
                     }
                 })
                 .collect()
@@ -637,9 +677,9 @@ fn tag_classes(names: &str, notes: &mut ImportNotes) -> Vec<String> {
 }
 
 /// A WebVTT cue body's text and markup for a cue over `range`: voices, classes, bold, italic and
-/// underline as run classes, and inline timestamps splitting the runs. A `<` with no `>` after it
-/// ends the cue text, as the WebVTT cue text tokenizer does. Linear in the body: each open tag
-/// records how many classes it added, and closing it truncates them.
+/// underline as run classes and styles, and inline timestamps splitting the runs. A `<` with no
+/// `>` after it ends the cue text, as the WebVTT cue text tokenizer does. Linear in the body:
+/// each open tag records how many classes it added, and closing it truncates them.
 fn vtt_markup(body: &str, range: TimeRange) -> Marked {
     let start = range.start().ticks();
     let duration = range.duration().map_or(0, MediaTime::ticks);
@@ -652,11 +692,22 @@ fn vtt_markup(body: &str, range: TimeRange) -> Marked {
     let mut bounds = vec![0_i64];
     let mut rest = body;
     loop {
+        let emphasis = Emphasis::of(open.iter().map(|(name, _)| *name));
         let Some(at) = rest.find('<') else {
-            runs.push(&decode_references(rest), &classes, bounds.len() - 1);
+            runs.push(
+                &decode_references(rest),
+                &classes,
+                bounds.len() - 1,
+                emphasis,
+            );
             break;
         };
-        runs.push(&decode_references(&rest[..at]), &classes, bounds.len() - 1);
+        runs.push(
+            &decode_references(&rest[..at]),
+            &classes,
+            bounds.len() - 1,
+            emphasis,
+        );
         let Some(end) = rest[at..].find('>') else {
             break;
         };
@@ -732,19 +783,19 @@ fn vtt_markup(body: &str, range: TimeRange) -> Marked {
     runs.finish(speaker, &bounds)
 }
 
-/// An SRT cue body's markup: `<b>`, `<i>` and `<u>` as run classes; other tags and override
-/// blocks dropped.
+/// An SRT cue body's markup: `<b>`, `<i>` and `<u>` as run classes and styles; other tags and
+/// override blocks dropped.
 fn srt_markup(body: &[&str]) -> Marked {
     let mut runs = Runs::new();
     let mut open: Vec<String> = Vec::new();
     for (index, line) in body.iter().enumerate() {
         if index > 0 {
-            runs.push("\n", &open, 0);
+            runs.push("\n", &open, 0, Emphasis::of_open(&open));
         }
         let line = strip_overrides(line);
         let mut rest = line.as_str();
         while let Some(start) = rest.find('<') {
-            runs.push(&rest[..start], &open, 0);
+            runs.push(&rest[..start], &open, 0, Emphasis::of_open(&open));
             let tag = &rest[start + 1..];
             let closing = tag.starts_with('/');
             let name = tag.strip_prefix('/').unwrap_or(tag);
@@ -770,12 +821,12 @@ fn srt_markup(body: &[&str]) -> Marked {
                     rest = &tag[end + 1..];
                 }
                 _ => {
-                    runs.push("<", &open, 0);
+                    runs.push("<", &open, 0, Emphasis::of_open(&open));
                     rest = tag;
                 }
             }
         }
-        runs.push(rest, &open, 0);
+        runs.push(rest, &open, 0, Emphasis::of_open(&open));
     }
     runs.finish(None, &[0, 0])
 }

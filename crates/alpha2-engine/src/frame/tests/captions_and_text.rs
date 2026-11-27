@@ -561,7 +561,8 @@ fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
     ];
     for (label, text, style_json) in cases {
         let style: alpha2_model::TextStyle = serde_json::from_str(&style_json).expect("style");
-        let bounds = texts.measure(text, &style, size).expect("measures");
+        let at = alpha2_layout::TextAt::from(text);
+        let bounds = texts.measure(&at, &style, size).expect("measures");
         // The layout box's anchor lies at the position.
         let layout = bounds.layout;
         let anchored = [

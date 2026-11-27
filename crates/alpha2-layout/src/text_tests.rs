@@ -1,6 +1,7 @@
 use super::*;
 use alpha2_model::{TextStyle, parse_srt, parse_webvtt};
 use alpha2_text::TextFont;
+use alpha2_time::MediaTime;
 
 #[test]
 fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
@@ -39,9 +40,14 @@ fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
     ] {
         for cue in &cues {
             let text = cue.text.text();
-            let key = text_key(&text, &style, size);
+            let key = text_key(&crate::TextAt::from(&*text), &style, size);
             let raster = rasterizer
-                .rasterize(&text_request(&text, &style, size, key))
+                .rasterize(&text_request(
+                    &crate::TextAt::from(&*text),
+                    &style,
+                    size,
+                    key,
+                ))
                 .unwrap_or_else(|error| panic!("{:?}: {error}", cue.text));
             assert_eq!(raster.descriptor.line_count, 2, "{:?}", cue.text);
         }
@@ -56,7 +62,12 @@ fn portrait_text_sizes_by_the_shorter_side() {
     };
     for (width, height) in [(540, 960), (960, 540)] {
         let size = PictureSize::new(width, height).expect("size");
-        let request = text_request("Hi", &style, size, text_key("Hi", &style, size));
+        let request = text_request(
+            &crate::TextAt::from("Hi"),
+            &style,
+            size,
+            text_key(&crate::TextAt::from("Hi"), &style, size),
+        );
         assert_eq!(
             request.font_size.to_bits(),
             27.0_f32.to_bits(),
@@ -82,10 +93,17 @@ fn baselines_lie_a_half_leading_and_an_ascent_below_each_line_top() {
         line_height: 1.4,
         ..TextStyle::default()
     };
-    let one = measure_text(&rasterizer, "Hg", &style, size).expect("measures");
+    let one =
+        measure_text(&rasterizer, &crate::TextAt::from("Hg"), &style, size).expect("measures");
     assert_eq!(one.baselines.first.to_bits(), one.baselines.last.to_bits());
     assert!((one.baselines.first - one.layout.top - 0.04).abs() < 1e-6);
-    let three = measure_text(&rasterizer, "Hg\nHg\nHg", &style, size).expect("measures");
+    let three = measure_text(
+        &rasterizer,
+        &crate::TextAt::from("Hg\nHg\nHg"),
+        &style,
+        size,
+    )
+    .expect("measures");
     assert_eq!(three.line_count, 3);
     assert!(
         (three.baselines.last - three.baselines.first - 2.0 * 1.4 * 40.0 / 1000.0).abs() < 1e-6
@@ -125,18 +143,26 @@ fn a_fitted_word_no_longer_splits_and_the_next_step_would() {
         ..TextStyle::default()
     };
     let word = "Internationalization";
-    let fitted = fit_text(word, &style, size, shape(&rasterizer)).expect("fits");
+    let fitted =
+        fit_text(&crate::TextAt::from(word), &style, size, shape(&rasterizer)).expect("fits");
     assert!(fitted.font_size < 0.2 && fitted.font_size > 0.01);
     let width = |pixels| {
         rasterizer
-            .shape(&text_request_at(word, &style, size, 1, pixels))
+            .shape(&text_request_at(
+                &crate::TextAt::from(word),
+                &style,
+                size,
+                1,
+                pixels,
+            ))
             .expect("shapes")
             .min_content_width()
     };
     assert!(width(fitted.font_pixels) <= 0.3 * 1920.0);
     let next = (fitted.font_size + 1.0 / alpha2_model::FONT_SIZE_FIT_STEPS) * size.unit();
     assert!(width(next) > 0.3 * 1920.0);
-    let bounds = measure_text(&rasterizer, word, &style, size).expect("measures");
+    let bounds =
+        measure_text(&rasterizer, &crate::TextAt::from(word), &style, size).expect("measures");
     assert_eq!(bounds.font_size, fitted.font_size);
     assert_eq!(bounds.line_count, 1);
     assert!(!bounds.overflow && !bounds.truncated);
@@ -154,12 +180,21 @@ fn a_fit_that_needs_no_change_draws_the_style_as_it_is() {
         }),
         ..TextStyle::default()
     };
-    let found = fit_text("Hi", &fitted, size, shape(&rasterizer)).expect("fits");
+    let found = fit_text(
+        &crate::TextAt::from("Hi"),
+        &fitted,
+        size,
+        shape(&rasterizer),
+    )
+    .expect("fits");
     assert_eq!(found.font_size, plain.font_size);
     assert_eq!(found.font_pixels, font_pixels(&plain, size));
-    let unfitted = fit_text("Hi", &plain, size, |_: &TextRasterRequest| {
-        Err::<std::sync::Arc<ShapedText>, _>(TextRasterError::NoFonts)
-    })
+    let unfitted = fit_text(
+        &crate::TextAt::from("Hi"),
+        &plain,
+        size,
+        |_: &TextRasterRequest| Err::<std::sync::Arc<ShapedText>, _>(TextRasterError::NoFonts),
+    )
     .expect("a style without a fit shapes nothing");
     assert_eq!(unfitted, found);
 }
@@ -178,7 +213,8 @@ fn text_fits_to_its_box_height_and_grows_to_its_maximum() {
         }),
         ..TextStyle::default()
     };
-    let bounds = measure_text(&rasterizer, QUICK, &shrink, size).expect("measures");
+    let bounds =
+        measure_text(&rasterizer, &crate::TextAt::from(QUICK), &shrink, size).expect("measures");
     assert!(bounds.font_size < 0.12);
     assert!(bounds.layout.bottom - bounds.layout.top <= 0.3 + 1.0e-6);
     assert!(!bounds.overflow);
@@ -192,7 +228,8 @@ fn text_fits_to_its_box_height_and_grows_to_its_maximum() {
         }),
         ..TextStyle::default()
     };
-    let bounds = measure_text(&rasterizer, "Big", &grow, size).expect("measures");
+    let bounds =
+        measure_text(&rasterizer, &crate::TextAt::from("Big"), &grow, size).expect("measures");
     assert!(bounds.font_size > 0.3, "{}", bounds.font_size);
     assert_eq!(bounds.line_count, 1);
 }
@@ -214,7 +251,8 @@ fn text_that_fits_at_no_size_is_clamped_at_its_minimum_and_reported() {
         }),
         ..TextStyle::default()
     };
-    let bounds = measure_text(&rasterizer, QUICK, &style, size).expect("measures");
+    let bounds =
+        measure_text(&rasterizer, &crate::TextAt::from(QUICK), &style, size).expect("measures");
     assert_eq!(bounds.font_size, 0.06);
     assert_eq!(bounds.line_count, 2);
     assert!(bounds.truncated && !bounds.overflow);
@@ -223,7 +261,8 @@ fn text_that_fits_at_no_size_is_clamped_at_its_minimum_and_reported() {
         max_height: Some(0.1),
         ..style
     };
-    let bounds = measure_text(&rasterizer, QUICK, &unclamped, size).expect("measures");
+    let bounds =
+        measure_text(&rasterizer, &crate::TextAt::from(QUICK), &unclamped, size).expect("measures");
     assert!(bounds.overflow && !bounds.truncated);
 }
 
@@ -231,7 +270,7 @@ fn text_that_fits_at_no_size_is_clamped_at_its_minimum_and_reported() {
 fn a_text_key_changes_with_the_box_height_fit_and_clamp() {
     let size = PictureSize::new(1920, 1080).expect("size");
     let base = TextStyle::default();
-    let key = text_key("Hi", &base, size);
+    let key = text_key(&crate::TextAt::from("Hi"), &base, size);
     let styles = [
         TextStyle {
             max_height: Some(0.5),
@@ -258,7 +297,7 @@ fn a_text_key_changes_with_the_box_height_fit_and_clamp() {
     ];
     let keys = styles
         .iter()
-        .map(|style| text_key("Hi", style, size))
+        .map(|style| text_key(&crate::TextAt::from("Hi"), style, size))
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(keys.len(), styles.len());
     assert!(!keys.contains(&key));
@@ -275,7 +314,7 @@ fn a_clamped_style_asks_the_text_host_to_cut_at_its_box() {
         }),
         ..TextStyle::default()
     };
-    let request = text_request(QUICK, &style, size, 1);
+    let request = text_request(&crate::TextAt::from(QUICK), &style, size, 1);
     assert_eq!(
         request.clamp,
         Some(alpha2_text::TextClamp {
@@ -285,7 +324,7 @@ fn a_clamped_style_asks_the_text_host_to_cut_at_its_box() {
         })
     );
     assert_eq!(
-        text_request(QUICK, &TextStyle::default(), size, 1).clamp,
+        text_request(&crate::TextAt::from(QUICK), &TextStyle::default(), size, 1).clamp,
         None
     );
 }
@@ -341,7 +380,8 @@ fn animated_keys_differ_for_styles_that_differ_only_in_an_animator() {
 #[test]
 fn the_request_hash_covers_the_background_box_and_the_emoji_policy() {
     let size = PictureSize::new(640, 360).expect("size");
-    let request = |extra: &str| text_request("Hello", &keyed_style(extra), size, 1);
+    let request =
+        |extra: &str| text_request(&crate::TextAt::from("Hello"), &keyed_style(extra), size, 1);
     let keys = [
         request(r##", "background": { "color": "#ff0000", "padding": 0.2 }"##),
         request(r##", "background": { "color": "#0000ff", "padding": 0.2 }"##),
@@ -361,4 +401,120 @@ fn the_request_hash_covers_the_background_box_and_the_emoji_policy() {
         layout_text_key(&plain, &[], &[]),
         layout_text_key(&monochrome, &[], &[])
     );
+}
+
+fn runs(json: serde_json::Value) -> alpha2_model::TextContent {
+    serde_json::from_value(json).expect("runs")
+}
+
+fn rich_fixture() -> TextRasterizer {
+    TextRasterizer::new(vec![TextFont {
+        family: "Alpha2 Fixture".into(),
+        bytes: std::fs::read("../../tests/fonts/Alpha2Fixture.ttf")
+            .expect("fixture font")
+            .into(),
+        face_index: 0,
+    }])
+    .expect("font")
+}
+
+#[test]
+fn unstyled_runs_keep_the_plain_key() {
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let style = TextStyle::default();
+    let content = runs(serde_json::json!([{ "text": "Hel", "class": ["a"] }, { "text": "lo" }]));
+    assert_eq!(
+        text_key(&TextAt::new(&content, MediaTime::ZERO), &style, size),
+        text_key(&TextAt::from("Hello"), &style, size)
+    );
+    let request = text_request(&TextAt::new(&content, MediaTime::ZERO), &style, size, 1);
+    assert_eq!(
+        request,
+        text_request(&TextAt::from("Hello"), &style, size, 1)
+    );
+    assert_eq!(request.spans, []);
+}
+
+#[test]
+fn a_run_style_changes_the_text_key() {
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let style = TextStyle::default();
+    let plain = text_key(&TextAt::from("Hello"), &style, size);
+    let keys = [
+        serde_json::json!({ "font_weight": 700 }),
+        serde_json::json!({ "font_style": "italic" }),
+        serde_json::json!({ "underline": true }),
+        serde_json::json!({ "background_color": "#ff0000" }),
+        serde_json::json!({ "font_scale": { "mode": "constant", "value": 1.5 } }),
+        serde_json::json!({ "fill": "#00ff00" }),
+    ]
+    .into_iter()
+    .map(|run_style| {
+        let content =
+            runs(serde_json::json!([{ "text": "Hel", "style": run_style }, { "text": "lo" }]));
+        text_key(&TextAt::new(&content, MediaTime::ZERO), &style, size)
+    })
+    .chain([text_key(
+        &TextAt::from("Hello"),
+        &TextStyle {
+            font_style: alpha2_model::FontStyle::Italic,
+            ..TextStyle::default()
+        },
+        size,
+    )])
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), 7);
+    assert!(!keys.contains(&plain));
+}
+
+fn growing() -> alpha2_model::TextContent {
+    runs(serde_json::json!([
+        { "text": "small " },
+        { "text": "grows", "style": { "font_scale": { "mode": "keyframes", "keyframes": [
+            { "time": 0, "value": 1, "interpolation": { "type": "linear" } },
+            { "time": 12000, "value": 4, "interpolation": { "type": "hold" } },
+            { "time": 24000, "value": 4, "interpolation": { "type": "hold" } }] } } },
+        { "text": " tail" }
+    ]))
+}
+
+#[test]
+fn a_keyframed_run_scale_lays_out_again_each_frame() {
+    let rasterizer = rich_fixture();
+    let size = PictureSize::new(640, 360).expect("size");
+    let style = TextStyle {
+        font_size: 0.08,
+        max_width: 0.5,
+        ..TextStyle::default()
+    };
+    let content = growing();
+    let lines = |ticks: i64| {
+        measure_text(
+            &rasterizer,
+            &TextAt::new(&content, MediaTime(ticks)),
+            &style,
+            size,
+        )
+        .expect("measures")
+        .line_count
+    };
+    assert_eq!(lines(0), 1);
+    assert!(lines(12_000) > 1, "the grown word wraps the line");
+    let key = |ticks: i64| text_key(&TextAt::new(&content, MediaTime(ticks)), &style, size);
+    assert_ne!(key(0), key(6_000));
+    let request = text_request(&TextAt::new(&content, MediaTime(6_000)), &style, size, 1);
+    let unit = 0.08 * 360.0;
+    assert_eq!(request.spans[1].font_size, unit * 2.5);
+    assert_eq!(request.spans[0].font_size, request.font_size);
+}
+
+#[test]
+fn a_held_run_scale_shares_its_key() {
+    let size = PictureSize::new(640, 360).expect("size");
+    let style = TextStyle::default();
+    let content = growing();
+    let key = |ticks: i64| animated_text_key(&content, &style, size, MediaTime(ticks));
+    assert_eq!(key(12_000), key(18_000));
+    assert_eq!(key(12_000), key(30_000));
+    assert_ne!(key(11_000), key(12_000));
 }

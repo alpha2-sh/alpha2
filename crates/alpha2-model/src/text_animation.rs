@@ -167,6 +167,17 @@ impl TextContent {
         self.runs().iter().any(|run| run.style.is_some())
     }
 
+    /// Whether a run's `font_scale` changes over time, so the text lays out again as it does.
+    #[must_use]
+    pub fn varies(&self) -> bool {
+        self.runs().iter().any(|run| {
+            run.style
+                .as_ref()
+                .and_then(|style| style.font_scale.as_ref())
+                .is_some_and(Animated::varies)
+        })
+    }
+
     pub(crate) fn invalid_run_style(&self, base: FontSelection<'_>) -> Option<usize> {
         let mut selections = Vec::new();
         for (index, run) in self.runs().iter().enumerate() {

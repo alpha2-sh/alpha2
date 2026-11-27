@@ -30,7 +30,7 @@ fn a_text_generator_measures_as_the_engine_measures_it() {
     .expect("JSON");
     let bounds = crate::measure_text(
         &rasterizer,
-        "Title",
+        &crate::TextAt::from("Title"),
         &alpha2_model::TextStyle {
             font_size: 0.1,
             ..alpha2_model::TextStyle::default()

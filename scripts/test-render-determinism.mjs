@@ -26,6 +26,7 @@ const [
   nativeBlurAndStroke,
   nativeTextFit,
   nativeSources,
+  nativeRichText,
   times,
 ] = cargo(["run", "--quiet", "--release", "-p", "alpha2-render-determinism"])
   .trim()
@@ -119,6 +120,15 @@ assert.equal(
 );
 console.log(
   `verified the presented sources hash to ${nativeSources} natively and as wasm`,
+);
+const wasmRichText = hex(determinism.cpuRichTextHash());
+assert.equal(
+  wasmRichText,
+  nativeRichText,
+  `wasm rich text ${wasmRichText} != native`,
+);
+console.log(
+  `verified the rich text frames hash to ${nativeRichText} natively and as wasm`,
 );
 
 const rasterGlue = await mkdtemp(

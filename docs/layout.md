@@ -80,6 +80,17 @@ Lines are `line_height` font sizes apart, baseline to baseline. Each line's em b
 
 A text may be empty (it then takes no room) and may change over time, but its keyframes must all `hold`: strings do not interpolate.
 
+A text is a string or runs, as in captions and text generators. A run's `style` sets its own `font_family`, `font_weight`, `font_style` (`normal`, `italic`, `oblique`), `font_scale` (its size as a multiple of the box's font size, CSS `em`, from 0.1 to 10), `letter_spacing`, `fill`, `strokes`, `background_color`, `underline` and `line_through` over the box's inherited text style, as a CSS inline box sets its own properties. A run of another size, face or spacing is shaped apart and its words wrap with the rest: a larger run makes its line taller (each line is as tall as its largest run, at least the box's font size, CSS 2.1 10.8) and can push words to the next line. A family without an italic face is slanted by 14 degrees; color emoji stay upright. Underline and line-through take the run's font's own position and thickness and are drawn without skipping descenders (CSS `text-decoration-skip-ink: none`). In a layout box a run takes `style` only, with a constant `font_scale`: no `class` or `time`, which only captions and text generators use.
+
+```json
+{
+  "text": { "mode": "constant", "value": [
+    { "text": "Revenue " },
+    { "text": "+12%", "style": { "font_scale": { "mode": "constant", "value": 1.5 }, "font_weight": 700, "fill": "#40d070" } }
+  ] }
+}
+```
+
 ### Fitting and clamping
 
 A text box's own `font_size_fit` and `line_clamp` keep its text inside its content box. Text styles of captions and text generators take the same two fields, with `max_width` and `max_height` as their box.
@@ -355,4 +366,4 @@ Two text cards, a bar column spanning both rows, and a bar chart that is itself 
 
 ## Not supported
 
-Block and inline layout; named grid lines and `grid_template_areas`; subgrid; baseline alignment; `auto` margins; `em` and `rem`; color names and color functions; animated text color; rich-text spans; per-side border widths and per-corner radii; box shadows; `text-overflow` (a line never overflows its box sideways: a word wider than the line is broken between characters); right-to-left flex direction; percent padding and margin; and image or video boxes. Bidirectional text inside a paragraph is shaped as text generators shape it.
+Block and inline layout; named grid lines and `grid_template_areas`; subgrid; baseline alignment; `auto` margins; `em` and `rem`; color names and color functions; animated text color; per-side border widths and per-corner radii; box shadows; `text-overflow` (a line never overflows its box sideways: a word wider than the line is broken between characters); right-to-left flex direction; percent padding and margin; and image or video boxes. Bidirectional text inside a paragraph is shaped as text generators shape it.
