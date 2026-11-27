@@ -23,7 +23,7 @@ export type {
   EncoderProbeOutcome,
   VideoLatencyProbe,
 } from "./export-metrics.js";
-import { decodeFailureOf, withSoftwareFallback } from "./decoder-fallback.js";
+import { decodeFailureOf, withDecoderFallback } from "./decoder-fallback.js";
 import { isUnreadableFrame, withReadbackRetries } from "./frame-intake.js";
 import {
   ALL_FORMATS,
@@ -316,7 +316,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     )
       await this.#useAcceleration(this.#openedAcceleration);
     try {
-      const frame = await withSoftwareFallback(
+      const frame = await withDecoderFallback(
         () => this.#refill(request, signal),
         this.#closed ||
           this.#hardwareAcceleration === "prefer-software" ||

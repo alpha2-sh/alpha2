@@ -12,9 +12,17 @@ All notable changes to this project are documented in this file.
   between CPUs. Under `--plugin-isolation in-process`, a model file that whisper.cpp refuses after
   the plugin's own check accepted it can make the host abort when it exits; the default isolation
   is not affected.
+- `ExtractResult.sourceDecode`: how the browser decoded each source of an extraction.
 
 ### Fixed
 
+- `runExtractor` failed with a bare WebCodecs `OperationError` on a source whose software decoder
+  the browser lists but cannot open, though the timeline decoded it; it now decodes such a source,
+  and a codec with no software decoder, with the browser's own choice of decoder.
+- `runExtractor` refuses a source no decoder reads with `DECODE_UNAVAILABLE` and its `facts`, frames
+  without planes with `PLANAR_DECODE_UNAVAILABLE`, and a frame that cannot be read back with
+  `FRAME_UNREADABLE`, after two retries.
+- `@alpha2-sh/editor`: a decode refusal keeps its `facts` across the extract worker.
 - `alpha2.transcribe` 1.0.2. Its Windows artifact was built without compiler optimization and
   transcribed 2x to 7x slower than it should; the build now restores CMake's release flags under
   MSVC. A window in which whisper.cpp advanced less than 0.16 s aborted the run (`PLUGIN_TRAPPED`,

@@ -714,8 +714,11 @@ export interface BrowserBridge {
    * (`missing_asset`), for a timeline that draws runtime effects or HDR video this browser cannot
    * read (`unsupported_media`),
    * with the plugin loader's and the extractor's errors (`PLUGIN_*`, `INVALID_INPUT`,
-   * `INVALID_EMIT`, `EXTRACTOR_FAILED`, `DECODE_UNAVAILABLE`), with `cancelled` when `signal`
-   * aborts or the bridge is disposed, and after disposal (`disposed`).
+   * `INVALID_EMIT`, `EXTRACTOR_FAILED`, `DECODE_UNAVAILABLE`, `PLANAR_DECODE_UNAVAILABLE`,
+   * `FRAME_UNREADABLE`), with `cancelled` when `signal` aborts or the bridge is disposed, and
+   * after disposal (`disposed`). A decode refusal (`DECODE_UNAVAILABLE`,
+   * `PLANAR_DECODE_UNAVAILABLE`) carries `facts` (`TrackDecodeFacts` of `alpha2`), on the page and
+   * from the worker alike.
    */
   extract(
     run: import("alpha2/extractor").ExtractRun,

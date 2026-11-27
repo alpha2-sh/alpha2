@@ -77,7 +77,7 @@ For preview, `alpha2/audio-timeline` moves the mixed blocks to the audio thread 
 
 ## Extract data
 
-`runExtractor` in `alpha2/extract` runs an extractor of your own over a source or the timeline and resolves with data sets ready to put in `project.data`. The browser decodes the source in software (mediabunny), the engine's session in wasm presents and checks every step, and each value is validated as the project validates data:
+`runExtractor` in `alpha2/extract` runs an extractor of your own over a source or the timeline and resolves with data sets ready to put in `project.data`. The browser decodes the source with mediabunny, in software where its software decoder reads the source and with the browser's own choice of decoder otherwise (`result.sourceDecode` says which); the engine's session in wasm presents and checks every step, and each value is validated as the project validates data:
 
 ```js
 import { runExtractor } from "alpha2/extract";
@@ -108,6 +108,8 @@ const { dataSets } = await runExtractor(
   },
 );
 ```
+
+A source no decoder gives a first frame of is refused with `DECODE_UNAVAILABLE` (its `facts` name the codec and the browser's error), frames without planes with `PLANAR_DECODE_UNAVAILABLE`, and a frame the browser cannot read back with `FRAME_UNREADABLE`.
 
 A timeline input needs `timelineFrame(time, width, height)`, such as the CPU renderer's `readRgbaAt`, and an audio input `audioBinding: wasm`. `loadPlugin(manifest, sha256)` in `alpha2/plugins` loads an [extractor plugin](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md)'s wasm artifact, checked against its pinned hashes, with `onProgress` as its files arrive and `supplied` filling its resource slots (a `File`, or a directory handle or a directory picker's files); run `plugin.extractor(params)`, which records `made_by.plugin` with the slot files it read. `transferablePlugin(plugin)` is a value `postMessage` copies to a worker, where `restorePlugin` makes the plugin again without fetching or compiling it. `parsePluginManifest(text)` checks a manifest by the same rules without fetching anything, for an interface that shows a plugin before it is installed, with `about` and the outputs' `label`s. `applyEdit` in `alpha2/apply-edit` then applies data to the project, such as `remove_ranges` over silences.
 

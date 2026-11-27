@@ -104,10 +104,16 @@ const AUDIO_DESCRIPTOR = {
   outputs: [{ name: "blocks", kind: "scalars", channels: ["frames"] }],
 };
 
-async function audioPlugin() {
+const VIDEO_DESCRIPTOR = {
+  ...AUDIO_DESCRIPTOR,
+  id: "alpha2.test.frames",
+  input: { media: "video", from: ["source"], format: "luma8" },
+};
+
+async function testPlugin(descriptor = AUDIO_DESCRIPTOR) {
   const binaryen = (await import("binaryen")).default;
   const { loadPlugin } = await import("alpha2/plugins");
-  const json = JSON.stringify(AUDIO_DESCRIPTOR);
+  const json = JSON.stringify(descriptor);
   const packed = (BigInt(json.length) << 32n).toString();
   const module = binaryen.parseText(`(module
     (import "alpha2" "emit" (func $emit (param i32 i32) (result i32)))
@@ -136,7 +142,7 @@ async function audioPlugin() {
     Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
   const manifest = new TextEncoder().encode(
     JSON.stringify({
-      id: AUDIO_DESCRIPTOR.id,
+      id: descriptor.id,
       version: "0.1.0",
       abi: "alpha2-plugin/1",
       kind: "extractor",
@@ -149,7 +155,7 @@ async function audioPlugin() {
           bytes: wasm.byteLength,
         },
       ],
-      descriptor: AUDIO_DESCRIPTOR,
+      descriptor,
     }),
   );
   const files = { "manifest.json": manifest, "m.wasm": wasm };
@@ -202,7 +208,7 @@ test(
         url: server.url("/a.wav"),
         name: "a.wav",
       });
-      const plugin = await audioPlugin();
+      const plugin = await testPlugin();
       const result = await extractInWorker(fakeExtractWorker, {
         plugin,
         project: {
@@ -239,6 +245,54 @@ test(
     } finally {
       await server.close();
     }
+  },
+);
+
+test(
+  "a decode refusal keeps its facts across the extraction worker",
+  { skip },
+  async () => {
+    const wasm = await import("alpha2/wasm");
+    wasm.initSync({
+      module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
+    });
+    const plugin = await testPlugin(VIDEO_DESCRIPTOR);
+    await assert.rejects(
+      extractInWorker(fakeExtractWorker, {
+        plugin,
+        project: {
+          schema_version: 1,
+          id: "p",
+          name: "P",
+          settings: {
+            width: 320,
+            height: 180,
+            frame_rate: { num: 30, den: 1 },
+            sample_rate: 48000,
+          },
+          sources: [{ id: "v", kind: "video", locator: "v.mp4" }],
+          timeline: { tracks: [] },
+        },
+        request: {
+          extractor: VIDEO_DESCRIPTOR.id,
+          version: 1,
+          input: {
+            from: "source",
+            source_id: "v",
+            range: { start: 0, end: 40000 },
+          },
+          outputs: { blocks: "blocks" },
+        },
+        media: { v: new Blob([video], { type: "video/mp4" }) },
+        signal: new AbortController().signal,
+      }),
+      (error) => {
+        assert.equal(error.code, "DECODE_UNAVAILABLE");
+        assert.equal(error.facts.kind, "video");
+        assert.match(error.facts.codec, /^avc1/);
+        return true;
+      },
+    );
   },
 );
 
