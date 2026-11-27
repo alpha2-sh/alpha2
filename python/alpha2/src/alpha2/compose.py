@@ -56,6 +56,7 @@ __all__ = [
     "COMPOSE_VERSION",
     "TEMPLATES",
     "THEMES",
+    "Adjustment",
     "Audio",
     "Box",
     "CaptionedVideo",
@@ -214,6 +215,30 @@ def Group(
         at=at,
         duration=duration,
         inset=inset,
+    )
+
+
+def Adjustment(
+    effects: abc.Sequence[Mapping[str, Any]] | None = None,
+    *,
+    opacity: float | Mapping[str, Any] | None = None,
+    blend: str | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+) -> Node:
+    """An adjustment layer: ``effects`` (:func:`Effect`) apply to the picture of everything
+    under it, mixed in by ``opacity`` and met with it by ``blend``. In a :func:`Group` it reaches
+    only the children before it. Wrapped in a :func:`Mask` it applies inside the outlines; it
+    takes no :func:`Matte`."""
+    return _node(
+        "adjustment",
+        effects=None if effects is None else [dict(effect) for effect in effects],
+        opacity=opacity,
+        blend=blend,
+        id=id,
+        at=at,
+        duration=duration,
     )
 
 

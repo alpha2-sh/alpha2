@@ -109,6 +109,7 @@ fn node(mut value: Value) -> Result<Node, Located> {
         "music_bed" => from_value(value).map(Node::MusicBed),
         "counter" => from_value(value).map(Node::Counter),
         "group" => from_value(value).map(Node::Group),
+        "adjustment" => from_value(value).map(Node::Adjustment),
         "shape" => from_value(value).map(Node::Shape),
         "matte" => from_value(value).map(Node::Matte),
         "mask" => from_value(value).map(Node::Mask),
@@ -124,7 +125,7 @@ fn node(mut value: Value) -> Result<Node, Located> {
 }
 
 /// Every node type, as specs write them.
-pub(crate) const NODE_TYPES: [&str; 26] = [
+pub(crate) const NODE_TYPES: [&str; 27] = [
     "sequence",
     "stack",
     "grid",
@@ -147,6 +148,7 @@ pub(crate) const NODE_TYPES: [&str; 26] = [
     "music_bed",
     "counter",
     "group",
+    "adjustment",
     "shape",
     "matte",
     "mask",

@@ -51,6 +51,11 @@ def test_constructors_write_the_spec_as_plain_dicts() -> None:
         "blend": "screen",
         "effects": [{"effect": "gaussian-blur", "radius": 0.1}],
     }
+    assert c.Adjustment([c.Effect("invert")], opacity=0.5) == {
+        "type": "adjustment",
+        "effects": [{"effect": "invert"}],
+        "opacity": 0.5,
+    }
     assert c.Shape([{"shape": "ellipse"}], fill=c.ThemeColor("accent", 0.5)) == {
         "type": "shape",
         "shapes": [{"shape": "ellipse"}],

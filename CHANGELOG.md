@@ -19,6 +19,10 @@ All notable changes to this project are documented in this file.
   adjustment with no effect or at opacity 0 leaves every byte as it was. It takes no matte and is
   no clip's matte, and a transition from or to it is `alpha2.transition.fade`, run on the composed
   scenes. Hosts and engines of 0.7.x refuse documents that use it.
+- Compose `adjustment` node (`effects`, `opacity`, `blend`, `at`, `duration`; `Adjustment` in the
+  Python builder): in a sequence or an overlay it is an adjustment clip over everything before
+  it; in a `group` it adjusts only the children before it. Wrapped in a `mask`, its outlines
+  limit it; it takes no `matte`.
 - `alpha2.transcribe` 1.1.0 runs whisper.cpp on the GPU on Apple silicon (Metal), about 1.2x to
   2.6x faster there by model size. A new param `device` (`auto`, the default, or `cpu`) turns it
   off. Words and times can differ from the CPU's in a fraction of a percent of words, as they do

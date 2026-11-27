@@ -368,6 +368,8 @@ pub enum Node {
     /// Children drawn together into one picture, which then takes an opacity, a blend mode,
     /// effects and a transform as one layer.
     Group(Group),
+    /// No picture of its own: its effects apply to everything under it.
+    Adjustment(Adjustment),
     /// Shapes drawn with one fill and one stroke: bars, frames, dividers, badges, icons.
     Shape(Shape),
     /// A node shown only where another node's picture is.
@@ -421,6 +423,35 @@ pub struct Group {
     /// How it goes out, ending at its end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit: Option<Motion>,
+}
+
+/// An adjustment layer: its effects apply to the picture of everything under it, mixed back in by
+/// its opacity and met with it by its blend mode. In a sequence or an overlay that is everything
+/// composited before it; in a group, the group's children before it, and the children after it
+/// are drawn over the result. Wrapped in a `mask`, it applies inside the outlines only; it takes
+/// no `matte`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Adjustment {
+    /// The node's name, for other nodes to refer to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Effects on the picture under it, in order. None changes nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<EffectUse>,
+    /// How much of the result replaces the picture under it, 0..=1. Default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<Anim<f32>>,
+    /// How the result meets the picture under it. Default `normal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend: Option<alpha2_model::ClipBlendMode>,
+    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    /// Length in seconds. Default: what its parent gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
 }
 
 /// One effect: a built-in by its short name (`gaussian-blur`) or any effect by its full id, with

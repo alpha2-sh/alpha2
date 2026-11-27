@@ -783,3 +783,34 @@ fn a_gap_an_overlap_or_a_touched_clip_in_a_tiling_refuses() {
         "both visible at once",
     );
 }
+
+#[test]
+fn an_adjustment_clip_in_the_range_makes_the_frame_a_composite() {
+    let adjusted = |at: i64| {
+        project(|value| {
+            value["sources"]
+                .as_array_mut()
+                .expect("sources")
+                .push(json!({"id": "adjust", "kind": "adjustment"}));
+            value["timeline"]["tracks"]
+                .as_array_mut()
+                .expect("tracks")
+                .push(json!({"id": "a", "name": "A", "kind": "video", "clips": [{
+                    "id": "adjustment", "source_id": "adjust",
+                    "timeline_range": {"start": at, "end": at + SECOND},
+                    "source_range": {"start": 0, "end": SECOND}
+                }]}));
+        })
+    };
+    let reason = passthrough_plan(&adjusted(2 * SECOND), range(SECOND, 5 * SECOND), false)
+        .expect_err("an adjustment over the clip");
+    assert!(reason.contains("the frame is a composite"), "{reason}");
+    let reason = passthrough_plan(&adjusted(5 * SECOND), range(5 * SECOND, 6 * SECOND), false)
+        .expect_err("an adjustment alone");
+    assert!(
+        reason.contains("shows a adjustment source, not a decoded video file"),
+        "{reason}"
+    );
+    passthrough_plan(&adjusted(5 * SECOND), range(SECOND, 5 * SECOND), false)
+        .expect("an adjustment outside the range");
+}
