@@ -50,6 +50,8 @@ All notable changes to this project are documented in this file.
   animators can widen an advance by, so its lines fit at their largest moment; text and layout
   measurements report it as `advanceHeadroom`. `WasmTextRasterizer.rasterize` takes
   `advanceHeadroom`, `animatorGrouping`, `animatorPivot` and a cluster state's `advanceScale`.
+  Hosts and engines of 0.7.x refuse documents that use these, the `reveal`, the box `extent` and
+  the `highlight` below.
 - Text animators: `reveal` (`progress`, `angle_degrees`, `feather`) wipes each unit in along a
   straight edge, as a linear wipe: across the character, word, line or whole text that
   `animator_grouping` makes the unit, in the unit's own frame so the edge scales and turns with

@@ -3334,12 +3334,12 @@ function textInsetsSides(value: unknown): number[] | undefined {
     if (values.some((side) => !Number.isFinite(side))) return undefined;
     const [top, right = top, bottom = top, left = right] = values;
     return values.length >= 1 && values.length <= 4
-      ? [top, right, bottom, left].map((side) => side as number)
+      ? [top, right, bottom, left]
       : undefined;
   }
   if (!isRecord(value)) return undefined;
   const sides = SIDE_NAMES.map((side) => value[side] ?? 0);
-  return sides.every(finiteNumber) ? (sides as number[]) : undefined;
+  return sides.every(finiteNumber) ? sides : undefined;
 }
 
 /** Mirrors `TextBackground::is_valid`. */

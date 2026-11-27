@@ -921,6 +921,124 @@
             }
           ]
         }
+      },
+      {
+        "id": "pop",
+        "name": "Pop",
+        "kind": "caption",
+        "captions": {
+          "style": {
+            "font_size": 0.1,
+            "position": {
+              "x": 0.5,
+              "y": 0.62
+            },
+            "max_width": 0.9,
+            "background": {
+              "color": "#000000a0",
+              "padding": "0.1 0.25",
+              "radius": 0.3,
+              "extent": "revealed"
+            },
+            "highlight": {
+              "color": "#e04020",
+              "padding": "0.05 0.1",
+              "radius": 0.2,
+              "transition": 6000
+            },
+            "animator_grouping": "word",
+            "animator_pivot": {
+              "x": 0.5,
+              "y": 0.8
+            },
+            "animators": [
+              {
+                "selector": {
+                  "type": "timing",
+                  "state": "active",
+                  "ramp": 3000
+                },
+                "properties": {
+                  "scale": {
+                    "mode": "constant",
+                    "value": {
+                      "x": 1.4,
+                      "y": 1.4
+                    }
+                  },
+                  "advance_follows_scale": true
+                }
+              },
+              {
+                "selector": {
+                  "type": "range",
+                  "start": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": 0,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 120000,
+                        "value": 100,
+                        "interpolation": {
+                          "type": "hold"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "properties": {
+                  "reveal": {
+                    "progress": {
+                      "mode": "constant",
+                      "value": 0
+                    },
+                    "feather": {
+                      "mode": "constant",
+                      "value": 0.3
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "cues": [
+            {
+              "timeline_range": {
+                "start": 0,
+                "end": 180000
+              },
+              "text": [
+                {
+                  "text": "Pop ",
+                  "time": {
+                    "start": 0,
+                    "end": 60000
+                  }
+                },
+                {
+                  "text": "wipe ",
+                  "time": {
+                    "start": 60000,
+                    "end": 120000
+                  }
+                },
+                {
+                  "text": "glow",
+                  "time": {
+                    "start": 120000,
+                    "end": 180000
+                  }
+                }
+              ]
+            }
+          ]
+        }
       }
     ]
   }

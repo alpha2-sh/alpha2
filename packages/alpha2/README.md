@@ -157,7 +157,7 @@ const { project, assets, loudness, warnings } = compileCompose(compose, spec, { 
 | `alpha2/effects` | Effect definitions and the built-in catalog's types; `RuntimeEffectRegistry`, a typed wrapper for registering WGSL effects and effect resources at run time. |
 | `alpha2/extensions`, `alpha2/extensions-wasm`, `alpha2/extensions-pdf-wasm` | SVG, animated image, Lottie, OpenEXR, image sequence, LaTeX and PDF sources, from their own WebAssembly modules (`loadExtensions`). After an abort a module restarts asynchronously; `ready()` resolves once it takes calls again. |
 | `alpha2/wasm-module` | `WasmModule`, which loads a wasm-bindgen module once per realm and restarts it asynchronously. |
-| `alpha2/text` | Text rasterizers: `WasmTextRasterizer` (the engine's, the same pixels as a native export, including styled runs) and `OffscreenTextRasterizer` (the browser's). |
+| `alpha2/text` | Text rasterizers: `WasmTextRasterizer` (the engine's, the same pixels as a native export, including styled runs, shaped boxes, highlights and pushed or revealed animation) and `OffscreenTextRasterizer` (the browser's). |
 | `alpha2/assets` | Media identity, proxies and conform reports. |
 | `alpha2/frame-supply` | `FrameSupply`: decodes and uploads the frames a time needs. |
 | `alpha2/media` | Decoder contracts, `WebCodecsVideoDecoder`, `DecoderRefillCoordinator`. |
