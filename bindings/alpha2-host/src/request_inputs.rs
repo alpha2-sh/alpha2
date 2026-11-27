@@ -15,6 +15,7 @@ pub struct RequestInputs<'a> {
     pub resources: &'a HashMap<String, HashMap<String, alpha2_host_core::requests::MediaLocation>>,
     pub effect_assets: &'a HashMap<String, PathBuf>,
     pub font_files: &'a [PathBuf],
+    pub remote_content_hash: alpha2_host_core::requests::RemoteContentHash,
 }
 
 impl RequestInputs<'_> {

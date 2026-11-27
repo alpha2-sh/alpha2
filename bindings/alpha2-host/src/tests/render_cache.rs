@@ -20,7 +20,7 @@ fn a_repeated_frame_is_drawn_once_per_export() {
     let mut export = |name: &str| {
         host.export(
             &project.to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             0,
@@ -181,7 +181,7 @@ fn the_synchronous_frame_supply_keys_a_frame_by_its_picture() {
         size,
         crate::frames::next_cache_scope(),
         &project,
-        &assets,
+        &crate::tests::locations(&assets),
         std::sync::Arc::default(),
     )
     .expect("frames");

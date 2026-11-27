@@ -46,6 +46,9 @@ pub struct ExportRequest {
     /// locator.
     #[serde(default)]
     pub resources: HashMap<String, HashMap<String, super::MediaLocation>>,
+    /// Whether a remote original whose project records a content hash is read whole and hashed.
+    #[serde(rename = "remoteContentHash", default)]
+    pub remote_content_hash: super::RemoteContentHash,
     /// Originals unless the caller asks for proxies.
     #[serde(default)]
     pub media: ExportMedia,

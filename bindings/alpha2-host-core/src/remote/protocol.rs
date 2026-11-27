@@ -68,7 +68,7 @@ pub(super) fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
 }
 
 /// An IMF-fixdate (RFC 9110 section 5.6.7), such as `Sun, 06 Nov 1994 08:49:37 GMT`.
-fn http_date(value: &str) -> Option<SystemTime> {
+pub(super) fn http_date(value: &str) -> Option<SystemTime> {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];

@@ -369,7 +369,7 @@ struct HostSupplier<'a> {
 struct TimelineFrames<'a> {
     host: &'a mut Host,
     project: String,
-    assets: HashMap<String, PathBuf>,
+    assets: HashMap<String, alpha2_host_core::remote::SourceLocation>,
     effect_assets: HashMap<String, PathBuf>,
     effects: Vec<crate::protocol::EffectRequest>,
     canvas: (u32, u32),
@@ -503,6 +503,7 @@ pub fn handle(
         request,
         descriptor,
         plugin,
+        remote_content_hash,
         ..
     } = request;
     // Taken first, so a cancel also stops the plugin's fetch and calls.
@@ -537,6 +538,7 @@ pub fn handle(
         &font_files,
         media,
         request.input.source_id.as_ref(),
+        remote_content_hash,
     )?;
     let renderer = alpha2_render::CpuRenderer::new(1);
     let source = request.input.source_id.clone();

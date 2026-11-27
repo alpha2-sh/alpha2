@@ -273,7 +273,10 @@ impl Read for RemoteReader {
         if !sequential {
             self.window = BLOCK_BYTES;
         }
-        let bytes = self.block(index, sequential)?;
+        let object = Arc::clone(&self.object);
+        let bytes = self
+            .block(index, sequential)
+            .map_err(|error| error.with_url(&object.shown))?;
         let offset = usize::try_from(self.position - index * BLOCK_BYTES).unwrap_or(usize::MAX);
         let available = bytes.get(offset..).unwrap_or_default();
         let read = available.len().min(buffer.len());
@@ -414,7 +417,7 @@ impl Read for RemoteStream {
             }
             let shared = Arc::clone(&self.object.shared);
             let (shown, progress) = (self.object.shown.clone(), Arc::clone(&self.progress));
-            let receiver = self.receiver()?;
+            let receiver = self.receiver().map_err(|error| error.with_url(&shown))?;
             let message = fetch::wait_for(&shared, &shown, &progress, |poll| {
                 match receiver.recv_timeout(poll) {
                     Ok(message) => Some(Ok(message)),
@@ -424,14 +427,17 @@ impl Read for RemoteStream {
                         format!("{shown}: the fetch ended without an answer"),
                     ))),
                 }
-            })?;
+            })
+            .map_err(|error| error.with_url(&shown))?;
             match message {
                 StreamMessage::Bytes(bytes) => {
                     self.pending = bytes;
                     self.taken = 0;
                 }
                 StreamMessage::End => self.ended = true,
-                StreamMessage::Failed(error) => return Err(error.into()),
+                StreamMessage::Failed(error) => {
+                    return Err(error.with_url(&self.object.shown).into());
+                }
             }
         }
         let read = (self.pending.len() - self.taken).min(buffer.len());

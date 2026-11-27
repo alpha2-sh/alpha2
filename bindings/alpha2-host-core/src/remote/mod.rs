@@ -233,6 +233,8 @@ pub struct RemoteError {
     pub message: String,
     /// The status the server answered, when it answered.
     pub status: Option<u16>,
+    /// The URL read, as [`shown_url`] shows it, when a reader failed.
+    pub url: Option<String>,
 }
 
 impl RemoteError {
@@ -242,7 +244,15 @@ impl RemoteError {
             failure,
             message: message.into(),
             status: None,
+            url: None,
         }
+    }
+
+    /// The failure naming the shown URL a reader read.
+    #[must_use]
+    pub fn with_url(mut self, shown: &str) -> Self {
+        self.url = Some(shown.to_owned());
+        self
     }
 
     /// The failure with the status the server answered.
@@ -531,6 +541,16 @@ impl RemoteObject {
     #[must_use]
     pub fn last_modified(&self) -> Option<&str> {
         self.facts.last_modified.as_deref()
+    }
+
+    /// The probe's `Last-Modified` in Unix milliseconds, when it named a date that parses.
+    #[must_use]
+    pub fn last_modified_ms(&self) -> Option<i64> {
+        let date = protocol::http_date(self.last_modified()?)?;
+        let since = date
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .ok()?;
+        i64::try_from(since.as_millis()).ok()
     }
 
     /// The validator the object is identified by in the request: its strong entity tag, else its

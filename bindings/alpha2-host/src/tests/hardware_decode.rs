@@ -529,7 +529,7 @@ fn import_parity_child() {
     let output = PathBuf::from(std::env::var_os("ALPHA2_IMPORT_PARITY_OUTPUT").expect("output"));
     let exported = host.export(
         &project.to_string(),
-        &HashMap::from([("video".to_owned(), corpus(name))]),
+        &crate::tests::sources([("video".to_owned(), corpus(name))]),
         &HashMap::new(),
         Vec::new(),
         0,

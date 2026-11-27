@@ -15,7 +15,7 @@ use alpha2_media::{AudioCodec, Container, VideoCodec};
 use serde_json::{Value, json};
 
 pub fn usage() -> String {
-    "usage: alpha2-host serve [--max-running <count>] [--max-memory-share <fraction>] [--max-memory-growth <bytes>] [--max-requests <count>] [--max-handles <count>] [--idle-timeout <ms>] [--extract-step-timeout <ms>] [--plugin-call-timeout <ms>] [--plugin-memory-limit <bytes>] [--plugins off|wasm|native] [--plugin-origins none|<https-origin>,...] [--plugin-root any|none|<dir>] [--plugin-isolation process|in-process] [--plugin-resource-root none|any|<dir>] [--media-origins none|<https-origin>,...] [--media-private-addresses refuse|allow] [--allow-every-decoder]\n       alpha2-host conform --project <project.json> [--asset <source-id>=<path|https-url>]... [--proxy <source-id>=<path>]... [--purpose preview|preview_proxy|thumbnail|remote_edit|export_original|export_proxy] [--media-origins none|<https-origin>,...] [--media-private-addresses refuse|allow] [--allow-every-decoder]\n       alpha2-host export --project <project.json> [--asset <source-id>=<path|https-url>]... [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path|https-url>]... [--media original|proxies] [--effect-asset <resource-id>=<path>]... [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--alpha] [--bit-depth 8|10] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]] [--media-origins none|<https-origin>,...] [--media-private-addresses refuse|allow] [--allow-every-decoder]\n       alpha2-host probe-gpu-encode [<width> [<height>]]".to_owned()
+    "usage: alpha2-host serve [--max-running <count>] [--max-memory-share <fraction>] [--max-memory-growth <bytes>] [--max-requests <count>] [--max-handles <count>] [--idle-timeout <ms>] [--extract-step-timeout <ms>] [--plugin-call-timeout <ms>] [--plugin-memory-limit <bytes>] [--plugins off|wasm|native] [--plugin-origins none|<https-origin>,...] [--plugin-root any|none|<dir>] [--plugin-isolation process|in-process] [--plugin-resource-root none|any|<dir>] [--media-origins none|<https-origin>,...] [--media-private-addresses refuse|allow] [--allow-every-decoder]\n       alpha2-host conform --project <project.json> [--asset <source-id>=<path|https-url>]... [--proxy <source-id>=<path>]... [--purpose preview|preview_proxy|thumbnail|remote_edit|export_original|export_proxy] [--remote-content-hash skip|verify] [--media-origins none|<https-origin>,...] [--media-private-addresses refuse|allow] [--allow-every-decoder]\n       alpha2-host export --project <project.json> [--asset <source-id>=<path|https-url>]... [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path|https-url>]... [--media original|proxies] [--effect-asset <resource-id>=<path>]... [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--alpha] [--bit-depth 8|10] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]] [--remote-content-hash skip|verify] [--media-origins none|<https-origin>,...] [--media-private-addresses refuse|allow] [--allow-every-decoder]\n       alpha2-host probe-gpu-encode [<width> [<height>]]".to_owned()
 }
 
 #[derive(Default)]
@@ -55,6 +55,7 @@ pub struct ExportCliOptions {
     pub render_cache: Option<PathBuf>,
     pub render_cache_quota: Option<u64>,
     pub render_cache_backlog: Option<crate::render_cache::Backlog>,
+    pub remote_content_hash: alpha2_host_core::requests::RemoteContentHash,
 }
 
 /// Exits unsuccessfully when something blocks, so a script can check media before it exports.
@@ -67,15 +68,17 @@ pub fn conform_cli(args: Vec<String>) -> Result<(), HostError> {
     let json = crate::text_file::read_user_text(project_path, "project file")?;
     let project = alpha2_model::Project::from_json(&json)
         .map_err(|error| HostError::new("INVALID_INPUT", error.to_string()))?;
-    crate::media_policy::refuse_unlisted(
-        &crate::media_policy::current(),
+    let remote = crate::remote_media::RemoteInputs::for_request(
         &options.assets,
         &options.resources,
+        alpha2_host_core::remote::DEFAULT_CACHE_BYTES,
+        options.remote_content_hash,
     )?;
     let media = RequestMedia {
         originals: &options.assets,
         proxies: &options.proxies,
         frames: &options.frames,
+        remote: remote.as_ref(),
     };
     let policy = match options.video_decode {
         Some(policy) => policy,
@@ -88,7 +91,7 @@ pub fn conform_cli(args: Vec<String>) -> Result<(), HostError> {
         &media,
         options.purpose.unwrap_or(MediaPurpose::ExportOriginal),
         &hardware,
-    );
+    )?;
     let ready = resolved.report.ready;
     write_stdout(&json!({
         "ok": ready,
@@ -180,6 +183,7 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         proxies: options.proxies,
         frames: options.frames,
         resources: options.resources,
+        remote_content_hash: options.remote_content_hash,
         media: options.media,
         effect_assets: options.effect_assets,
         font_files: options.font_files,
@@ -291,6 +295,17 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
         };
         match flag.as_str() {
             "--project" => options.project = Some(PathBuf::from(value(&mut args)?)),
+            "--remote-content-hash" => {
+                options.remote_content_hash = match value(&mut args)?.as_str() {
+                    "skip" => alpha2_host_core::requests::RemoteContentHash::Skip,
+                    "verify" => alpha2_host_core::requests::RemoteContentHash::Verify,
+                    other => {
+                        return Err(HostError::invalid_input(format!(
+                            "--remote-content-hash takes skip or verify, got {other}"
+                        )));
+                    }
+                };
+            }
             "--asset" => {
                 let mapping = value(&mut args)?;
                 let (id, path) = mapping.split_once('=').ok_or_else(|| {

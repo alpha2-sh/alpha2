@@ -1362,6 +1362,7 @@ fn conform_refuses_a_sequence_whose_files_miss_a_frame_the_project_lists() {
             originals: &originals,
             proxies: &proxies,
             frames: &frames,
+            remote: None,
         };
         crate::assets::resolve_media(
             &project,
@@ -1370,6 +1371,7 @@ fn conform_refuses_a_sequence_whose_files_miss_a_frame_the_project_lists() {
             MediaPurpose::ExportOriginal,
             &crate::assets::HardwareVideoDecode::None,
         )
+        .expect("local media")
     };
     let all = (7..=10)
         .map(|number| Some(extension_corpus(&format!("sequence_{number:04}.png"))))

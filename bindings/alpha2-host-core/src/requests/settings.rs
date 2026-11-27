@@ -374,9 +374,22 @@ pub struct MemoryRequest {
     /// Decoder sessions, counted by the host's per-session estimate, which bounds how many an
     /// export opens.
     pub decoder_session_bytes: Option<u64>,
+    /// Blocks fetched of remote sources, at least [`crate::remote::MIN_CACHE_BYTES`].
+    pub remote_cache_bytes: Option<u64>,
     /// A factor in (0, 1] applied to every budget after resolution, so a retry can ask for less
     /// without knowing the host's defaults.
     pub scale: Option<f64>,
+}
+
+/// Whether a remote original whose project records a content hash is read whole and hashed.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteContentHash {
+    /// Compared without its hash, as `consistent` at best.
+    #[default]
+    Skip,
+    /// Read whole and hashed, as a file is.
+    Verify,
 }
 
 /// The quota of a render cache whose request names none.

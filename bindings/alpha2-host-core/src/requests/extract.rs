@@ -55,6 +55,9 @@ pub struct ExtractHostRequest {
     /// Files an SVG or a Lottie file names, by source ID and then by locator.
     #[serde(default)]
     pub resources: HashMap<String, HashMap<String, super::MediaLocation>>,
+    /// Whether a remote original whose project records a content hash is read whole and hashed.
+    #[serde(rename = "remoteContentHash", default)]
+    pub remote_content_hash: super::RemoteContentHash,
     /// Which media the extraction reads.
     #[serde(default)]
     pub media: ExportMedia,

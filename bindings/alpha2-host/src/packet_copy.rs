@@ -12,7 +12,6 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,7 +38,7 @@ use serde_json::{Value, json};
 /// Owns its parts because the plan reads the sources on its own worker thread.
 pub(crate) struct CopyRequest {
     pub project: Project,
-    pub assets: HashMap<String, PathBuf>,
+    pub assets: HashMap<String, alpha2_host_core::remote::SourceLocation>,
     pub effective_range: TimeRange,
     pub rate: FrameRate,
     pub frames: u64,
@@ -243,7 +242,7 @@ impl ExportAudioFeed {
     pub(crate) fn new(
         snapshot: Arc<EngineProject>,
         project: &Project,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         range: TimeRange,
         loudness: Option<LoudnessRequest>,
         cancel: CancelToken,
@@ -383,7 +382,7 @@ pub(crate) struct CopyExport<'a> {
     pub plan: &'a CopyPlan,
     pub snapshot: &'a EngineProject,
     pub project: &'a Project,
-    pub assets: &'a HashMap<String, PathBuf>,
+    pub assets: &'a HashMap<String, alpha2_host_core::remote::SourceLocation>,
     pub effective_range: TimeRange,
     pub container: alpha2_media::Container,
     pub audio_codec: NativeAudioCodec,

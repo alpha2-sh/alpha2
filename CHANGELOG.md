@@ -20,6 +20,20 @@ All notable changes to this project are documented in this file.
   `MEDIA_RANGE_UNSUPPORTED`, `MEDIA_REJECTED` and `MEDIA_CHANGED`, each with `details.source`,
   `details.url` (without user info, query or fragment) and `details.status` when the server
   answered.
+- `alpha2-host` reads an `https:` URL in a request's `assets` or `resources` by byte range from an
+  origin `--media-origins` lists, without downloading the file first: signed object-store URLs
+  work as they are. The server must answer ranges with a numeric total and name a strong `ETag` or
+  a `Last-Modified`, which every later range sends back, so a file that changes during a request
+  fails it (`MEDIA_CHANGED`) instead of mixing versions. Redirects are followed only to listed
+  origins, a `404` or `410` at the first request conforms `offline`, transient failures are tried
+  again, and a read with no byte for 30 seconds fails (`MEDIA_UNREACHABLE`); such a wait is never
+  taken for a stalled decoder. New request fields `memory.remoteCacheBytes` (the per-request block
+  cache, 64 MiB by default) and `remoteContentHash: "skip" | "verify"` (whether a remote original
+  whose project records a hash is read whole and hashed; `--remote-content-hash` on the command
+  line), and `performance` counters `remoteBytes`, `remoteRequests`, `remoteRetries` and
+  `remoteReadWaitMs`. The render cache keys a remote source by origin, path, validator and
+  length, so a new signature of the same object is a hit. A `conform` reading a remote source can
+  be cancelled.
 
 ### Changed
 

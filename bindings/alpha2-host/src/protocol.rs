@@ -38,6 +38,7 @@ crate::tag::tags! {
     fn code_tag_open = "code=";
     fn encoder_rejected_tag_open = "rejected=";
     fn kept_path_tag_open = "kept=";
+    fn media_details_tag_open = "media=";
 }
 /// Kept in a [`decode_stalled_tag`] message to say software decode may succeed. The
 /// `resource: "gpu"` comes from the stall's evidence ([`crate::failure::hardware_stall`]), not from
@@ -170,6 +171,37 @@ pub fn take_encoder_rejected(mut message: String) -> (Option<u64>, String) {
         message.replace_range(start..end, "");
     }
     (frame, message)
+}
+
+/// Answered with the remote failure's code and its `details` (shown URL, status, rule, delay). The
+/// details travel as JSON with `]` escaped so they cannot end the tag.
+pub fn source_failure(failure: &alpha2_media::SourceFailure) -> String {
+    let details = crate::media_policy::source_error(failure)
+        .details
+        .unwrap_or_default()
+        .to_string()
+        .replace(']', "\\u005d");
+    code_tag(
+        failure.code,
+        format!("{}{details}] {}", media_details_tag_open(), failure.message),
+    )
+}
+
+fn take_media_details(mut message: String) -> (Option<Value>, String) {
+    let mut details = None;
+    while let Some(start) = message.find(media_details_tag_open()) {
+        let Some(end) = crate::tag::end(&message, start) else {
+            break;
+        };
+        if details.is_none() {
+            details = serde_json::from_str::<Value>(
+                &message[start + media_details_tag_open().len()..end - 2],
+            )
+            .ok();
+        }
+        message.replace_range(start..end, "");
+    }
+    (details, message)
 }
 
 pub fn missing_input(message: impl Into<String>) -> String {
@@ -354,9 +386,13 @@ impl HostError {
     pub fn classify(message: String) -> Self {
         let (evidence, message) = crate::failure::take_evidence_tag(message);
         let (kept, message) = take_kept_path(message);
+        let (media, message) = take_media_details(message);
         let stage = crate::memory::take_stage(&message);
         let mut error = Self::classify_code(message);
         error.evidence = evidence;
+        if let Some(media) = media {
+            error.details = Some(media);
+        }
         if let Some(kept) = kept {
             error.details = Some(json!({ "keptPath": kept }));
         }

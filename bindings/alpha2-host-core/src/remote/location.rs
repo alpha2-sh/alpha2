@@ -113,6 +113,7 @@ impl From<&RemoteError> for SourceFailure {
         Self {
             code: error.failure.code(),
             message: error.message.clone(),
+            url: error.url.clone(),
             status: error.status,
             retry_after_ms: match error.failure {
                 RemoteFailure::Busy { retry_after_ms } => Some(retry_after_ms),

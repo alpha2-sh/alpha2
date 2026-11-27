@@ -1142,6 +1142,8 @@ pub struct SourceFailure {
     pub code: &'static str,
     /// What failed, naming the source without credentials.
     pub message: String,
+    /// The source's URL without user info, query or fragment.
+    pub url: Option<String>,
     /// The status the server answered, when it answered.
     pub status: Option<u16>,
     /// How long a busy server asks to wait, in milliseconds.

@@ -60,11 +60,13 @@ mod failures;
 mod gpu_encode;
 mod gpu_resident;
 mod hardware_decode;
+mod https_server;
 mod openh264;
 mod outputs;
 mod paths;
 mod plugins;
 mod providers;
+mod remote_media;
 mod render_cache;
 mod rendering;
 mod request_isolation;
@@ -72,6 +74,21 @@ mod request_watch;
 mod requests;
 mod stalls;
 mod stills;
+
+pub(crate) fn sources<K: Eq + std::hash::Hash>(
+    files: impl IntoIterator<Item = (K, PathBuf)>,
+) -> HashMap<K, alpha2_host_core::remote::SourceLocation> {
+    files
+        .into_iter()
+        .map(|(id, path)| (id, path.into()))
+        .collect()
+}
+
+pub(crate) fn locations<K: Eq + std::hash::Hash + Clone>(
+    files: &HashMap<K, PathBuf>,
+) -> HashMap<K, alpha2_host_core::remote::SourceLocation> {
+    sources(files.clone())
+}
 
 /// Devices created and named from many threads at once crash inside the Vulkan loader
 /// (`vkSetDebugUtilsObjectNameEXT`).
@@ -410,6 +427,7 @@ fn resolve(
         originals: &originals,
         proxies: &proxy_map,
         frames: &no_frames,
+        remote: None,
     };
     crate::assets::resolve_media(
         &project,
@@ -418,6 +436,7 @@ fn resolve(
         purpose,
         &crate::assets::HardwareVideoDecode::None,
     )
+    .expect("local media")
 }
 
 fn still_project(background: [f32; 3], cache: &str) -> Value {
@@ -525,7 +544,7 @@ fn decode_worker_over(
     configure(&mut config);
     crate::decode::DecodeWorker::spawn(
         &project,
-        &assets,
+        &crate::tests::locations(&assets),
         &config,
         CancelToken::default(),
         PipelineFailure::default(),

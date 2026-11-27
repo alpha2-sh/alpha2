@@ -144,6 +144,29 @@ pub fn media_error(source: &str, url: &str, error: &RemoteError) -> HostError {
     HostError::new(error.failure.code(), error.message.clone()).with_details(details)
 }
 
+/// The protocol error a source read failed with inside a decoder, by its code; `details` names
+/// the shown URL and the status as [`media_error`] does, the source when the caller adds it.
+pub fn source_error(failure: &alpha2_media::SourceFailure) -> HostError {
+    HostError::new(failure.code, failure.message.clone()).with_details(source_details(failure))
+}
+
+fn source_details(failure: &alpha2_media::SourceFailure) -> Value {
+    let mut details = json!({});
+    if let Some(url) = &failure.url {
+        details["url"] = json!(url);
+    }
+    if let Some(status) = failure.status {
+        details["status"] = json!(status);
+    }
+    if let Some(policy) = failure.policy {
+        details["policy"] = json!(policy);
+    }
+    if let Some(retry) = failure.retry_after_ms {
+        details["retryAfterMs"] = json!(retry);
+    }
+    details
+}
+
 /// `MEDIA_REFUSED` for the first URL of `assets` or `resources`, by source ID, that the
 /// policy refuses, before anything is contacted.
 ///

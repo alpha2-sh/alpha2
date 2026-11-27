@@ -32,8 +32,8 @@ pub use media::{
 };
 pub use settings::{
     AudioQualityRequest, Backlog, DEFAULT_RENDER_CACHE_QUOTA_BYTES, ExportStrategy,
-    LoudnessRequest, MAX_QUANTIZER, MemoryRequest, RateRequest, RenderCacheRequest,
-    VideoInputPolicy, VideoQualityRequest,
+    LoudnessRequest, MAX_QUANTIZER, MemoryRequest, RateRequest, RemoteContentHash,
+    RenderCacheRequest, VideoInputPolicy, VideoQualityRequest,
 };
 pub use still::{MAX_STILL_DIMENSION, MAX_STILLS, StillEntry, StillRequest, StillSize};
 

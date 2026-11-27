@@ -5,7 +5,6 @@
 //! encode from the GPU.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -156,7 +155,7 @@ impl Host {
     pub(crate) fn export_codec_split(
         &self,
         project: &Project,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         range: TimeRange,
         pipeline_enabled: bool,
         (software_video_encoder, encoder_fixed_threads): (bool, Option<usize>),

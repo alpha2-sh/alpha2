@@ -8,7 +8,7 @@ fn windowed_audio_meets_the_audio_provider_contract() {
         contract.project_sample_rate,
         crate::memory::ByteBudget::exact(16 * 1024 * 1024),
         crate::audio::native_opener(
-            HashMap::from([(source.clone(), contract.source_path())]),
+            crate::tests::sources([(source.clone(), contract.source_path())]),
             contract.project_sample_rate,
             std::sync::Arc::default(),
         ),
@@ -67,7 +67,7 @@ fn a_source_read_backward_through_windows_gives_its_straight_samples() {
             48_000,
             crate::memory::ByteBudget::exact(64 * 1024 * 1024),
             crate::audio::native_opener(
-                HashMap::from([(source.clone(), path)]),
+                crate::tests::sources([(source.clone(), path)]),
                 48_000,
                 std::sync::Arc::default(),
             ),
@@ -119,7 +119,7 @@ fn an_audio_window_is_refused_before_it_decodes_past_its_budget() {
         48_000,
         crate::memory::ByteBudget::exact(budget),
         crate::audio::native_opener(
-            HashMap::from([(source.clone(), corpus("audio-quad.wav"))]),
+            crate::tests::sources([(source.clone(), corpus("audio-quad.wav"))]),
             48_000,
             std::sync::Arc::default(),
         ),
@@ -160,7 +160,7 @@ fn windowed_audio_preserves_silence_before_the_first_timestamp() {
             48_000,
             crate::memory::ByteBudget::exact(128 * 1024),
             crate::audio::native_opener(
-                HashMap::from([(source.clone(), corpus(name))]),
+                crate::tests::sources([(source.clone(), corpus(name))]),
                 48_000,
                 std::sync::Arc::default(),
             ),
@@ -221,7 +221,11 @@ fn windowed_audio_merges_ranges_and_evicts_consumed_samples() {
     let mut sources = WindowedAudioSources::new(
         48_000,
         crate::memory::ByteBudget::exact(1024 * 1024),
-        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+        crate::audio::native_opener(
+            crate::tests::locations(&paths),
+            48_000,
+            std::sync::Arc::default(),
+        ),
     );
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
@@ -254,7 +258,11 @@ fn windowed_audio_reading_backward_keeps_what_the_next_reads_want() {
     let mut sources = WindowedAudioSources::new(
         48_000,
         crate::memory::ByteBudget::exact(1024 * 1024),
-        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+        crate::audio::native_opener(
+            crate::tests::locations(&paths),
+            48_000,
+            std::sync::Arc::default(),
+        ),
     );
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
@@ -298,7 +306,11 @@ fn windowed_audio_keeps_two_clips_of_one_source_apart() {
     let mut sources = WindowedAudioSources::new(
         48_000,
         crate::memory::ByteBudget::exact(32 * 1024),
-        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+        crate::audio::native_opener(
+            crate::tests::locations(&paths),
+            48_000,
+            std::sync::Arc::default(),
+        ),
     );
     let need = |start, end| alpha2_engine::AudioNeed {
         source_id: source.clone(),
@@ -336,7 +348,11 @@ fn windowed_audio_answers_a_read_from_the_window_that_covers_it() {
     let mut sources = WindowedAudioSources::new(
         48_000,
         crate::memory::ByteBudget::exact(1024 * 1024),
-        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+        crate::audio::native_opener(
+            crate::tests::locations(&paths),
+            48_000,
+            std::sync::Arc::default(),
+        ),
     );
     let need = |start: i64, end: i64| alpha2_engine::AudioNeed {
         source_id: source.clone(),
@@ -383,7 +399,11 @@ fn windowed_audio_returns_a_short_block_at_source_eof() {
     let mut sources = WindowedAudioSources::new(
         48_000,
         crate::memory::ByteBudget::exact(1024 * 1024),
-        crate::audio::native_opener(paths, 48_000, std::sync::Arc::default()),
+        crate::audio::native_opener(
+            crate::tests::locations(&paths),
+            48_000,
+            std::sync::Arc::default(),
+        ),
     );
     let whole_source = alpha2_engine::AudioNeed {
         source_id: source.clone(),
@@ -503,7 +523,7 @@ fn exported_av_offset_samples(
     let result = host
         .export(
             &project.to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             start_ticks,
@@ -713,7 +733,7 @@ fn export_normalized(
     let result = host
         .export(
             &project.to_string(),
-            assets,
+            &crate::tests::locations(assets),
             &HashMap::new(),
             Vec::new(),
             0,
