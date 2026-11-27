@@ -65,6 +65,10 @@ int main(void) {
   return archive;
 }
 
+function integrityProtection() {
+  return run("csrutil", ["status"]).stdout.trim();
+}
+
 function signature(file) {
   const details = run("codesign", ["--display", "--verbose=2", file]);
   const granted = run("codesign", [
@@ -119,7 +123,12 @@ test(
     for (const set of [[], [entitlements("library-validation")]]) {
       const archive = archiveWithStandInHost(t);
       const signed = run(sign, [archive, "-", ...set]);
-      assert.notEqual(signed.status, 0, signed.stdout);
+      const protection = integrityProtection();
+      if (signed.status === 0 && !/status: enabled/.test(protection)) {
+        t.skip(`no library validation to test under: ${protection}`);
+        return;
+      }
+      assert.notEqual(signed.status, 0, `${signed.stdout}${protection}`);
       assert.match(signed.stderr, /gave no capability report/);
       assert.match(signed.stderr, /different Team IDs/);
       const verified = run("codesign", [
