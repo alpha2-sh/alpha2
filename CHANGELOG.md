@@ -12,6 +12,12 @@ All notable changes to this project are documented in this file.
   between CPUs. A model file whisper.cpp refuses after the plugin's own check accepted it no longer
   leaves its buffers allocated, which with Metal made the process abort when it exited.
 - `ExtractResult.sourceDecode`: how the browser decoded each source of an extraction.
+- `scripts/sign-macos-host.sh` signs an unpacked macOS archive for an application with its own
+  identity (every library, then the programs, hardened runtime, timestamp), verifies the signatures
+  and checks that the host answers `capabilities`. `release/macos/` holds the two supported
+  entitlement sets (library validation on; `disable-library-validation` on the host), and
+  `docs/native.md` describes the procedure and what each set means for replacing the FFmpeg
+  libraries and for Cisco's OpenH264. Release archives stay ad hoc signed.
 
 ### Changed
 

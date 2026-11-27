@@ -30,6 +30,25 @@ gh attestation verify alpha2-<version>-<target>-bundled.tar.gz --repo alpha2-sh/
 
 `checksums.sha256` comes from the same release as the archives, so it catches a damaged download but not a replaced one; the attestation, and the installers' pins below, do.
 
+### Signing the macOS host into an application
+
+The macOS archive is signed ad hoc and not notarized. An application that ships the host inside its own signed, notarized bundle signs it again with its own Developer ID Application identity; the archive needs no rebuild for that. [`scripts/sign-macos-host.sh`](https://github.com/alpha2-sh/alpha2/blob/main/scripts/sign-macos-host.sh) `<archive-root> <identity> [<entitlements>]` does it in this order and checks the result:
+
+1. Every `lib/*.dylib`, then `bin/alpha2`, then `bin/alpha2-host`, each with `codesign --force --sign <identity> --options runtime --timestamp` (the hardened runtime and a secure timestamp, both of which notarization requires; an ad hoc identity, `-`, takes no timestamp). Only `bin/alpha2-host` takes the entitlements file.
+2. `codesign --verify --deep --strict` on every file it signed.
+3. `bin/alpha2-host serve` must answer a `capabilities` request, which proves the signed host loads its signed libraries.
+
+Sign the enclosing application bundle after the script, as its own last step. Keep `bin/` and `lib/` together inside it (in `Contents/Resources` or `Contents/Helpers`, for example): the programs find the libraries at `@executable_path/../lib`.
+
+Two entitlement sets are supported, as files in `release/macos/`:
+
+- `library-validation.entitlements` (no entitlement, the same as passing none): library validation stays on, so the host loads only code signed by the application's own team. A replaced FFmpeg library must be signed again with that team, and Cisco's OpenH264, which Cisco signs with its own team, does not load; encode H.264 with the Mac's hardware encoder instead.
+- `disable-library-validation.entitlements` (`com.apple.security.cs.disable-library-validation` on the host only): replaced libraries and Cisco's OpenH264 load. `bin/alpha2` keeps library validation.
+
+Neither set needs the JIT or unsigned-executable-memory entitlements. After notarizing the application, `spctl --assess --type execute --verbose <application>` reports whether Gatekeeper accepts it, and the host's own `capabilities` run in the installed application shows that it starts there. Notarization and Gatekeeper's verdict depend on the application's team and Apple's service, so this repository does not test them. Which set a distribution offers is the integrator's choice; [FFmpeg and the LGPL](#ffmpeg-and-the-lgpl) states what each means for replacing the libraries.
+
+There is no macOS x64 archive: an Intel Mac has no host.
+
 ### The host cache
 
 `npx @alpha2-sh/node install` downloads the archive of the package's own version for the platform, checks it, and unpacks it into a cache that clients share. A client for another language that installs the host should use the same layout, so one download serves both:
@@ -169,7 +188,7 @@ The archives are the way to get the programs with the FFmpeg runtime alpha2 is r
 
 ## FFmpeg and the LGPL
 
-The FFmpeg in the archives is FFmpeg 8 built as shared libraries under the LGPL 2.1 or later, with its GPL and nonfree components disabled. alpha2 links it dynamically, and the libraries of a `bundled` archive can be replaced with a build of the same FFmpeg release series (8.1.x) and the same configuration. Another series, FFmpeg 8.0 among them, can change the layout of structures the hardware paths read while keeping the same library names.
+The FFmpeg in the archives is FFmpeg 8 built as shared libraries under the LGPL 2.1 or later, with its GPL and nonfree components disabled. alpha2 links it dynamically, and the libraries of a `bundled` archive can be replaced with a build of the same FFmpeg release series (8.1.x) and the same configuration. In a macOS application that signs the host with library validation on, a replaced library loads only once it is signed with the same identity as the host, which means signing the application again ([`release/ffmpeg-lgpl/README.md`](https://github.com/alpha2-sh/alpha2/blob/main/release/ffmpeg-lgpl/README.md#signing-on-macos)). Another series, FFmpeg 8.0 among them, can change the layout of structures the hardware paths read while keeping the same library names.
 
 Each archive's `compliance/` directory holds:
 

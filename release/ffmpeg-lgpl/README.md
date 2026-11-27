@@ -34,3 +34,12 @@ The bundled archive contains the seven locked LGPL shared libraries and uses a p
 Headers, pkg-config files, and import libraries are build inputs only. They stay in the generic SDK release and are not copied into an alpha2 runtime archive.
 
 Every native archive carries the exact lock file, platform configure/runtime audit, alpha2 third-party notices, FFmpeg, zlib, dav1d, libopus, libvpx and SVT-AV1 notices (and, on Linux, Vulkan-Headers), and a source/provenance record. Consumers may replace the bundled libraries with a build of the same FFmpeg release series (8.1.x) and the same configuration; another series can change the layout of structures the hardware paths read while keeping the same library names. Patent and codec distribution rules remain the distributor's responsibility even when the software license is LGPL.
+
+## Signing on macOS
+
+The macOS archive is signed ad hoc, so replacing a library there needs nothing but an ad hoc signature of the new file (`codesign --force --sign - <library>`). An application that signs the host into its own bundle ([Signing the macOS host into an application](../../docs/native.md#signing-the-macos-host-into-an-application)) chooses one of two entitlement sets, and with it what replacing a library takes:
+
+- Library validation on (`release/macos/library-validation.entitlements`, no entitlement): the host loads only code signed by the same team as itself. A user who replaces an FFmpeg library must sign the library and the host again with one identity of their own (an ad hoc identity does), which the LGPL lets them do and which voids the application's notarization; Cisco's OpenH264 does not load at all.
+- Library validation off for the host (`release/macos/disable-library-validation.entitlements`): a replaced library and Cisco's OpenH264 load as they are, signed by anyone.
+
+The integrator decides which set their distribution offers, and documents for their users how a library is replaced under it.
