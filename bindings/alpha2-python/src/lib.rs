@@ -309,6 +309,28 @@ impl TextMeasurer {
         })
     }
 
+    /// Reports where each line, word and cluster of a text generator (JSON) lies on a `width` by
+    /// `height` canvas, ranges in code points, as JSON `{fontSize, layout, lines, words,
+    /// clusters}`. Raises `ValueError` for a refused generator.
+    fn text_layout(
+        &self,
+        py: Python<'_>,
+        generator: &str,
+        width: u32,
+        height: u32,
+    ) -> PyResult<String> {
+        self.measure(py, |inner| {
+            alpha2_layout::json::text_layout_json(
+                inner,
+                generator,
+                width,
+                height,
+                alpha2_layout::json::StringUnit::CodePoints,
+            )
+            .map_err(|error| measure_error(&error))
+        })
+    }
+
     /// Places each node of a layout generator (JSON) at `time` ticks, returning JSON `{nodes}`.
     /// `"<n>px"` lengths are pixels of `canvas`, which defaults to `width` by `height`. Raises
     /// `ValueError` for a refused generator.

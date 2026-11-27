@@ -7,8 +7,8 @@
 //! `sqrt` enter the selection, so native and wasm agree bit for bit.
 
 use alpha2_eval::{SampledAnimator, SampledSelector};
-use alpha2_model::{RangeShape, RangeUnits, RunState, TextRun, TextUnit};
-use alpha2_text::{ClusterState, ColorMix, MAX_CLUSTER_SCALE, TextLayout};
+use alpha2_model::{RangeShape, RangeUnits, RunState, RunTime, TextRun, TextUnit};
+use alpha2_text::{ClusterState, ColorMix, MAX_CLUSTER_SCALE, RevealEdge, TextLayout};
 use alpha2_time::MediaTime;
 
 /// The selection in `[0, 1]` that `selector` gives each cluster of `layout`, at `time` for a
@@ -278,6 +278,9 @@ fn text_states(
                 for (axis, target) in state.scale.iter_mut().zip(scale) {
                     *axis *= 1.0 + weight * (target - 1.0);
                 }
+                if animator.advance_follows_scale {
+                    state.advance_scale *= 1.0 + weight * (scale[0] - 1.0);
+                }
             }
             if let Some(rotation) = animator.rotation_degrees {
                 *degrees += weight * rotation;
@@ -294,6 +297,19 @@ fn text_states(
             if let Some(tracking) = animator.tracking {
                 state.tracking += weight * tracking * font_size;
             }
+            if let Some(reveal) = animator.reveal {
+                let progress = 1.0 + weight * (reveal.progress - 1.0);
+                if progress < 1.0
+                    && let Some(slot) = state.reveals.iter_mut().find(|slot| slot.is_none())
+                {
+                    let angle = reveal.angle_degrees.to_radians();
+                    *slot = Some(RevealEdge {
+                        direction: [libm::cosf(angle), libm::sinf(angle)],
+                        progress: progress.max(0.0),
+                        feather: reveal.feather * font_size,
+                    });
+                }
+            }
         }
     }
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -308,6 +324,7 @@ fn text_states(
         state.opacity = state.opacity.clamp(0.0, 1.0);
         // Scales of several animators multiply; the product keeps one animator's limit.
         state.scale = state.scale.map(|axis| axis.min(MAX_CLUSTER_SCALE));
+        state.advance_scale = state.advance_scale.min(MAX_CLUSTER_SCALE);
         identity &= state.is_identity();
         let mixes = [state.fill, state.stroke].map(|mix| {
             mix.map_or([1.0, 0.0, 0.0, 0.0, 0.0], |mix| {
@@ -323,8 +340,84 @@ fn text_states(
         {
             feed(value);
         }
+        if state.advance_scale.to_bits() != 1.0_f32.to_bits() {
+            feed(state.advance_scale);
+        }
+        for edge in state.reveals.iter().flatten() {
+            for value in [
+                edge.direction[0],
+                edge.direction[1],
+                edge.progress,
+                edge.feather,
+            ] {
+                feed(value);
+            }
+        }
     }
     (states, if identity { 0 } else { hash.max(1) })
+}
+
+/// The highlight's steps at `time` over a text of `runs`: the byte ranges of the timed runs that
+/// have started, in the order they started (ties in text order), each with the eased progress of
+/// its slide, the first at 1. Earlier steps a step at 1 replaces are left out. Empty before the
+/// first run starts, and with [`alpha2_model::HighlightGap::Hide`] once the current run ended.
+#[must_use]
+pub fn highlight_steps(
+    runs: &[TextRun],
+    time: MediaTime,
+    highlight: &alpha2_model::TextHighlight,
+) -> Vec<(std::ops::Range<usize>, f32)> {
+    let mut start = 0;
+    let mut started = runs
+        .iter()
+        .filter_map(|run| {
+            let bytes = start..start + run.text.len();
+            start = bytes.end;
+            run.time
+                .filter(|span| span.start <= time)
+                .map(|span| (span, bytes))
+        })
+        .collect::<Vec<_>>();
+    started.sort_by_key(|(span, bytes)| (span.start, bytes.start));
+    let Some((current, _)) = started.last() else {
+        return Vec::new();
+    };
+    let hide = highlight.gap == alpha2_model::HighlightGap::Hide;
+    if hide && time >= current.end {
+        return Vec::new();
+    }
+    let mut steps = Vec::<(std::ops::Range<usize>, f32)>::with_capacity(started.len());
+    let mut previous: Option<RunTime> = None;
+    for (span, bytes) in started {
+        let jumps = previous.is_none_or(|previous| hide && span.start > previous.end);
+        let progress = if jumps || highlight.transition <= MediaTime::ZERO {
+            1.0
+        } else {
+            #[expect(clippy::cast_precision_loss, reason = "ticks within ten seconds")]
+            let linear =
+                (time.ticks() - span.start.ticks()) as f64 / highlight.transition.ticks() as f64;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "eased progress near [0, 1]"
+            )]
+            let eased = highlight.easing.apply(linear) as f32;
+            if linear >= 1.0 {
+                1.0
+            } else {
+                eased.clamp(0.0, 1.0)
+            }
+        };
+        if progress >= 1.0 {
+            steps.clear();
+        }
+        steps.push((bytes, progress));
+        previous = Some(span);
+    }
+    if steps.len() > alpha2_text::MAX_HIGHLIGHT_STEPS {
+        steps.drain(..steps.len() - alpha2_text::MAX_HIGHLIGHT_STEPS);
+        steps[0].1 = 1.0;
+    }
+    steps
 }
 
 /// `mix` (or the color unchanged) mixed toward the straight sRGB `target` by `weight`, in

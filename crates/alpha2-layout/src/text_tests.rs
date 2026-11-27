@@ -518,3 +518,263 @@ fn a_held_run_scale_shares_its_key() {
     assert_eq!(key(12_000), key(30_000));
     assert_ne!(key(11_000), key(12_000));
 }
+
+#[test]
+fn box_fields_change_the_text_key() {
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let background = |value: serde_json::Value| TextStyle {
+        background: Some(serde_json::from_value(value).expect("a box")),
+        ..TextStyle::default()
+    };
+    let plain = background(serde_json::json!({ "color": "#000000", "padding": 0.2 }));
+    let key = |style: &TextStyle| text_key(&TextAt::from("Hi"), style, size);
+    assert_eq!(
+        key(&plain),
+        key(&background(
+            serde_json::json!({ "color": "#000000", "padding": "0.2 0.2" })
+        )),
+        "the same sides key alike however written"
+    );
+    let keys = [
+        serde_json::json!({ "color": "#000000", "padding": "0.2 0.3" }),
+        serde_json::json!({ "color": "#000000", "padding": 0.2, "radius": 0.1 }),
+        serde_json::json!({ "color": "#000000", "padding": 0.2,
+            "border": { "width": 0.05, "color": "#ffffff" } }),
+        serde_json::json!({ "color": "#000000", "padding": 0.2,
+            "border": { "width": 0.05, "color": "#ffffff", "dash": { "pattern": [0.1] } } }),
+        serde_json::json!({ "color": "#000000", "padding": 0.2,
+            "border": { "width": 0.05, "color": "#ffffff", "dash": { "pattern": [0.1], "offset": 0.2 } } }),
+    ]
+    .into_iter()
+    .map(|value| key(&background(value)))
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), 5);
+    assert!(!keys.contains(&key(&plain)));
+}
+
+/// Every word grows to `peak` and back over a quarter second along a back-out curve, its
+/// advance pushing the rest of its line.
+fn popping(peak: f32, extra: &str) -> TextStyle {
+    serde_json::from_value(serde_json::json!({
+        "font_size": 0.06,
+        "max_width": 0.5,
+        "align": "center",
+        "animators": [{
+            "selector": { "type": "range", "based_on": "words" },
+            "properties": {
+                "scale": { "mode": "keyframes", "keyframes": [
+                    { "time": 0, "value": { "x": 1, "y": 1 },
+                      "interpolation": { "type": "cubic_bezier", "x1": 0.34, "y1": 1.56, "x2": 0.64, "y2": 1 } },
+                    { "time": 15000, "value": { "x": peak, "y": peak }, "interpolation": { "type": "linear" } },
+                    { "time": 30000, "value": { "x": 1, "y": 1 }, "interpolation": { "type": "linear" } }
+                ] },
+                "advance_follows_scale": true
+            }
+        }],
+        "animator_grouping": "word",
+    }))
+    .map(|mut style: TextStyle| {
+        if !extra.is_empty() {
+            style.animator_pivot = serde_json::from_str(extra).expect("a pivot");
+        }
+        style
+    })
+    .expect("a text style")
+}
+
+const POP: &str = "Every word here pops and pushes the others";
+
+#[test]
+fn a_pushed_line_fits_its_box_at_every_sampled_time() {
+    let mut rasterizer = fixture();
+    let size = PictureSize::new(1280, 720).expect("size");
+    let style = popping(1.5, "");
+    let text = crate::TextAt::from(POP);
+    assert!(
+        advance_headroom(&text, &style) > 1.5,
+        "the curve overshoots its peak"
+    );
+    let mut widest = 0_i64;
+    for step in 0..=60 {
+        let time = MediaTime::from_ticks(step * 500);
+        let key = animated_text_key(&text.content, &style, size, time);
+        let mut draw = text_draw(&text, &style, size, key, font_pixels(&style, size));
+        draw.animation = Some(crate::TextAnimation {
+            animators: alpha2_eval::sample_text_animators(&style.animators, time),
+            runs: Vec::new(),
+            time,
+        });
+        let (states, _) = draw
+            .states(&rasterizer)
+            .expect("lays out")
+            .expect("animated");
+        let drawn = rasterizer
+            .rasterize_animated(&draw.request, &states)
+            .expect("draws");
+        let descriptor = &drawn.descriptor;
+        let width = usize::try_from(descriptor.texture.width).expect("width");
+        #[allow(clippy::cast_possible_truncation)]
+        let (left, right) = drawn
+            .pixels
+            .rgba8
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| pixel[3] > 0)
+            .map(|(index, _)| i64::try_from(index % width).expect("x") - descriptor.layout_x as i64)
+            .fold((i64::MAX, i64::MIN), |(left, right), x| {
+                (left.min(x), right.max(x))
+            });
+        #[allow(clippy::cast_possible_truncation)]
+        let box_width = descriptor.layout_width as i64;
+        assert!(
+            left >= -1 && right <= box_width + 1,
+            "{time:?}: {left}..{right} in {box_width}"
+        );
+        widest = widest.max(right - left);
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let half = (0.25 * 1280.0) as i64;
+    assert!(widest > half, "the pop widens its lines");
+}
+
+#[test]
+fn lines_never_change_while_a_push_animates() {
+    let rasterizer = fixture();
+    let size = PictureSize::new(1280, 720).expect("size");
+    let style = popping(1.5, "");
+    let text = crate::TextAt::from(POP);
+    let lines = |time| {
+        let key = animated_text_key(&text.content, &style, size, time);
+        let draw = text_draw(&text, &style, size, key, font_pixels(&style, size));
+        let layout = rasterizer.layout(&draw.request).expect("lays out");
+        layout
+            .lines
+            .iter()
+            .map(|line| line.clusters.clone())
+            .collect::<Vec<_>>()
+    };
+    let rest = lines(MediaTime::ZERO);
+    assert!(rest.len() > 1);
+    for step in 1..=30 {
+        assert_eq!(lines(MediaTime::from_ticks(step * 1_000)), rest);
+    }
+}
+
+#[test]
+fn a_fit_reserves_the_headroom() {
+    let rasterizer = fixture();
+    let size = PictureSize::new(1280, 720).expect("size");
+    let fitted = |style: &TextStyle| {
+        let style = TextStyle {
+            font_size: 0.2,
+            max_height: Some(0.12),
+            font_size_fit: Some(alpha2_model::FontSizeFit {
+                min: 0.01,
+                max: None,
+            }),
+            ..style.clone()
+        };
+        measure_text(
+            &rasterizer,
+            &crate::TextAt::from("Pop goes the word"),
+            &style,
+            size,
+        )
+        .expect("measures")
+    };
+    let still = fitted(&TextStyle {
+        animators: Vec::new(),
+        ..popping(2.0, "")
+    });
+    let pushing = fitted(&popping(2.0, ""));
+    assert!(pushing.advance_headroom > 2.0);
+    assert!(
+        pushing.font_size < still.font_size,
+        "{} vs {}",
+        pushing.font_size,
+        still.font_size
+    );
+    assert!(!pushing.overflow && !still.overflow);
+}
+
+#[test]
+fn a_fixed_size_text_wraps_within_its_headroom_and_reports_a_split_word() {
+    let rasterizer = fixture();
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let word = crate::TextAt::from("Internationalization");
+    let style = TextStyle {
+        font_size: 0.05,
+        max_width: 0.5,
+        ..popping(3.0, "")
+    };
+    let still = TextStyle {
+        animators: Vec::new(),
+        ..style.clone()
+    };
+    let rest = measure_text(&rasterizer, &word, &still, size).expect("measures");
+    assert_eq!(rest.line_count, 1);
+    assert!(!rest.overflow);
+    let pushed = measure_text(&rasterizer, &word, &style, size).expect("measures");
+    assert!(pushed.line_count > 1, "split to fit its largest moment");
+    assert!(pushed.overflow, "and reported as a split word");
+}
+
+#[test]
+fn text_without_pushing_animators_measures_as_before() {
+    let rasterizer = fixture();
+    let size = PictureSize::new(1280, 720).expect("size");
+    let text = crate::TextAt::from(POP);
+    let mut scaling = popping(1.5, "");
+    scaling.animators[0].properties.advance_follows_scale = false;
+    let still = TextStyle {
+        animators: Vec::new(),
+        animator_grouping: alpha2_model::AnimatorGrouping::Character,
+        ..scaling.clone()
+    };
+    let measured = measure_text(&rasterizer, &text, &scaling, size).expect("measures");
+    assert_eq!(
+        measured,
+        measure_text(&rasterizer, &text, &still, size).expect("measures")
+    );
+    assert_eq!(measured.advance_headroom, 1.0);
+    assert_eq!(
+        text_key(&text, &scaling, size),
+        text_key(
+            &text,
+            &TextStyle {
+                animator_grouping: alpha2_model::AnimatorGrouping::Word,
+                ..still
+            },
+            size
+        )
+    );
+}
+
+#[test]
+fn a_settled_highlight_shares_its_key() {
+    let size = PictureSize::new(640, 360).expect("size");
+    let content = runs(serde_json::json!([
+        { "text": "one ", "time": { "start": 0, "end": 60_000 } },
+        { "text": "two", "time": { "start": 60_000, "end": 120_000 } }
+    ]));
+    let style: TextStyle = serde_json::from_value(serde_json::json!({
+        "highlight": { "color": "#ffd040", "transition": 12_000 }
+    }))
+    .expect("a style");
+    let key = |ticks| animated_text_key(&content, &style, size, MediaTime::from_ticks(ticks));
+    assert_eq!(key(10_000), key(50_000), "held on one");
+    assert_ne!(key(50_000), key(66_000), "sliding to two");
+    assert_ne!(key(66_000), key(70_000));
+    assert_eq!(key(80_000), key(110_000), "settled on two");
+    assert_ne!(key(10_000), key(80_000));
+    let request = text_request(
+        &TextAt::new(&content, MediaTime::from_ticks(66_000)),
+        &style,
+        size,
+        1,
+    );
+    let highlight = request.highlight.expect("a highlight");
+    assert_eq!(highlight.steps, [(0..4, 1.0), (4..7, 0.5)]);
+}

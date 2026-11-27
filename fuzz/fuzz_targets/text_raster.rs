@@ -4,8 +4,8 @@ use std::sync::{Mutex, OnceLock};
 
 use alpha2_media::{EmojiPolicy, TextAlign};
 use alpha2_text::{
-    ClusterState, MAX_CLUSTER_SCALE, TextFill, TextFont, TextRasterRequest, TextRasterizer,
-    TextStroke,
+    ClusterGrouping, ClusterState, MAX_CLUSTER_SCALE, RevealEdge, TextFill, TextFont,
+    TextRasterRequest, TextRasterizer, TextStroke,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -78,7 +78,7 @@ fuzz_target!(|data: &[u8]| {
             width: 0.5 + bytes.unit() * 8.0,
         })
         .collect();
-    let state = ClusterState {
+    let mut state = ClusterState {
         offset: [(bytes.unit() - 0.5) * size, (bytes.unit() - 0.5) * size],
         scale: [
             bytes.unit() * MAX_CLUSTER_SCALE,
@@ -87,8 +87,23 @@ fuzz_target!(|data: &[u8]| {
         rotation: bytes.unit() * 7.0,
         opacity: bytes.unit(),
         tracking: (bytes.unit() - 0.5) * size,
+        advance_scale: bytes.unit() * MAX_CLUSTER_SCALE,
         ..ClusterState::IDENTITY
     };
+    let advance_headroom = 1.0 + bytes.unit() * (MAX_CLUSTER_SCALE - 1.0);
+    let animator_grouping = [
+        ClusterGrouping::Character,
+        ClusterGrouping::Word,
+        ClusterGrouping::Line,
+        ClusterGrouping::All,
+    ][usize::from(bytes.byte() % 4)];
+    let animator_pivot = [bytes.unit(), bytes.unit()];
+    let turn = bytes.unit() * std::f32::consts::TAU;
+    state.reveals[0] = Some(RevealEdge {
+        direction: [turn.cos(), turn.sin()],
+        progress: bytes.unit(),
+        feather: bytes.unit() * size,
+    });
     let Ok(text) = std::str::from_utf8(bytes.0) else {
         return;
     };
@@ -109,6 +124,10 @@ fuzz_target!(|data: &[u8]| {
         font_weight: 400,
         clamp: None,
         spans: Vec::new(),
+        advance_headroom,
+        animator_grouping,
+        animator_pivot,
+        highlight: None,
     };
     let mut rasterizer = rasterizer()
         .lock()

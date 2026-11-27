@@ -169,7 +169,13 @@ bounds = measurer.layout(card_layout, picture=(1280, 720))
 title = bounds["nodes"][1]
 print(title["border"], title["lineCount"], title["overflow"], title["baselines"])
 words = measurer.text({"type": "text", "text": "Hi"}, canvas=(1280, 720))
+places = measurer.text_layout({"type": "text", "text": "Hi there"}, canvas=(1280, 720))
+print(places["words"][1]["boxes"], places["clusters"][0]["range"])
 ```
+
+`text_layout` answers where each line, word and grapheme cluster of a text generator lies, as
+drawn before its animators: boxes, em boxes, baselines and ink. Cluster ranges count code points
+of the text (of its runs joined, for runs).
 
 Rectangles are fractions of the picture, `(0, 0)` top-left to `(1, 1)` bottom-right; `baselines`
 holds the first and last lines' alphabetic baselines as fractions of its height, to line a text up

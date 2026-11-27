@@ -60,13 +60,12 @@ pub fn resolve(
             |inputs, _, context, style| match context {
                 Some(NodeContext::Text(index)) => {
                     let text = shaped.get(*index).and_then(Option::as_deref);
+                    let node_text = evaluated.get(*index).copied().flatten();
                     // The automatic height ends at the clamp point of a clamp by count.
-                    let limit = evaluated
-                        .get(*index)
-                        .copied()
-                        .flatten()
+                    let limit = node_text
                         .and_then(|text| text.line_clamp.as_ref())
                         .and_then(|clamp| clamp.max_lines);
+                    let headroom = node_text.map_or(1.0, |text| text.advance_headroom);
                     taffy::compute_leaf_layout(
                         inputs,
                         style,
@@ -75,14 +74,22 @@ pub fn resolve(
                             let Some(text) = text else {
                                 return Size::ZERO;
                             };
-                            let (min, max) = (text.min_content_width(), text.max_content_width());
+                            let (min, max) = (
+                                text.min_content_width() * headroom,
+                                text.max_content_width() * headroom,
+                            );
                             let width = known.width.unwrap_or(match available.width {
                                 AvailableSpace::MinContent => min,
                                 AvailableSpace::MaxContent => max,
                                 AvailableSpace::Definite(space) => space.min(max).max(min),
                             });
                             let height = known.height.unwrap_or_else(|| {
-                                text.lines_within(wrap(width), limit).lines.height
+                                text.lines_within(
+                                    alpha2_text::wrap_width(wrap(width), headroom),
+                                    limit,
+                                )
+                                .lines
+                                .height
                             });
                             Size { width, height }
                         },

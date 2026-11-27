@@ -25,14 +25,19 @@ use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
 mod animated;
+mod boxes;
 mod color;
 mod font_check;
 mod gradient;
+mod highlight;
 mod paint;
 mod runs;
 mod unicode_tables;
 
-pub use animated::{ClusterInfo, ClusterState, ColorMix, LineInfo, MAX_CLUSTER_SCALE, TextLayout};
+pub use animated::{
+    ClusterGrouping, ClusterInfo, ClusterState, ColorMix, LineInfo, MAX_CLUSTER_SCALE,
+    MAX_REVEAL_EDGES, RevealEdge, TextLayout,
+};
 pub use gradient::{TextGradient, TextGradientKind, TextGradientStop, TextSpread};
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
@@ -145,6 +150,39 @@ pub struct TextRasterRequest {
     /// overlap, on character boundaries, at most [`MAX_TEXT_SPANS`]. Text outside every span
     /// takes the request's values; an empty list draws as the request alone.
     pub spans: Vec<TextSpan>,
+    /// The most an animation can widen a cluster's advance ([`ClusterState::advance_scale`]),
+    /// in `[1, MAX_CLUSTER_SCALE]`: lines wrap at `max_width` over it and align in `max_width`, so
+    /// a line pushed apart that far still fits. 1 wraps at `max_width`.
+    pub advance_headroom: f32,
+    /// The units whose clusters an animated raster scales and turns about one pivot.
+    pub animator_grouping: ClusterGrouping,
+    /// A box over the run being said, drawn with the background boxes (and into
+    /// [`TextRasterResult::background`] when split).
+    pub highlight: Option<TextHighlightRequest>,
+    /// Where in each group's box (its clusters' advances by their em boxes) the pivot lies,
+    /// fractions from its left and top in `[0, 1]`; `[0.5, 0.5]` is its centre.
+    pub animator_pivot: [f32; 2],
+}
+
+impl TextRasterRequest {
+    /// The width lines break at: `max_width` over [`Self::advance_headroom`], non-positive for
+    /// none.
+    #[must_use]
+    pub fn wrap_width(&self) -> f32 {
+        wrap_width(self.max_width, self.advance_headroom)
+    }
+}
+
+/// The width lines of a text `max_width` wide (non-positive for any width) break at when
+/// animation can widen its advances by `advance_headroom`
+/// ([`TextRasterRequest::advance_headroom`]).
+#[must_use]
+pub fn wrap_width(max_width: f32, advance_headroom: f32) -> f32 {
+    if max_width > 0.0 && advance_headroom > 1.0 {
+        max_width / advance_headroom
+    } else {
+        max_width
+    }
 }
 
 /// Which faces of a family a span prefers, as CSS `font-style`.
@@ -290,14 +328,117 @@ pub struct TextStroke {
     pub width: f32,
 }
 
-/// A box behind each non-empty line (advance by one em, grown by `padding`). Touching boxes
-/// merge.
-#[derive(Copy, Clone, Debug, PartialEq)]
+/// A box behind each non-empty line: its advance by its em box, grown by `padding`, with a
+/// radius and a border. Overlapping boxes show their union with one outline.
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextBackground {
     /// Straight sRGB RGBA.
     pub color: [u8; 4],
-    /// Space between the text and the box edge, in `[0, 256]` pixels.
-    pub padding: f32,
+    /// Space between the text and the box edge in pixels, top first, clockwise, each in
+    /// `[0, 256]`.
+    pub padding: [f32; 4],
+    /// Every corner's radius in pixels, capped at half the box's shorter side.
+    pub radius: f32,
+    /// A border inside the box's edge.
+    pub border: Option<TextBoxBorder>,
+    /// Which part of each line the box spans.
+    pub extent: BoxExtent,
+}
+
+/// Which part of each line a text's background box spans.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum BoxExtent {
+    /// From the line's first cluster to its last that is not a hanging space, where tracking
+    /// and pushing place them.
+    #[default]
+    Line,
+    /// From the first to the last revealed cluster that is not white space: one shown, not
+    /// scaled to nothing, and not hidden by a reveal edge. A line with none has no box; a line
+    /// whose clusters all show has its line box.
+    Revealed,
+    /// One box over the whole layout box: the wrap width by the lines' height.
+    Block,
+}
+
+/// A box over the run being said that slides from run to run, drawn over the background boxes
+/// and run backgrounds and under the glyphs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextHighlightRequest {
+    /// Its color, padding, radius and border; its extent is not read.
+    pub look: TextBackground,
+    /// Byte ranges of the text with their progress in `[0, 1]`, in the order their runs started,
+    /// the first at 1, at most [`MAX_HIGHLIGHT_STEPS`]. The box starts as the first range's first
+    /// line fragment (its clusters' advances, white space at its ends excluded, by its largest
+    /// em box) and moves toward each next one's by that one's progress; the last range's other
+    /// fragments are drawn whole.
+    pub steps: Vec<(Range<usize>, f32)>,
+}
+
+/// Most steps a [`TextHighlightRequest`] takes.
+pub const MAX_HIGHLIGHT_STEPS: usize = 512;
+
+/// A text box's border.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBoxBorder {
+    /// Width in pixels, positive.
+    pub width: f32,
+    /// Straight sRGB RGBA.
+    pub color: [u8; 4],
+    /// Dashes along the border's centre line; `None` draws it solid.
+    pub dash: Option<TextBoxDash>,
+}
+
+/// SVG `stroke-dasharray` and `stroke-dashoffset` in pixels, from the end of the top-left
+/// corner clockwise.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBoxDash {
+    /// Alternating dash and gap lengths, 1 to 16 non-negative entries, not all zero; an odd
+    /// count repeats once more.
+    pub pattern: Vec<f32>,
+    /// How far into the pattern the border starts.
+    pub offset: f32,
+}
+
+impl TextBackground {
+    /// A box with the same padding on every side, no radius and no border.
+    #[must_use]
+    pub const fn padded(color: [u8; 4], padding: f32) -> Self {
+        Self {
+            color,
+            padding: [padding; 4],
+            radius: 0.0,
+            border: None,
+            extent: BoxExtent::Line,
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        let length = |value: f32| value.is_finite() && value >= 0.0;
+        self.padding
+            .iter()
+            .all(|side| length(*side) && *side <= MAX_BACKGROUND_PADDING)
+            && length(self.radius)
+            && self.radius <= MAX_TEXT_BOX_PIXELS
+            && self.border.as_ref().is_none_or(|border| {
+                border.width.is_finite()
+                    && border.width > 0.0
+                    && border.width <= MAX_TEXT_BOX_PIXELS
+                    && border.dash.as_ref().is_none_or(|dash| {
+                        (1..=16).contains(&dash.pattern.len())
+                            && dash
+                                .pattern
+                                .iter()
+                                .all(|entry| length(*entry) && *entry <= MAX_TEXT_BOX_PIXELS)
+                            && dash.pattern.iter().any(|entry| *entry > 0.0)
+                            && dash.offset.is_finite()
+                    })
+            })
+    }
+
+    /// Whether the boxes are plain rectangles.
+    pub(crate) fn is_plain(&self) -> bool {
+        self.radius == 0.0 && self.border.is_none()
+    }
 }
 
 /// Rasterized pixels and their text-specific layout descriptor.
@@ -321,8 +462,8 @@ pub struct TextMeasure {
     pub box_width: u32,
     /// All lines' em boxes, rounded up.
     pub box_height: u32,
-    /// [`TextRasterRequest::decoration_margin`].
-    pub decoration_margin: u32,
+    /// [`TextRasterRequest::decoration_margin`], horizontally and vertically.
+    pub decoration_margin: [u32; 2],
     /// Horizontal extent of the line advances by the box height, grown by the decoration
     /// margin. Unlike `ink`, it does not depend on glyph shapes.
     pub content: [f32; 4],
@@ -1012,21 +1153,46 @@ impl TextRasterizer {
         for run in &paint.boxes {
             include(&mut ink, [run.left, run.top, run.right, run.bottom]);
         }
-        let padding = request.background.map(|background| background.padding);
         let mut content = None;
         for (index, line) in layout.lines.iter().enumerate() {
             let left = layout.line_offset(line, request.align);
             let top = layout.line_top(index);
             include(&mut content, [left, 0.0, left + line.width, layout.height]);
-            if let (Some(padding), true) = (padding, line.width > 0.0) {
+            if let (Some(background), true) = (
+                request
+                    .background
+                    .as_ref()
+                    .filter(|background| background.extent != BoxExtent::Block),
+                line.width > 0.0,
+            ) {
+                let [pad_top, pad_right, pad_bottom, pad_left] = background.padding;
                 include(
                     &mut ink,
-                    grown(
-                        [left, top, left + line.width, top + layout.line_size(index)],
-                        padding,
-                    ),
+                    [
+                        left - pad_left,
+                        top - pad_top,
+                        left + line.width + pad_right,
+                        top + layout.line_size(index) + pad_bottom,
+                    ],
                 );
             }
+        }
+        if let Some((background, (left, width, top, height))) = request
+            .background
+            .as_ref()
+            .filter(|background| background.extent == BoxExtent::Block)
+            .zip(layout.block_box())
+        {
+            let [pad_top, pad_right, pad_bottom, pad_left] = background.padding;
+            include(
+                &mut ink,
+                [
+                    left - pad_left,
+                    top - pad_top,
+                    left + width + pad_right,
+                    top + height + pad_bottom,
+                ],
+            );
         }
         let content = content.unwrap_or([0.0, 0.0, 0.0, layout.height]);
         let last = layout.lines.len().saturating_sub(1);
@@ -1036,7 +1202,7 @@ impl TextRasterizer {
             box_width: layout.box_width,
             box_height: layout.box_height,
             decoration_margin: request.decoration_margin(),
-            content: grown(content, request.decoration_margin() as f32),
+            content: grown_by(content, request.decoration_margin().map(|side| side as f32)),
             ink,
             line_count: layout.line_count,
             truncated: layout.truncated,
@@ -1165,7 +1331,7 @@ impl TextRasterizer {
                 .iter()
                 .flatten()
                 .flat_map(|shaped: &ShapedParagraph<'_>| {
-                    break_lines(&shaped.clusters, request.max_width)
+                    break_lines(&shaped.clusters, request.wrap_width())
                         .into_iter()
                         .map(|range| line_size(&shaped.clusters[range], strut))
                 })
@@ -1189,7 +1355,7 @@ impl TextRasterizer {
                 .get_mut(index)
                 .and_then(Option::take)
                 .unwrap_or_else(|| shape(index));
-            let ranges = break_lines(&shaped.clusters, request.max_width);
+            let ranges = break_lines(&shaped.clusters, request.wrap_width());
             let mut clamped = false;
             for (at, range) in ranges.iter().enumerate() {
                 let at_line = (first, lines.len());
@@ -1218,7 +1384,7 @@ impl TextRasterizer {
                         shaped.place_cut(
                             range.clone(),
                             &mark,
-                            request.max_width,
+                            request.wrap_width(),
                             at_line,
                             &mut clusters,
                         )
@@ -1306,14 +1472,17 @@ impl TextRasterizer {
         );
         // A symmetric margin keeps the box centered and leaves room for decorations and overflow.
         let (outline, padding) = decoration_extents(request);
-        let margin = |overflow: i64| -> Result<u32, TextRasterError> {
+        let margin = |overflow: i64, padding: u32| -> Result<u32, TextRasterError> {
             u32::try_from(overflow)
                 .map_err(|_| TextRasterError::TooLarge)?
                 .checked_add(outline)
                 .map(|margin| margin.max(outline.max(padding)))
                 .ok_or(TextRasterError::TooLarge)
         };
-        let (margin_x, margin_y) = (margin(overflow_x)?, margin(overflow_y)?);
+        let (margin_x, margin_y) = (
+            margin(overflow_x, padding[0])?,
+            margin(overflow_y, padding[1])?,
+        );
         let width = margin_x
             .checked_mul(2)
             .and_then(|margins| box_width.checked_add(margins))
@@ -1333,7 +1502,19 @@ impl TextRasterizer {
         let mut coverage = vec![0_u8; pixel_count];
         // Allocated only once a color glyph is placed.
         let mut colors: Option<Vec<u8>> = None;
-        let line_boxes = layout.line_boxes(request.align);
+        let line_boxes = layout.background_boxes(request.align, request.background.as_ref());
+        let highlight = request
+            .highlight
+            .as_ref()
+            .map_or_else(Vec::new, |highlight| {
+                let clusters = animated::text_layout(&layout, &shaping, request).clusters;
+                highlight::boxes(
+                    &layout,
+                    &clusters,
+                    &layout.static_extents(request.align),
+                    highlight,
+                )
+            });
         for (key, origin, scale, pixels) in placed {
             let (origin_x, origin_y) = (
                 pixels.left + i64::from(margin_x),
@@ -1370,6 +1551,7 @@ impl TextRasterizer {
             [margin_x, margin_y],
             &line_boxes,
             &[],
+            &highlight,
             &bands,
             &RequestLook::of(request, [layout.width, layout.height]),
         );
@@ -1775,6 +1957,42 @@ impl Layout {
             .collect()
     }
 
+    /// Every line's box, or the one block box, for `background`'s extent, where the static
+    /// layout places the lines.
+    fn background_boxes(
+        &self,
+        align: TextAlign,
+        background: Option<&TextBackground>,
+    ) -> Vec<(f32, f32, f32, f32)> {
+        match background.map(|background| background.extent) {
+            Some(BoxExtent::Block) => self.block_box().into_iter().collect(),
+            _ => self.line_boxes(align),
+        }
+    }
+
+    /// The box over the whole layout box: the wrap width by every line's box.
+    fn block_box(&self) -> Option<(f32, f32, f32, f32)> {
+        let last = self.lines.len().checked_sub(1)?;
+        let top = self.line_top(0);
+        Some((
+            0.0,
+            self.width,
+            top,
+            self.line_top(last) + self.line_size(last) - top,
+        ))
+    }
+
+    /// Each cluster's advance where the static layout places it.
+    fn static_extents(&self, align: TextAlign) -> Vec<Option<(f32, f32)>> {
+        let mut extents = vec![None; self.clusters.len()];
+        for index in 0..self.lines.len() {
+            for (cluster, extent) in self.cluster_extents(index, align) {
+                extents[cluster] = Some(extent);
+            }
+        }
+        extents
+    }
+
     fn cluster_extents(&self, index: usize, align: TextAlign) -> HashMap<usize, (f32, f32)> {
         let line = &self.lines[index];
         let offset = self.line_offset(line, align);
@@ -1801,7 +2019,10 @@ impl Layout {
                 shaping,
                 self,
                 index,
-                |cluster| extents[&cluster],
+                (
+                    |cluster| extents[&cluster],
+                    |cluster| extents.get(&cluster).copied(),
+                ),
                 |_| animated::IDENTITY_AFFINE,
             );
         }
@@ -1868,6 +2089,10 @@ fn include(bounds: &mut Option<[f32; 4]>, [left, top, right, bottom]: [f32; 4]) 
 
 fn grown([left, top, right, bottom]: [f32; 4], by: f32) -> [f32; 4] {
     [left - by, top - by, right + by, bottom + by]
+}
+
+fn grown_by([left, top, right, bottom]: [f32; 4], [x, y]: [f32; 2]) -> [f32; 4] {
+    [left - x, top - y, right + x, bottom + y]
 }
 
 /// Byte range (paragraph-relative during layout, then text-relative) and line of a cluster.
@@ -2884,11 +3109,10 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
         && request.content_version > 0
         && request.fill.is_valid()
         && valid_strokes(&request.strokes)
-        && request.background.is_none_or(|background| {
-            background.padding.is_finite()
-                && background.padding >= 0.0
-                && background.padding <= MAX_BACKGROUND_PADDING
-        })
+        && request
+            .background
+            .as_ref()
+            .is_none_or(TextBackground::is_valid)
         && request.clamp.as_ref().is_none_or(|clamp| {
             clamp.max_lines != Some(0)
                 && clamp.max_height.is_finite()
@@ -2897,6 +3121,20 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
                 })
         })
         && runs::valid_spans(request)
+        && (1.0..=MAX_CLUSTER_SCALE).contains(&request.advance_headroom)
+        && request.highlight.as_ref().is_none_or(|highlight| {
+            highlight.look.is_valid()
+                && highlight.steps.len() <= MAX_HIGHLIGHT_STEPS
+                && highlight.steps.iter().all(|(bytes, progress)| {
+                    bytes.start <= bytes.end
+                        && bytes.end <= request.text.len()
+                        && (0.0..=1.0).contains(progress)
+                })
+        })
+        && request
+            .animator_pivot
+            .iter()
+            .all(|fraction| (0.0..=1.0).contains(fraction))
     {
         Ok(())
     } else {
@@ -2974,22 +3212,30 @@ fn place_color_glyph(
 }
 
 impl TextRasterRequest {
-    /// Whole pixels the strokes or background reach past the layout box. The texture margin
-    /// ([`TextTexture::layout_x`]) adds room for ink overflow to this.
+    /// Whole pixels the strokes or background reach past the layout box, horizontally and
+    /// vertically. The texture margin ([`TextTexture::layout_x`]) adds room for ink overflow to
+    /// this.
     #[must_use]
-    pub fn decoration_margin(&self) -> u32 {
+    pub fn decoration_margin(&self) -> [u32; 2] {
         let (outline, padding) = decoration_extents(self);
-        outline.max(padding)
+        padding.map(|padding| outline.max(padding))
     }
 }
 
-/// Whole-pixel reach of the outermost stroke past the ink and the background past the box.
-fn decoration_extents(request: &TextRasterRequest) -> (u32, u32) {
+/// Whole-pixel reach of the outermost stroke past the ink, and of the background past the box
+/// horizontally and vertically.
+fn decoration_extents(request: &TextRasterRequest) -> (u32, [u32; 2]) {
     let outline = stroke_radius(&request.strokes).map_or(0, disc_extent);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let padding = request
         .background
-        .map_or(0, |background| background.padding.ceil() as u32);
+        .iter()
+        .chain(request.highlight.as_ref().map(|highlight| &highlight.look))
+        .fold([0; 2], |held, background| {
+            let [top, right, bottom, left] = background.padding;
+            let reach = [right.max(left), top.max(bottom)].map(|side| side.ceil() as u32);
+            [held[0].max(reach[0]), held[1].max(reach[1])]
+        });
     (outline, padding)
 }
 
@@ -3109,6 +3355,60 @@ fn stroke_bands(
         .collect()
 }
 
+/// Boxes in raster pixels with the look they are painted in.
+type BoxLayer<'a> = (&'a TextBackground, Vec<boxes::LineBox>);
+
+/// The background boxes and the highlight boxes of `request`, padded and moved by `margin` into
+/// raster pixels, each with its look.
+#[expect(clippy::cast_precision_loss, reason = "margins are far below 2^24")]
+fn box_layers<'a>(
+    request: &'a TextRasterRequest,
+    margin: [u32; 2],
+    line_boxes: &[(f32, f32, f32, f32)],
+    highlight: &[[f32; 4]],
+) -> (Option<BoxLayer<'a>>, Option<BoxLayer<'a>>) {
+    let [margin_x, margin_y] = margin.map(|margin| margin as f32);
+    let background = request.background.as_ref().map(|background| {
+        let boxes = line_boxes
+            .iter()
+            .map(|&(left, width, top, height)| {
+                boxes::LineBox::padded(
+                    background,
+                    [
+                        margin_x + left,
+                        margin_x + left + width,
+                        margin_y + top,
+                        margin_y + top + height,
+                    ],
+                )
+            })
+            .collect::<Vec<_>>();
+        (background, boxes)
+    });
+    let highlight = request
+        .highlight
+        .as_ref()
+        .filter(|_| !highlight.is_empty())
+        .map(|request| {
+            let boxes = highlight
+                .iter()
+                .map(|&[left, right, top, bottom]| {
+                    boxes::LineBox::padded(
+                        &request.look,
+                        [
+                            margin_x + left,
+                            margin_x + right,
+                            margin_y + top,
+                            margin_y + bottom,
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>();
+            (&request.look, boxes)
+        });
+    (background, highlight)
+}
+
 /// Composes text over strokes over line boxes into premultiplied RGBA8, in integers except for
 /// gradient colors so every target matches. `bands` are innermost first and drawn outermost
 /// first. With a split background the boxes are returned as their own plane.
@@ -3126,26 +3426,13 @@ fn compose(
     margin: [u32; 2],
     line_boxes: &[(f32, f32, f32, f32)],
     run_boxes: &[paint::RunBox],
+    highlight: &[[f32; 4]],
     bands: &[Vec<u8>],
     look: &impl PixelLook,
 ) -> (Vec<u8>, Option<Vec<u8>>) {
-    let background = request.background.map(|background| {
-        let [margin_x, margin_y] = margin.map(|margin| margin as f32);
-        let padding = background.padding;
-        let boxes = line_boxes
-            .iter()
-            .map(|&(left, line_width, top, height)| {
-                (
-                    margin_x + left - padding,
-                    margin_x + left + line_width + padding,
-                    margin_y + top - padding,
-                    margin_y + top + height + padding,
-                )
-            })
-            .collect::<Vec<_>>();
-        (background.color, boxes)
-    });
-    let split = request.split_background && (background.is_some() || !run_boxes.is_empty());
+    let (background, highlight) = box_layers(request, margin, line_boxes, highlight);
+    let split = request.split_background
+        && (background.is_some() || !run_boxes.is_empty() || highlight.is_some());
     let mut split_plane = split.then(|| vec![0_u8; coverage.len() * 4]);
     let [margin_x, margin_y] = margin.map(|margin| margin as f32);
     let mut row_runs = Vec::<&paint::RunBox>::new();
@@ -3164,28 +3451,26 @@ fn compose(
                     .filter(|run| margin_y + run.top < y + 1.0 && margin_y + run.bottom > y),
             );
         }
-        if let Some((color, boxes)) = &background {
+        if let Some((background, boxes)) = &background {
             if index % width as usize == 0 {
-                while first < boxes.len() && boxes[first].3 <= y {
+                while first < boxes.len() && boxes[first].bottom <= y {
                     first += 1;
                 }
                 last = last.max(first);
-                while last < boxes.len() && boxes[last].2 < y + 1.0 {
+                while last < boxes.len() && boxes[last].top < y + 1.0 {
                     last += 1;
                 }
             }
-            let covered = boxes[first..last]
-                .iter()
-                .map(|&(left, right, top, bottom)| {
-                    let across = (right.min(x + 1.0) - left.max(x)).clamp(0.0, 1.0);
-                    let down = (bottom.min(y + 1.0) - top.max(y)).clamp(0.0, 1.0);
-                    across * down
-                })
-                .fold(0.0_f32, f32::max);
-            pixel = premultiplied(*color, (covered * 255.0).round() as u8);
+            pixel = boxes::paint(background, &boxes[first..last], [x, y]);
         }
         if let Some(run) = run_cover(&row_runs, [margin_x, margin_y], [x, y]) {
             pixel = over(run, pixel);
+        }
+        if let Some((look, boxes)) = &highlight {
+            let lit = boxes::paint(look, boxes, [x, y]);
+            if lit[3] > 0 {
+                pixel = over(lit, pixel);
+            }
         }
         if let Some(plane) = &mut split_plane {
             for (channel, value) in pixel.iter().enumerate() {
@@ -3465,3 +3750,7 @@ mod clamp_tests;
 #[cfg(test)]
 #[path = "runs_tests.rs"]
 mod runs_tests;
+
+#[cfg(test)]
+#[path = "box_tests.rs"]
+mod box_tests;

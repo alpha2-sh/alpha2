@@ -203,6 +203,14 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
+    AnimatorGrouping: {
+      oneOf: [
+        { const: "character", type: "string" },
+        { const: "word", type: "string" },
+        { const: "line", type: "string" },
+        { const: "all", type: "string" },
+      ],
+    },
     AudioEffect: {
       oneOf: [
         {
@@ -1202,6 +1210,12 @@ export const PROJECT_SHAPE: unknown = {
         { const: "reject", type: "string" },
       ],
     },
+    HighlightGap: {
+      oneOf: [
+        { const: "hold", type: "string" },
+        { const: "hide", type: "string" },
+      ],
+    },
     Insets: {
       anyOf: [
         { format: "float", type: "number" },
@@ -1764,6 +1778,12 @@ export const PROJECT_SHAPE: unknown = {
         },
         text_align: {
           anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }],
+        },
+        text_animator_grouping: {
+          anyOf: [{ $ref: "#/$defs/AnimatorGrouping" }, { type: "null" }],
+        },
+        text_animator_pivot: {
+          anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }],
         },
         text_animators: {
           items: { $ref: "#/$defs/TextAnimator" },
@@ -2843,6 +2863,7 @@ export const PROJECT_SHAPE: unknown = {
     TextAnimatorProperties: {
       additionalProperties: false,
       properties: {
+        advance_follows_scale: { type: "boolean" },
         fill: { anyOf: [{ $ref: "#/$defs/Keyframed_Rgba" }, { type: "null" }] },
         offset: {
           anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }],
@@ -2850,6 +2871,7 @@ export const PROJECT_SHAPE: unknown = {
         opacity: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
+        reveal: { anyOf: [{ $ref: "#/$defs/TextReveal" }, { type: "null" }] },
         rotation_degrees: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
@@ -2866,17 +2888,107 @@ export const PROJECT_SHAPE: unknown = {
     TextBackground: {
       additionalProperties: false,
       properties: {
+        border: {
+          anyOf: [{ $ref: "#/$defs/TextBoxBorder" }, { type: "null" }],
+        },
         color: { $ref: "#/$defs/Rgba" },
-        padding: { default: 0, format: "float", type: "number" },
+        extent: { $ref: "#/$defs/TextBoxExtent" },
+        padding: { $ref: "#/$defs/TextInsets", default: 0 },
+        radius: { format: "float", type: "number" },
       },
       required: ["color"],
       type: "object",
+    },
+    TextBoxBorder: {
+      additionalProperties: false,
+      properties: {
+        color: { $ref: "#/$defs/Rgba" },
+        dash: { anyOf: [{ $ref: "#/$defs/TextDash" }, { type: "null" }] },
+        width: { format: "float", type: "number" },
+      },
+      required: ["width", "color"],
+      type: "object",
+    },
+    TextBoxExtent: {
+      oneOf: [
+        { const: "line", type: "string" },
+        { const: "revealed", type: "string" },
+        { const: "block", type: "string" },
+      ],
     },
     TextContent: {
       anyOf: [
         { type: "string" },
         { items: { $ref: "#/$defs/TextRun" }, maxItems: 512, type: "array" },
       ],
+    },
+    TextDash: {
+      additionalProperties: false,
+      properties: {
+        offset: { format: "float", type: "number" },
+        pattern: {
+          items: { format: "float", type: "number" },
+          maxItems: 16,
+          minItems: 1,
+          type: "array",
+        },
+      },
+      required: ["pattern"],
+      type: "object",
+    },
+    TextHighlight: {
+      additionalProperties: false,
+      properties: {
+        border: {
+          anyOf: [{ $ref: "#/$defs/TextBoxBorder" }, { type: "null" }],
+        },
+        color: { $ref: "#/$defs/Rgba" },
+        easing: { $ref: "#/$defs/Easing" },
+        gap: { $ref: "#/$defs/HighlightGap" },
+        padding: { $ref: "#/$defs/TextInsets", default: 0 },
+        radius: { format: "float", type: "number" },
+        transition: { $ref: "#/$defs/MediaTime" },
+      },
+      required: ["color"],
+      type: "object",
+    },
+    TextInsets: {
+      anyOf: [
+        { format: "float", type: "number" },
+        {
+          pattern:
+            "^ *-?(\\d+\\.?\\d*|\\.\\d+)( +-?(\\d+\\.?\\d*|\\.\\d+)){0,3} *$",
+          type: "string",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            bottom: { format: "float", type: "number" },
+            left: { format: "float", type: "number" },
+            right: { format: "float", type: "number" },
+            top: { format: "float", type: "number" },
+          },
+          type: "object",
+        },
+      ],
+    },
+    TextReveal: {
+      additionalProperties: false,
+      properties: {
+        angle_degrees: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        feather: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        progress: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+      },
+      type: "object",
     },
     TextRun: {
       additionalProperties: false,
@@ -2995,6 +3107,8 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         align: { $ref: "#/$defs/TextAlign", default: "center" },
         anchor: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 1 } },
+        animator_grouping: { $ref: "#/$defs/AnimatorGrouping" },
+        animator_pivot: { $ref: "#/$defs/Vec2" },
         animators: {
           items: { $ref: "#/$defs/TextAnimator" },
           maxItems: 8,
@@ -3024,6 +3138,9 @@ export const PROJECT_SHAPE: unknown = {
           minimum: 0,
           type: "integer",
         },
+        highlight: {
+          anyOf: [{ $ref: "#/$defs/TextHighlight" }, { type: "null" }],
+        },
         letter_spacing: { default: 0, format: "float", type: "number" },
         line_clamp: {
           anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
@@ -3052,6 +3169,10 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         align: { anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }] },
         anchor: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
+        animator_grouping: {
+          anyOf: [{ $ref: "#/$defs/AnimatorGrouping" }, { type: "null" }],
+        },
+        animator_pivot: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
         animators: {
           items: { $ref: "#/$defs/TextAnimator" },
           maxItems: 8,
@@ -3074,6 +3195,9 @@ export const PROJECT_SHAPE: unknown = {
           maximum: 65535,
           minimum: 0,
           type: ["integer", "null"],
+        },
+        highlight: {
+          anyOf: [{ $ref: "#/$defs/TextHighlight" }, { type: "null" }],
         },
         letter_spacing: { format: "float", type: ["number", "null"] },
         line_clamp: {

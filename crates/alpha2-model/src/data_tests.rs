@@ -967,6 +967,9 @@ mod schema {
         ),
         ("TextAnimatorProperties.opacity", "picture: text time"),
         ("TextAnimatorProperties.tracking", "picture: text time"),
+        ("TextReveal.progress", "picture: text time"),
+        ("TextReveal.angle_degrees", "picture: text time"),
+        ("TextReveal.feather", "picture: text time"),
         (
             "TextRunStyle.font_scale",
             "picture: text time, data refused as out of range",

@@ -164,6 +164,14 @@ pub struct TextStylePatch {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<TextBackground>"))]
     pub background: Option<Option<TextBackground>>,
+    /// The box over the timed run being said; `null` removes the base's.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<crate::TextHighlight>"))]
+    pub highlight: Option<Option<crate::TextHighlight>>,
     /// See [`TextStyle::animators`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(
@@ -171,6 +179,12 @@ pub struct TextStylePatch {
     )]
     #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_ANIMATORS)))]
     pub animators: Option<Vec<TextAnimator>>,
+    /// See [`TextStyle::animator_grouping`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animator_grouping: Option<crate::AnimatorGrouping>,
+    /// See [`TextStyle::animator_pivot`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animator_pivot: Option<crate::Vec2>,
 }
 
 impl TextStylePatch {
@@ -232,11 +246,20 @@ impl TextStylePatch {
         if let Some(shadows) = &self.shadows {
             style.shadows.clone_from(shadows);
         }
-        if let Some(background) = self.background {
-            style.background = background;
+        if let Some(background) = &self.background {
+            style.background.clone_from(background);
+        }
+        if let Some(highlight) = &self.highlight {
+            style.highlight.clone_from(highlight);
         }
         if let Some(animators) = &self.animators {
             style.animators.clone_from(animators);
+        }
+        if let Some(grouping) = self.animator_grouping {
+            style.animator_grouping = grouping;
+        }
+        if let Some(pivot) = self.animator_pivot {
+            style.animator_pivot = pivot;
         }
         style
     }

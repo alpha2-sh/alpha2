@@ -35,6 +35,7 @@ mod rich_text;
 mod shapes;
 mod submissions;
 mod text_animators;
+mod text_boxes;
 mod text_fit;
 mod text_look;
 mod timing;

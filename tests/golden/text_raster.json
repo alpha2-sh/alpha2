@@ -1007,6 +1007,420 @@
           }
         ]
       }
+    },
+    {
+      "contentVersion": 60,
+      "expected": {
+        "ascent": 19.200000762939453,
+        "descent": 4.800000190734863,
+        "firstBaseline": 22.799999237060547,
+        "height": 75,
+        "layoutHeight": 62.39999771118164,
+        "layoutWidth": 245.56640625,
+        "layoutX": 12.0,
+        "layoutY": 6.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "bca378da16175176",
+        "width": 270
+      },
+      "name": "box-rounded-dashed",
+      "request": {
+        "align": "center",
+        "background": {
+          "border": {
+            "color": [
+              255,
+              210,
+              40,
+              255
+            ],
+            "dash": {
+              "offset": 3,
+              "pattern": [
+                7,
+                4,
+                2
+              ]
+            },
+            "width": 2.5
+          },
+          "color": [
+            30,
+            60,
+            160,
+            200
+          ],
+          "padding": [
+            4,
+            12,
+            6,
+            12
+          ],
+          "radius": 10
+        },
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 24,
+        "lineHeight": 1.3,
+        "text": "Rounded boxes\nwith dashed borders"
+      }
+    },
+    {
+      "contentVersion": 61,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.65625,
+        "firstBaseline": 28.80000114440918,
+        "height": 99,
+        "layoutHeight": 76.80000305175781,
+        "layoutWidth": 300.0,
+        "layoutX": 3.0,
+        "layoutY": 11.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "a55af4b02808e4db",
+        "width": 306
+      },
+      "name": "animated-push-word",
+      "request": {
+        "advanceHeadroom": 1.5,
+        "align": "center",
+        "animatorGrouping": "word",
+        "animatorPivot": [
+          0.5,
+          0.8
+        ],
+        "clusterStates": [
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {
+            "advanceScale": 1.5,
+            "scale": [
+              1.5,
+              1.5
+            ]
+          },
+          {
+            "advanceScale": 1.5,
+            "scale": [
+              1.5,
+              1.5
+            ]
+          },
+          {
+            "advanceScale": 1.5,
+            "scale": [
+              1.5,
+              1.5
+            ]
+          },
+          {
+            "advanceScale": 1.5,
+            "scale": [
+              1.5,
+              1.5
+            ]
+          },
+          {},
+          {},
+          {},
+          {},
+          {}
+        ],
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 32,
+        "lineHeight": 1.2,
+        "maxWidth": 300,
+        "strokes": [
+          {
+            "color": [
+              0,
+              0,
+              0,
+              255
+            ],
+            "width": 2
+          }
+        ],
+        "text": "Every word pops"
+      }
+    },
+    {
+      "contentVersion": 62,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.65625,
+        "firstBaseline": 28.80000114440918,
+        "height": 53,
+        "layoutHeight": 38.400001525878906,
+        "layoutWidth": 300.0,
+        "layoutX": 5.0,
+        "layoutY": 7.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "5b9ceb67126aedf3",
+        "width": 310
+      },
+      "name": "animated-word-group-rotate",
+      "request": {
+        "align": "start",
+        "animatorGrouping": "word",
+        "clusterState": {
+          "rotation": 0.3,
+          "scale": [
+            1.1,
+            1.1
+          ]
+        },
+        "fill": [
+          255,
+          220,
+          120,
+          255
+        ],
+        "fontSize": 32,
+        "lineHeight": 1.2,
+        "maxWidth": 300,
+        "text": "Turn by word"
+      }
+    },
+    {
+      "contentVersion": 63,
+      "expected": {
+        "ascent": 32.0,
+        "descent": 8.3203125,
+        "firstBaseline": 36.0,
+        "height": 56,
+        "layoutHeight": 48.0,
+        "layoutWidth": 300.0,
+        "layoutX": 4.0,
+        "layoutY": 4.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "39cbf3adbfa7d5b6",
+        "width": 308
+      },
+      "name": "animated-reveal-characters",
+      "request": {
+        "align": "start",
+        "clusterStates": [
+          {},
+          {},
+          {
+            "reveals": [
+              {
+                "direction": [
+                  1,
+                  0
+                ],
+                "feather": 3,
+                "progress": 0.9
+              }
+            ]
+          },
+          {
+            "reveals": [
+              {
+                "direction": [
+                  1,
+                  0
+                ],
+                "feather": 3,
+                "progress": 0.55
+              }
+            ]
+          },
+          {
+            "reveals": [
+              {
+                "direction": [
+                  1,
+                  0
+                ],
+                "feather": 3,
+                "progress": 0.2
+              }
+            ]
+          },
+          {
+            "reveals": [
+              {
+                "direction": [
+                  1,
+                  0
+                ],
+                "feather": 3,
+                "progress": 0.0
+              }
+            ]
+          },
+          {
+            "reveals": [
+              {
+                "direction": [
+                  1,
+                  0
+                ],
+                "feather": 3,
+                "progress": 0.0
+              }
+            ]
+          }
+        ],
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 40,
+        "lineHeight": 1.2,
+        "maxWidth": 300,
+        "strokes": [
+          {
+            "color": [
+              20,
+              20,
+              120,
+              255
+            ],
+            "width": 3
+          }
+        ],
+        "text": "Wipe in"
+      }
+    },
+    {
+      "contentVersion": 64,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.400000095367432,
+        "firstBaseline": 28.80000114440918,
+        "height": 77,
+        "layoutHeight": 76.80000305175781,
+        "layoutWidth": 320.0,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "5489a4490ec07074",
+        "width": 320
+      },
+      "name": "animated-reveal-words-angled",
+      "request": {
+        "align": "center",
+        "animatorGrouping": "word",
+        "clusterState": {
+          "reveals": [
+            {
+              "direction": [
+                0.5,
+                -0.866025
+              ],
+              "feather": 6,
+              "progress": 0.55
+            }
+          ]
+        },
+        "fill": [
+          255,
+          200,
+          80,
+          255
+        ],
+        "fontSize": 32,
+        "lineHeight": 1.2,
+        "maxWidth": 320,
+        "text": "Rise from the corner"
+      }
+    },
+    {
+      "contentVersion": 65,
+      "expected": {
+        "ascent": 24.0,
+        "descent": 6.240234375,
+        "firstBaseline": 27.75,
+        "height": 83,
+        "layoutHeight": 75.0,
+        "layoutWidth": 260.0,
+        "layoutX": 10.0,
+        "layoutY": 4.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "31066128c4d683cf",
+        "width": 280
+      },
+      "name": "box-revealed",
+      "request": {
+        "align": "start",
+        "background": {
+          "color": [
+            20,
+            20,
+            20,
+            210
+          ],
+          "extent": "revealed",
+          "padding": [
+            4,
+            10,
+            4,
+            10
+          ],
+          "radius": 8
+        },
+        "clusterStates": [
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          }
+        ],
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 30,
+        "lineHeight": 1.25,
+        "maxWidth": 260,
+        "text": "Typed out\nslowly"
+      }
     }
   ],
   "fonts": [

@@ -178,6 +178,9 @@ MAX_GROUP_INPUTS = 16
 MAX_HDR_PEAK_NITS = 10000
 """Mirrors `alpha2_model::MAX_HDR_PEAK_NITS`."""
 
+MAX_HIGHLIGHT_TRANSITION = 1200000
+"""Mirrors `alpha2_model::MAX_HIGHLIGHT_TRANSITION`."""
+
 MAX_INLINED_NODES = 65536
 """Mirrors `alpha2_model::MAX_INLINED_NODES`."""
 
@@ -259,6 +262,9 @@ MAX_RANGE_INDEX = 4096
 MAX_RANGE_PERCENT = 200
 """Mirrors `alpha2_model::MAX_RANGE_PERCENT`."""
 
+MAX_REVEAL_FEATHER = 1
+"""Mirrors `alpha2_model::MAX_REVEAL_FEATHER`."""
+
 MAX_RUN_CLASSES = 8
 """Mirrors `alpha2_model::MAX_RUN_CLASSES`."""
 
@@ -289,8 +295,17 @@ MAX_SVG_DOCUMENT_BYTES = 33554432
 MAX_TEXT_ANIMATORS = 8
 """Mirrors `alpha2_model::MAX_TEXT_ANIMATORS`."""
 
+MAX_TEXT_BORDER_WIDTH = 0.5
+"""Mirrors `alpha2_model::MAX_TEXT_BORDER_WIDTH`."""
+
 MAX_TEXT_CONTENT_BYTES = 4096
 """Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`."""
+
+MAX_TEXT_DASH_ENTRY = 4
+"""Mirrors `alpha2_model::MAX_TEXT_DASH_ENTRY`."""
+
+MAX_TEXT_DASH_OFFSET = 16
+"""Mirrors `alpha2_model::MAX_TEXT_DASH_OFFSET`."""
 
 MAX_TEXT_FONT_SELECTIONS = 16
 """Mirrors `alpha2_model::MAX_TEXT_FONT_SELECTIONS`."""
@@ -377,6 +392,9 @@ ALIGN_CONTENT_VALUES: tuple[AlignContent, ...] = ("start", "center", "end", "spa
 ALIGN_ITEMS_VALUES: tuple[AlignItems, ...] = ("start", "center", "end", "stretch")
 """Every `AlignItems`, in the model's order."""
 
+ANIMATOR_GROUPING_VALUES: tuple[AnimatorGrouping, ...] = ("character", "word", "line", "all")
+"""Every `AnimatorGrouping`, in the model's order."""
+
 BLEND_SPACE_VALUES: tuple[BlendSpace, ...] = ("linear_light", "srgb_encoded")
 """Every `BlendSpace`, in the model's order."""
 
@@ -434,6 +452,9 @@ GRID_AUTO_FLOW_VALUES: tuple[GridAutoFlow, ...] = ("row", "column", "row_dense",
 HDR_SOURCES_VALUES: tuple[HdrSources, ...] = ("tone_map", "reject")
 """Every `HdrSources`, in the model's order."""
 
+HIGHLIGHT_GAP_VALUES: tuple[HighlightGap, ...] = ("hold", "hide")
+"""Every `HighlightGap`, in the model's order."""
+
 JUSTIFY_CONTENT_VALUES: tuple[JustifyContent, ...] = ("start", "center", "end", "space_between", "space_around", "space_evenly")
 """Every `JustifyContent`, in the model's order."""
 
@@ -484,6 +505,9 @@ SPREAD_VALUES: tuple[Spread, ...] = ("pad", "repeat", "reflect")
 
 TEXT_ALIGN_VALUES: tuple[TextAlign, ...] = ("start", "center", "end")
 """Every `TextAlign`, in the model's order."""
+
+TEXT_BOX_EXTENT_VALUES: tuple[TextBoxExtent, ...] = ("line", "revealed", "block")
+"""Every `TextBoxExtent`, in the model's order."""
 
 TEXT_UNIT_VALUES: tuple[TextUnit, ...] = ("characters", "characters_excluding_spaces", "words", "lines")
 """Every `TextUnit`, in the model's order."""
@@ -608,6 +632,12 @@ Its JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. Wit
 the value travels the cubic Bezier through this keyframe's `out_tangent` and the next's
 `in_tangent`, at the speed its timing curve sets along the arc length. Without them it
 moves in a straight line.
+"""
+
+
+AnimatorGrouping: TypeAlias = Literal["character", "word", "line", "all"]
+"""The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+Grouping.
 """
 
 
@@ -1523,6 +1553,10 @@ HdrSources: TypeAlias = Literal["tone_map", "reject"]
 """What a project does with HDR sources."""
 
 
+HighlightGap: TypeAlias = Literal["hold", "hide"]
+"""What a highlight does after its run ends, before the next starts."""
+
+
 class InsetsVariant3(TypedDict):
     bottom: NotRequired[LayoutSize]
     left: NotRequired[LayoutSize]
@@ -1811,10 +1845,19 @@ class LayoutNode(TypedDict):
     """
     text_align: NotRequired[TextAlign | None]
     """How lines align within the content width. Inherited; the root's is `start`."""
+    text_animator_grouping: NotRequired[AnimatorGrouping | None]
+    """The units whose characters `text_animators` scale and turn about one pivot, as a text
+    style's `animator_grouping`. Not inherited.
+    """
+    text_animator_pivot: NotRequired[Vec2 | None]
+    """Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not
+    inherited.
+    """
     text_animators: NotRequired[list[TextAnimator]]
     """Per-character motion of the box's own text, Range selectors only (layout text has no
-    runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited; never
-    changes layout.
+    runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited. They
+    never change layout, except that one whose advance follows its scale makes the text wrap,
+    and measure as wide, with room for its largest scale.
     """
     translate: NotRequired[Keyframed[LayoutOffset] | None]
     """Offset of the box and everything in it after layout: the object, or one or two lengths as
@@ -2983,12 +3026,22 @@ class TextAnimatorProperties(TypedDict):
     out does nothing.
     """
 
+    advance_follows_scale: NotRequired[bool]
+    """Whether the character's advance follows this animator's horizontal scale, pushing the
+    characters after it along its line, which is re-aligned; lines are not re-broken, and the
+    text wraps with room for the largest scale this can reach. Needs `scale`.
+    """
     fill: NotRequired[Keyframed[Rgba] | None]
     """The fill color a fully selected character takes; a gradient fill is mixed toward it."""
     offset: NotRequired[Animated[Vec2] | None]
     """Moves the character, in font sizes, +y down."""
     opacity: NotRequired[Animated[float] | None]
     """The opacity a fully selected character takes, in `[0, 1]`."""
+    reveal: NotRequired[TextReveal | None]
+    """Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight
+    edge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows
+    `progress` of itself.
+    """
     rotation_degrees: NotRequired[Animated[float] | None]
     """Turns the character about its centre, clockwise degrees."""
     scale: NotRequired[Animated[Vec2] | None]
@@ -3004,15 +3057,43 @@ class TextAnimatorProperties(TypedDict):
 
 
 class TextBackground(TypedDict):
-    """A box behind each line of text."""
+    """A box behind each line of text, as CSS draws an inline box's background with
+    `box-decoration-break: clone`: each line's box has its own padding, radius and border.
+    """
 
+    border: NotRequired[TextBoxBorder | None]
+    """A line inside the box's edge, as a CSS border. `None` draws none."""
     color: Rgba
     """Box color."""
-    padding: NotRequired[float]
-    """Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.
+    extent: NotRequired[TextBoxExtent]
+    """Which part of each line the box spans."""
+    padding: NotRequired[TextInsets]
+    """Space between the text and the box edge, as fractions of the font size, each side in
+    `[0, 2]`.
 
     Default: `0`.
     """
+    radius: NotRequired[float]
+    """Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is
+    capped at half its shorter side, as CSS `border-radius`. Default 0.
+    """
+
+
+class TextBoxBorder(TypedDict):
+    """The border of a text box, drawn inside the box's edge."""
+
+    color: Rgba
+    """Line color."""
+    dash: NotRequired[TextDash | None]
+    """Dashes along the border's centre line; `None` draws it solid."""
+    width: float
+    """Width as a fraction of the font size, in `(0, 0.5]`."""
+
+
+TextBoxExtent: TypeAlias = Literal["line", "revealed", "block"]
+"""Which part of each line a text's background box spans, where tracking and pushing place its
+characters.
+"""
 
 
 TextContent: TypeAlias = "str | list[TextRun]"
@@ -3020,6 +3101,83 @@ TextContent: TypeAlias = "str | list[TextRun]"
 
 Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]`.
 """
+
+
+class TextDash(TypedDict):
+    """Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at
+    the end of the top-left corner and run clockwise.
+    """
+
+    offset: NotRequired[float]
+    """How far into the pattern the border starts, in font sizes, in `[-16, 16]`."""
+    pattern: list[float]
+    """Alternating dash and gap lengths, as fractions of the font size: one to
+    `MAX_DASH_ENTRIES` entries in `[0, 4]`, not all zero. An odd count repeats once
+    more to pair up.
+    """
+
+
+class TextHighlight(TypedDict):
+    """A box over the timed run being said, sliding from run to run, drawn over the background
+    boxes and under the glyphs. The run is the timed run that started last; before the first
+    starts there is none.
+    """
+
+    border: NotRequired[TextBoxBorder | None]
+    """A line inside the box's edge, as a background's `border`."""
+    color: Rgba
+    """Box color."""
+    easing: NotRequired[Easing]
+    """The slide's timing curve."""
+    gap: NotRequired[HighlightGap]
+    """What the box does between a run's end and the next run's start."""
+    padding: NotRequired[TextInsets]
+    """Space between the run and the box edge, as a background's `padding`.
+
+    Default: `0`.
+    """
+    radius: NotRequired[float]
+    """Every corner's radius, as a background's `radius`."""
+    transition: NotRequired[MediaTime]
+    """How long the box takes to slide to the next run once it starts, at most
+    `MAX_HIGHLIGHT_TRANSITION`; 0 jumps. A change during a slide starts where the box is.
+    """
+
+
+class TextInsetsVariant3(TypedDict):
+    bottom: NotRequired[float]
+    left: NotRequired[float]
+    right: NotRequired[float]
+    top: NotRequired[float]
+
+
+TextInsets: TypeAlias = "float | str | TextInsetsVariant3"
+"""A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers ("0.1 0.3": top first, clockwise), or the sides object, missing sides 0."""
+
+
+class TextReveal(TypedDict):
+    """A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its
+    advances by its em boxes, outset by its strokes) in the direction `angle_degrees`.
+    """
+
+    angle_degrees: NotRequired[Animated[float]]
+    """The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,
+    90 top to bottom. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    feather: NotRequired[Animated[float]]
+    """The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel
+    antialiased step. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    progress: NotRequired[Animated[float]]
+    """How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit
+    selected by `w` shows `1 + w (progress - 1)`. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
 
 
 TextRun = TypedDict(
@@ -3198,10 +3356,19 @@ class TextStyle(TypedDict):
 
     Default: `{"x":0.5,"y":1}`.
     """
+    animator_grouping: NotRequired[AnimatorGrouping]
+    """The units whose characters the animators scale and turn about one pivot."""
+    animator_pivot: NotRequired[Vec2]
+    """Where in each group's box (the union of its characters' advances by their em boxes) the
+    pivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`
+    percentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre
+    on one line. Not animated.
+    """
     animators: NotRequired[list[TextAnimator]]
     """Per-character motion and color, applied in order, at most `MAX_TEXT_ANIMATORS`.
     Keyframes are in the holder's time (since a caption cue's start, or a text generator's
-    picture time). They never change line layout.
+    picture time). They never re-break lines while they play; an animator whose advance
+    follows its scale makes the text wrap with room for its largest scale.
     """
     background: NotRequired[TextBackground | None]
     """A box behind each line.
@@ -3244,6 +3411,8 @@ class TextStyle(TypedDict):
 
     Default: `400`.
     """
+    highlight: NotRequired[TextHighlight | None]
+    """A box over the timed run being said. Needs timed runs; without them it draws nothing."""
     letter_spacing: NotRequired[float]
     """Space after each character, as a fraction of the font size, in `[-0.5, 1]`, added as CSS
     `letter-spacing` does: none after a line's last character or within cursive scripts such
@@ -3300,6 +3469,10 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::align`."""
     anchor: NotRequired[Vec2 | None]
     """See `TextStyle::anchor`."""
+    animator_grouping: NotRequired[AnimatorGrouping | None]
+    """See `TextStyle::animator_grouping`."""
+    animator_pivot: NotRequired[Vec2 | None]
+    """See `TextStyle::animator_pivot`."""
     animators: NotRequired[list[TextAnimator] | None]
     """See `TextStyle::animators`."""
     background: NotRequired[TextBackground | None]
@@ -3316,6 +3489,8 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::font_style`."""
     font_weight: NotRequired[int | None]
     """See `TextStyle::font_weight`."""
+    highlight: NotRequired[TextHighlight | None]
+    """The box over the timed run being said; `null` removes the base's."""
     letter_spacing: NotRequired[float | None]
     """See `TextStyle::letter_spacing`."""
     line_clamp: NotRequired[LineClamp | None]

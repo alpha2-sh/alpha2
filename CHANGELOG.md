@@ -35,6 +35,51 @@ All notable changes to this project are documented in this file.
   entitlement sets (library validation on; `disable-library-validation` on the host), and
   `docs/native.md` describes the procedure and what each set means for replacing the FFmpeg
   libraries and for Cisco's OpenH264. Release archives stay ad hoc signed.
+- A text style's `background` takes `padding` per side (a number as before, a CSS shorthand string
+  of one to four numbers such as `"0.1 0.3"`, or `{ top, right, bottom, left }`, each 0 to 2 font
+  sizes), a corner `radius` (0 to 2 font sizes, capped at half the box's shorter side) and a
+  `border` (`width` up to 0.5 font sizes, `color`, and a `dash` of 1 to 16 lengths with an
+  `offset`, as SVG `stroke-dasharray`) drawn inside the box and hidden where another line's box
+  covers it. A number padding draws the same box as in 0.7.x; hosts and engines of 0.7.x refuse
+  documents that use the new fields.
+- Text animators: `advance_follows_scale` makes a character's advance follow its animator's
+  horizontal scale, pushing the rest of its line apart (After Effects' Scale with Tracking,
+  computed exactly), the line re-aligned and never re-broken; a scale below 1 pulls the others
+  in. Text styles, caption style patches and layout nodes (`text_animator_grouping`,
+  `text_animator_pivot`) gain `animator_grouping` (`character`, the default, `word`, `line`,
+  `all`, as After Effects' Anchor Point Grouping) and `animator_pivot` (`{ x, y }` fractions of
+  each group's box, as CSS `transform-origin`; `{ x: 0.5, y: 0.8 }` is the baseline's centre).
+  A text with a pushing animator wraps, fits and clamps at its width over the largest factor its
+  animators can widen an advance by, so its lines fit at their largest moment; text and layout
+  measurements report it as `advanceHeadroom`. `WasmTextRasterizer.rasterize` takes
+  `advanceHeadroom`, `animatorGrouping`, `animatorPivot` and a cluster state's `advanceScale`.
+  Hosts and engines of 0.7.x refuse documents that use these, the `reveal`, the box `extent` and
+  the `highlight` below.
+- Text animators: `reveal` (`progress`, `angle_degrees`, `feather`) wipes each unit in along a
+  straight edge, as a linear wipe: across the character, word, line or whole text that
+  `animator_grouping` makes the unit, in the unit's own frame so the edge scales and turns with
+  it. A unit selected by `w` shows `1 + w (progress - 1)` of itself, 0 hiding it and 1 showing it
+  whole exactly. Fill, strokes, decorations and color glyphs are cut alike, shadows follow from
+  the revealed glyphs, and background boxes are not cut. Several reveals intersect.
+  `WasmTextRasterizer.rasterize` takes a cluster state's `reveals`.
+- A text style's `background` takes `extent`: `line` (the default), `revealed` (from each
+  line's first to its last revealed character that is not white space, so a typewriter's box
+  grows with it; run backgrounds then show only behind revealed characters) or `block` (one box
+  over the whole layout box, `max_width` wide). A character is revealed while it is shown, not
+  scaled to nothing and not hidden by a reveal.
+- Text styles and caption style patches gain `highlight` (`color`, `padding`, `radius`,
+  `border` as a background's, `transition` up to 10 s, `easing`, `gap`: `hold` or `hide`): a
+  box over the timed run being said that slides from run to run, drawn over the background and
+  under the glyphs. Lint `highlight_without_timed_runs` reports one over a text without timed
+  runs. `WasmTextRasterizer.rasterize` takes a `highlight` with `steps` (`{ run, progress }`)
+  and a background `extent`.
+- `WasmTextMeasurer.layoutText`, Python `TextMeasurer.text_layout` and Rust
+  `alpha2_layout::text_layout`: where a text generator's lines, words and grapheme clusters lie
+  (boxes, em boxes, baselines, ink and font sizes, in canvas fractions), at the fitted size and
+  after the clamp, before animators. Cluster ranges count UTF-16 code units in JavaScript, code
+  points in Python and bytes in Rust.
+- `WasmTextRasterizer.rasterize`'s `background` takes `padding` as four sides, `radius` and
+  `border`.
 
 ### Changed
 
@@ -55,6 +100,9 @@ All notable changes to this project are documented in this file.
   every gradient up to 16 stops (was 8), in text, shapes, fills and layouts.
 - **Breaking:** imported WebVTT and SRT `<b>`, `<i>` and `<u>` are drawn bold, italic and
   underlined, as WebVTT applies CSS to them; the runs keep their `b`, `i` and `u` classes.
+- A text's background boxes and run backgrounds follow its characters where tracking (and an
+  animator's push) place them: a tracked line's box grows with the line and re-aligns with it,
+  where it kept the line's untracked extent before.
 - **Breaking:** `WasmTextRasterizer.rasterize` takes `runs` (text with per-run family, weight,
   style, pixel size, letter spacing, fill, strokes, background color and decorations) in place of
   `text`, and a `clamp`; a request with both or neither of `text` and `runs` is refused.

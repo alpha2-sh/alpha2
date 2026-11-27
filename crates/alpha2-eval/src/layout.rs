@@ -267,6 +267,13 @@ pub struct EvaluatedText {
     pub shadows: Vec<TextShadow>,
     /// The node's text animators at the layout's picture time.
     pub animators: Vec<crate::SampledAnimator>,
+    /// The units its animators scale and turn about one pivot.
+    pub animator_grouping: alpha2_model::AnimatorGrouping,
+    /// Where in each group's box the pivot lies.
+    pub animator_pivot: Vec2,
+    /// The most its animators can widen an advance ([`crate::advance_headroom`]); it wraps at
+    /// its content width over this.
+    pub advance_headroom: f32,
     /// The font sizes it is fitted between, fractions of the picture's shorter side.
     pub font_size_fit: Option<alpha2_model::FontSizeFit>,
     /// Where its lines are cut.
@@ -446,6 +453,9 @@ fn evaluate_node<'a>(
             strokes: style.strokes.clone(),
             shadows: style.shadows.clone(),
             animators: crate::sample_text_animators(&node.text_animators, time),
+            animator_grouping: node.text_animator_grouping.unwrap_or_default(),
+            animator_pivot: node.text_animator_pivot.unwrap_or(Vec2::new(0.5, 0.5)),
+            advance_headroom: crate::advance_headroom(&node.text_animators, &[]),
             font_size_fit: node.font_size_fit.map(|fit| alpha2_model::FontSizeFit {
                 min: fit.min.value(),
                 max: fit.max.map(alpha2_model::LayoutSize::value),
@@ -680,6 +690,21 @@ fn hash_layout(hash: &mut StableHash, layout: &NodeLayout) {
     }
 }
 
+/// Feeds a text's grouping, pivot and headroom when any differs from the default, so a layout
+/// without them keeps its key.
+fn hash_text_motion(hash: &mut StableHash, text: &EvaluatedText) {
+    if text.animator_grouping != alpha2_model::AnimatorGrouping::Character
+        || text.animator_pivot != Vec2::new(0.5, 0.5)
+        || text.advance_headroom > 1.0
+    {
+        hash.u32(0x9e0);
+        hash.u32(text.animator_grouping as u32);
+        hash.f32(text.animator_pivot.x);
+        hash.f32(text.animator_pivot.y);
+        hash.f32(text.advance_headroom);
+    }
+}
+
 fn hash_node_in(
     hash: &mut StableHash,
     node: &EvaluatedNode,
@@ -755,6 +780,7 @@ fn hash_node_in(
             // Nothing for a text without animators, so a static layout keeps its key.
             if !text.animators.is_empty() {
                 crate::hash_sampled_animators(hash, &text.animators);
+                hash_text_motion(hash, text);
             }
             if let Some(fit) = text.font_size_fit {
                 hash.u32(0xf17);

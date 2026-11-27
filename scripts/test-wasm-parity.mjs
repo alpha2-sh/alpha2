@@ -352,3 +352,27 @@ textMeasurer.free();
 console.log(
   `verified ${textGolden.cases.length} texts measure the same in wasm and natively`,
 );
+
+const layoutReports = JSON.parse(
+  await readFile(join(root, "tests", "golden", "text_layout.json"), "utf8"),
+);
+const reporter = new wasm.WasmTextMeasurer();
+reporter.addFontFile(
+  "Alpha2Fixture",
+  await readFile(join(root, layoutReports.font)),
+);
+for (const reportCase of layoutReports.cases) {
+  assert.equal(
+    reporter.layoutText(
+      JSON.stringify(reportCase.generator),
+      reportCase.width,
+      reportCase.height,
+    ),
+    reportCase.expected,
+    reportCase.name,
+  );
+}
+reporter.free();
+console.log(
+  `verified ${layoutReports.cases.length} text layouts report the same in wasm and natively`,
+);

@@ -1372,6 +1372,58 @@
       "name": "rich-runs-wrap",
       "time": 0,
       "width": 1920
+    },
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"baselines\":null,\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.980555534362793,\"left\":0.010937499813735485,\"right\":0.989062488079071,\"top\":0.01944444514811039},\"fontSize\":null,\"lineCount\":null,\"overflow\":false,\"truncated\":false},{\"advanceHeadroom\":1.5,\"at\":\"root.children[0]\",\"baselines\":{\"first\":0.06444444507360458,\"last\":0.06444444507360458},\"border\":{\"bottom\":0.08055555820465088,\"left\":0.010937499813735485,\"right\":0.29609376192092896,\"top\":0.01944444514811039},\"content\":{\"bottom\":0.08055555820465088,\"left\":0.010937499813735485,\"right\":0.29609376192092896,\"top\":0.01944444514811039},\"fontSize\":0.05000000074505806,\"lineCount\":1,\"overflow\":false,\"truncated\":false}]}",
+      "generator": {
+        "root": {
+          "align_items": "start",
+          "children": [
+            {
+              "font_size": {
+                "mode": "constant",
+                "value": 0.05
+              },
+              "text": {
+                "mode": "constant",
+                "value": "Pop and push"
+              },
+              "text_animator_grouping": "word",
+              "text_animator_pivot": {
+                "x": 0.5,
+                "y": 0.8
+              },
+              "text_animators": [
+                {
+                  "properties": {
+                    "advance_follows_scale": true,
+                    "scale": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 1.5,
+                        "y": 1.5
+                      }
+                    }
+                  },
+                  "selector": {
+                    "type": "range"
+                  }
+                }
+              ]
+            }
+          ],
+          "flex_direction": "row",
+          "padding": {
+            "mode": "constant",
+            "value": 0.02
+          }
+        },
+        "type": "layout"
+      },
+      "height": 720,
+      "name": "pushing-headroom",
+      "time": 0,
+      "width": 1280
     }
   ],
   "font": "tests/fonts/Alpha2Fixture.ttf"

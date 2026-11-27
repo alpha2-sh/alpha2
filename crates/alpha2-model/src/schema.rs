@@ -190,6 +190,7 @@ pub fn project_limits_json() -> Value {
         ("MAX_ASPECT_RATIO", json!(crate::ASPECT_RATIO_RANGE.end())),
         ("MAX_TEXT_POSITION", json!(crate::MAX_TEXT_POSITION)),
         ("MAX_ANIMATOR_OFFSET", json!(crate::MAX_ANIMATOR_OFFSET)),
+        ("MAX_REVEAL_FEATHER", json!(crate::MAX_REVEAL_FEATHER)),
         ("MIN_POLYSTAR_POINTS", json!(crate::MIN_POLYSTAR_POINTS)),
         ("MAX_POLYSTAR_POINTS", json!(crate::MAX_POLYSTAR_POINTS)),
         (
@@ -283,6 +284,13 @@ pub fn project_limits_json() -> Value {
             json!(crate::ANIMATOR_SCALE_RANGE.end()),
         ),
         ("MAX_TEXT_PADDING", json!(crate::MAX_TEXT_PADDING)),
+        ("MAX_TEXT_BORDER_WIDTH", json!(crate::MAX_TEXT_BORDER_WIDTH)),
+        ("MAX_TEXT_DASH_ENTRY", json!(crate::MAX_TEXT_DASH_ENTRY)),
+        ("MAX_TEXT_DASH_OFFSET", json!(crate::MAX_TEXT_DASH_OFFSET)),
+        (
+            "MAX_HIGHLIGHT_TRANSITION",
+            json!(crate::MAX_HIGHLIGHT_TRANSITION.ticks()),
+        ),
         ("MAX_SEQUENCE_FRAMES", json!(crate::MAX_SEQUENCE_FRAMES)),
         ("MAX_SELECTED_CHANNELS", json!(crate::MAX_SELECTED_CHANNELS)),
         (

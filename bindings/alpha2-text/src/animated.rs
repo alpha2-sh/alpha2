@@ -10,9 +10,9 @@
 //! bilinearly in fixed point. Integer and `libm` arithmetic keep native and wasm output identical.
 
 use super::{
-    Drawing, DrawingKey, Faces, HashMap, HostTexture, HostTexturePixels, Layout, PixelBox,
-    PixelLook, Premultiplication, RasterColorSpace, RequestLook, TextFill, TextRasterError,
-    TextRasterRequest, TextRasterResult, TextRasterizer, TextStroke, TextTexture,
+    BoxExtent, Drawing, DrawingKey, Faces, HashMap, HostTexture, HostTexturePixels, Layout,
+    PixelBox, PixelLook, Premultiplication, RasterColorSpace, RequestLook, TextFill,
+    TextRasterError, TextRasterRequest, TextRasterResult, TextRasterizer, TextStroke, TextTexture,
     decoration_extents, dilate, disc_extent, drawing_key, gradient, normalize_mapped, over, paint,
     point, raster_bytes_per_pixel, raster_pixels, stroke_radius, validate_request,
 };
@@ -51,6 +51,10 @@ pub struct ClusterInfo {
     pub baseline: f32,
     /// Font size in pixels: its span's, else the request's.
     pub font_size: f32,
+    /// The bounds of what it draws, strokes and a rim pixel included, when
+    /// [`TextRasterizer::layout_with_ink`] reports it; `None` for a cluster that draws nothing
+    /// and from [`TextRasterizer::layout`].
+    pub ink: Option<[f32; 4]>,
     /// Whether it is the ellipsis a [`crate::TextClamp`] ends a cut line with. Its byte range
     /// is empty, at the cut, and it is in no word.
     pub ellipsis: bool,
@@ -67,6 +71,11 @@ pub struct LineInfo {
     pub width: f32,
     /// Baseline in pixels from the layout box's top.
     pub baseline: f32,
+    /// Its largest size in pixels, at least the request's.
+    pub size: f32,
+    /// Its line box's top in pixels from the layout box's top; the box is the request's line
+    /// height times `size` tall.
+    pub box_top: f32,
 }
 
 /// A color change `base * keep + add` in premultiplied linear light. Mixing toward a target by
@@ -81,6 +90,84 @@ pub struct ColorMix {
 
 /// Largest scale of a [`ClusterState`] on either axis.
 pub const MAX_CLUSTER_SCALE: f32 = 10.0;
+
+/// Most reveal edges a [`ClusterState`] takes.
+pub const MAX_REVEAL_EDGES: usize = 8;
+
+/// A straight edge that shows a cluster's unit (its group's box, outset by the text's strokes) up
+/// to it, as a linear wipe. In the unit's own frame, before its transform, the edge's centre lies
+/// at `a - w / 2 + progress (b - a + w)` along `direction`, `[a, b]` the box's extent along it and
+/// `w` the feather, at least a pixel; a point at `s` keeps `clamp((e - s) / w + 0.5, 0, 1)` of
+/// itself. Progress 0 hides the unit and 1 shows it whole, exactly.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct RevealEdge {
+    /// The unit vector the edge travels along, +y down.
+    pub direction: [f32; 2],
+    /// How much of the unit shows, in `[0, 1]`.
+    pub progress: f32,
+    /// The edge's softness in pixels, at least 0.
+    pub feather: f32,
+}
+
+impl RevealEdge {
+    fn is_valid(&self) -> bool {
+        let [x, y] = self.direction;
+        x.is_finite()
+            && y.is_finite()
+            && (x != 0.0 || y != 0.0)
+            && (0.0..=1.0).contains(&self.progress)
+            && self.feather.is_finite()
+            && self.feather >= 0.0
+    }
+
+    /// Where its centre lies along its direction across a unit whose box is `unit`; `None` at
+    /// progress 0, which hides the unit.
+    fn centre(&self, unit: [f32; 4]) -> Option<f32> {
+        if self.progress <= 0.0 {
+            return None;
+        }
+        let [u, v] = self.direction;
+        let [left, top, right, bottom] = unit;
+        let corners = [
+            left * u + top * v,
+            right * u + top * v,
+            left * u + bottom * v,
+            right * u + bottom * v,
+        ];
+        let low = corners.iter().copied().fold(f32::INFINITY, f32::min);
+        let high = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let width = self.feather.max(1.0);
+        Some(low - width * 0.5 + self.progress * (high - low + width))
+    }
+
+    /// The share of a point at `[x, y]` of a unit whose box is `[left, top, right, bottom]` that
+    /// shows, both in the unit's own frame.
+    fn keep(&self, unit: [f32; 4], [x, y]: [f32; 2]) -> f32 {
+        if self.progress >= 1.0 {
+            return 1.0;
+        }
+        let Some(edge) = self.centre(unit) else {
+            return 0.0;
+        };
+        let [u, v] = self.direction;
+        ((edge - (x * u + y * v)) / self.feather.max(1.0) + 0.5).clamp(0.0, 1.0)
+    }
+}
+
+/// The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+/// Grouping.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum ClusterGrouping {
+    /// Each cluster about its own pivot.
+    #[default]
+    Character,
+    /// Each word of [`ClusterInfo::word`]; a cluster in no word is its own group.
+    Word,
+    /// Each line.
+    Line,
+    /// The whole text.
+    All,
+}
 
 /// Animation state of one cluster.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -99,6 +186,11 @@ pub struct ClusterState {
     pub stroke: Option<ColorMix>,
     /// Extra space after the cluster in pixels, like letter spacing.
     pub tracking: f32,
+    /// How much its advance widens, in `[0, MAX_CLUSTER_SCALE]`: mapped about its group's pivot,
+    /// the advances of a group push the groups after it along their line, which is re-aligned.
+    pub advance_scale: f32,
+    /// Edges that reveal its unit; their shares multiply. An edge at progress 1 changes nothing.
+    pub reveals: [Option<RevealEdge>; MAX_REVEAL_EDGES],
 }
 
 impl ClusterState {
@@ -111,12 +203,26 @@ impl ClusterState {
         fill: None,
         stroke: None,
         tracking: 0.0,
+        advance_scale: 1.0,
+        reveals: [None; MAX_REVEAL_EDGES],
     };
 
     /// Whether the state changes nothing.
     #[must_use]
     pub fn is_identity(&self) -> bool {
-        *self == Self::IDENTITY
+        Self {
+            reveals: Self::IDENTITY.reveals,
+            ..*self
+        } == Self::IDENTITY
+            && !self.reveals()
+    }
+
+    /// Whether an edge cuts its unit: one at progress below 1.
+    fn reveals(&self) -> bool {
+        self.reveals
+            .iter()
+            .flatten()
+            .any(|edge| edge.progress < 1.0)
     }
 
     fn is_valid(&self) -> bool {
@@ -134,6 +240,8 @@ impl ClusterState {
             && self.rotation.is_finite()
             && (0.0..=1.0).contains(&self.opacity)
             && self.tracking.is_finite()
+            && (0.0..=MAX_CLUSTER_SCALE).contains(&self.advance_scale)
+            && self.reveals.iter().flatten().all(RevealEdge::is_valid)
             && mix(&self.fill)
             && mix(&self.stroke)
     }
@@ -479,6 +587,54 @@ impl TextRasterizer {
         Ok(text_layout(&layout, &shaping, request))
     }
 
+    /// [`Self::layout`] with each cluster's [`ClusterInfo::ink`]: the bounds of its glyphs as
+    /// drawn (outlines, sheared ones included, or color glyphs' placed boxes) grown by its
+    /// strokes' reach and a rim pixel.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::rasterize`].
+    pub fn layout_with_ink(
+        &self,
+        request: &TextRasterRequest,
+    ) -> Result<TextLayout, TextRasterError> {
+        validate_request(request)?;
+        if self.fonts.is_empty() {
+            return Err(TextRasterError::NoFonts);
+        }
+        let (faces, shaping) = self.prepare(request)?;
+        let layout = Self::lay_out(&faces, &shaping, request)?;
+        let mut inks = vec![None; layout.clusters.len()];
+        layout.each_glyph(
+            &faces,
+            &shaping,
+            request,
+            &mut HashMap::new(),
+            |drawing, origin, scale, glyph| {
+                if let Some([x_min, y_min, x_max, y_max]) = drawing.ink_bounds() {
+                    super::include(
+                        &mut inks[glyph.cluster],
+                        [
+                            origin[0] + x_min * scale,
+                            origin[1] - y_max * scale,
+                            origin[0] + x_max * scale,
+                            origin[1] - y_min * scale,
+                        ],
+                    );
+                }
+            },
+        );
+        for (ink, span) in inks.iter_mut().zip(&layout.clusters) {
+            let look = &shaping.looks[usize::from(span.look)];
+            let band = stroke_radius(&look.strokes).map_or(0.0, |radius| radius + 1.0);
+            *ink = ink.map(|bounds| super::grown(bounds, band));
+        }
+        let mut reported = text_layout(&layout, &shaping, request);
+        for (cluster, ink) in reported.clusters.iter_mut().zip(inks) {
+            cluster.ink = ink;
+        }
+        Ok(reported)
+    }
+
     /// [`Self::rasterize`] with one state per [`Self::layout`] cluster, in logical order. Identity
     /// states match [`Self::rasterize`] exactly. Results are cached by content version, so give
     /// each set of states its own version.
@@ -542,34 +698,47 @@ impl TextRasterizer {
         let mut decorations = paint::LinePaint::default();
         let mut drawings = HashMap::<DrawingKey, Drawing>::new();
         let (mut ink_ascent, mut ink_descent) = (layout.ascent, layout.descent);
+        let pushed = Pushed::of(&layout, &shaping, request, states);
+        let outset = shaping
+            .looks
+            .iter()
+            .filter_map(|look| stroke_radius(&look.strokes))
+            .fold(0.0_f32, f32::max);
+        let revealing = request
+            .background
+            .as_ref()
+            .is_some_and(|background| background.extent == BoxExtent::Revealed);
+        let mut drawn_extents = vec![None; states.len()];
+        let mut shown = vec![None; states.len()];
         for (index, line) in layout.lines.iter().enumerate() {
             let baseline = layout.baseline(index);
-            // Tracking goes after each cluster except the line's last, in visual order.
-            let mut shifts = Vec::with_capacity(line.glyphs.len());
-            let mut shift = 0.0_f32;
-            let mut previous: Option<usize> = None;
-            for glyph in &line.glyphs {
-                if let Some(before) = previous.filter(|&before| before != glyph.cluster) {
-                    shift += states[before].tracking;
-                }
-                previous = Some(glyph.cluster);
-                shifts.push(shift);
-            }
-            let width = line.width + shift;
-            let offset = line_start(&layout, line.rtl, width, request);
-            // Pivot is the middle of the advance and of the em box.
+            let (shifts, offset) = (&pushed.shifts[index], pushed.offsets[index]);
             let mut extents = HashMap::<usize, (f32, f32)>::new();
-            for (glyph, shift) in line.glyphs.iter().zip(&shifts) {
-                let left = glyph.x + shift + offset;
+            for (glyph, shift) in line.glyphs.iter().zip(shifts) {
+                let left = glyph.x + shift + offset + pushed.moves[glyph.cluster];
                 let extent = extents.entry(glyph.cluster).or_insert((left, left));
                 *extent = (extent.0.min(left), extent.1.max(left + glyph.advance));
             }
-            for (glyph, shift) in line.glyphs.iter().zip(&shifts) {
-                let (left, right) = extents[&glyph.cluster];
-                let affine = cluster_affine(
-                    &states[glyph.cluster],
-                    [f32::midpoint(left, right), baseline - glyph.size * 0.3],
-                );
+            for (&cluster, &extent) in &extents {
+                drawn_extents[cluster] = Some(extent);
+                let size = shaping.looks[usize::from(layout.clusters[cluster].look)].size;
+                shown[cluster] = if revealing {
+                    revealed_span(
+                        &states[cluster],
+                        [
+                            extent.0,
+                            baseline - 0.8 * size,
+                            extent.1,
+                            baseline + 0.2 * size,
+                        ],
+                        outset_box(pushed.units[cluster], outset),
+                    )
+                } else {
+                    Some(extent)
+                };
+            }
+            for (glyph, shift) in line.glyphs.iter().zip(shifts) {
+                let affine = cluster_affine(&states[glyph.cluster], pushed.pivots[glyph.cluster]);
                 affines[glyph.cluster] = affine;
                 let key = drawing_key(&shaping, glyph);
                 let drawing = drawings
@@ -586,7 +755,7 @@ impl TextRasterizer {
                 slot.0.push(Placed {
                     key,
                     origin: [
-                        glyph.x + shift + glyph.x_offset + offset,
+                        glyph.x + shift + glyph.x_offset + offset + pushed.moves[glyph.cluster],
                         baseline - glyph.y_offset,
                     ],
                     scale,
@@ -597,10 +766,11 @@ impl TextRasterizer {
                 &shaping,
                 &layout,
                 index,
-                |cluster| extents[&cluster],
+                (|cluster| extents[&cluster], |cluster| shown[cluster]),
                 |cluster| affines[cluster],
             );
         }
+        let run_boxes = std::mem::take(&mut decorations.boxes);
         let cluster_strokes = |cluster: usize| -> &[TextStroke] {
             &shaping.looks[usize::from(layout.clusters[cluster].look)].strokes
         };
@@ -668,6 +838,45 @@ impl TextRasterizer {
             .map(|look| look.strokes.len())
             .max()
             .unwrap_or(0);
+        let infos = (revealing || request.highlight.is_some())
+            .then(|| text_layout(&layout, &shaping, request).clusters);
+        let line_box = |index: usize| {
+            (
+                pushed.offsets[index],
+                pushed.widths[index],
+                layout.line_top(index),
+                layout.line_size(index),
+            )
+        };
+        let line_boxes = match request
+            .background
+            .as_ref()
+            .map(|background| background.extent)
+        {
+            Some(BoxExtent::Block) => layout.block_box().into_iter().collect(),
+            Some(BoxExtent::Revealed) => revealed_boxes(
+                &layout,
+                infos.as_deref().unwrap_or_default(),
+                &drawn_extents,
+                &shown,
+                line_box,
+            ),
+            _ => (0..layout.lines.len())
+                .filter(|&index| layout.lines[index].width > 0.0)
+                .map(line_box)
+                .collect(),
+        };
+        let highlight = request
+            .highlight
+            .as_ref()
+            .map_or_else(Vec::new, |highlight| {
+                super::highlight::boxes(
+                    &layout,
+                    infos.as_deref().unwrap_or_default(),
+                    &drawn_extents,
+                    highlight,
+                )
+            });
         let (mut overflow_x, mut overflow_y) = (0_i64, 0_i64);
         for bounds in planned
             .iter()
@@ -686,14 +895,43 @@ impl TextRasterizer {
                 .max(bounds.top.saturating_neg())
                 .max(bounds.bottom.saturating_sub(i64::from(box_height)));
         }
-        let margin = |overflow: i64| -> Result<u32, TextRasterError> {
+        let (mut boxes_x, mut boxes_y) = (0_i64, 0_i64);
+        for [left, top, right, bottom] in line_boxes
+            .iter()
+            .map(|&(left, width, top, height)| [left, top, left + width, top + height])
+            .chain(
+                run_boxes
+                    .iter()
+                    .map(|run| [run.left, run.top, run.right, run.bottom]),
+            )
+            .chain(
+                highlight
+                    .iter()
+                    .map(|&[left, right, top, bottom]| [left, top, right, bottom]),
+            )
+        {
+            boxes_x = boxes_x
+                .max((-left).ceil() as i64)
+                .max((right - layout.width).ceil() as i64);
+            boxes_y = boxes_y
+                .max((-top).ceil() as i64)
+                .max((bottom - layout.height).ceil() as i64);
+        }
+        let margin = |overflow: i64, boxes: i64, padding: u32| -> Result<u32, TextRasterError> {
+            let boxes = u32::try_from(boxes.max(0))
+                .ok()
+                .and_then(|boxes| boxes.checked_add(padding))
+                .ok_or(TextRasterError::TooLarge)?;
             u32::try_from(overflow)
                 .map_err(|_| TextRasterError::TooLarge)?
                 .checked_add(outline)
-                .map(|margin| margin.max(outline.max(padding)))
+                .map(|margin| margin.max(outline.max(padding)).max(boxes))
                 .ok_or(TextRasterError::TooLarge)
         };
-        let (margin_x, margin_y) = (margin(overflow_x)?, margin(overflow_y)?);
+        let (margin_x, margin_y) = (
+            margin(overflow_x, boxes_x, padding[0])?,
+            margin(overflow_y, boxes_y, padding[1])?,
+        );
         let width = margin_x
             .checked_mul(2)
             .and_then(|margins| box_width.checked_add(margins))
@@ -770,22 +1008,38 @@ impl TextRasterizer {
         let mut colors: Option<Vec<u8>> = None;
         let mut bands = vec![vec![0_u8; pixel_count]; band_count];
         let mut band_owner = vec![vec![u32::MAX; pixel_count]; band_count];
-        for (cluster, (drawn, at)) in tiles
+        let keeps = states
+            .iter()
+            .enumerate()
+            .map(|(cluster, state)| {
+                Keep::of(
+                    state,
+                    affines[cluster],
+                    outset_box(pushed.units[cluster], outset),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (index, (drawn, at)) in tiles
             .iter()
             .enumerate()
             .filter_map(|(cluster, tile)| tile.as_ref().map(|tile| (cluster, tile)))
             .chain(decorations.iter().map(|(owner, tile)| (*owner, tile)))
         {
-            let cluster = u32::try_from(cluster).map_err(|_| TextRasterError::TooLarge)?;
+            let keep = &keeps[index];
+            if matches!(keep, Keep::Nothing) {
+                continue;
+            }
+            let cluster = u32::try_from(index).map_err(|_| TextRasterError::TooLarge)?;
             let tile = drawn.tile.moved(*at);
             place_max(
                 (&mut coverage, &mut fill_owner, width),
                 margins,
                 &tile,
-                &drawn.tile.coverage,
+                &keep.applied(&tile, &drawn.tile.coverage, 1),
                 cluster,
             );
             if let Some(held) = &drawn.tile.colors {
+                let held = keep.applied(&tile, held, 4);
                 let plane = colors.get_or_insert_with(|| vec![0; pixel_count * 4]);
                 for row in 0..tile.height {
                     for column in 0..tile.width {
@@ -818,11 +1072,15 @@ impl TextRasterizer {
                 .zip(band_owner.iter_mut())
                 .zip(&drawn.bands)
             {
-                place_max((band, owners, width), margins, &padded, dilated, cluster);
+                place_max(
+                    (band, owners, width),
+                    margins,
+                    &padded,
+                    &keep.applied(&padded, dilated, 1),
+                    cluster,
+                );
             }
         }
-        let line_boxes = layout.line_boxes(request.align);
-        let run_boxes = layout.paint(&faces, &shaping, request.align).boxes;
         let size = [layout.width, layout.height];
         let looks = shaping
             .looks
@@ -880,6 +1138,7 @@ impl TextRasterizer {
             margins,
             &line_boxes,
             &run_boxes,
+            &highlight,
             &bands,
             &look,
         );
@@ -905,6 +1164,454 @@ impl TextRasterizer {
             pixels: HostTexturePixels { texture, rgba8 },
             background,
         })
+    }
+}
+
+/// `unit` grown by `outset` on every side.
+fn outset_box([left, top, right, bottom]: [f32; 4], outset: f32) -> [f32; 4] {
+    [left - outset, top - outset, right + outset, bottom + outset]
+}
+
+/// The horizontal span of the part of `rect` (`[left, top, right, bottom]`, a cluster's advance
+/// by its em box) on the kept side of every reveal edge's centre across `unit`; `None` when the
+/// cluster is hidden, faded out or scaled to nothing.
+fn revealed_span(state: &ClusterState, rect: [f32; 4], unit: [f32; 4]) -> Option<(f32, f32)> {
+    if state.opacity <= 0.0 || state.scale.iter().any(|axis| *axis <= 0.0) {
+        return None;
+    }
+    let [left, top, right, bottom] = rect;
+    let mut polygon = vec![[left, top], [right, top], [right, bottom], [left, bottom]];
+    for edge in state.reveals.iter().flatten() {
+        if edge.progress >= 1.0 {
+            continue;
+        }
+        let centre = edge.centre(unit)?;
+        let [u, v] = edge.direction;
+        let side = |[x, y]: [f32; 2]| centre - (x * u + y * v);
+        let mut clipped = Vec::with_capacity(polygon.len() + 1);
+        for (index, &point) in polygon.iter().enumerate() {
+            let next = polygon[(index + 1) % polygon.len()];
+            let (here, there) = (side(point), side(next));
+            if here >= 0.0 {
+                clipped.push(point);
+            }
+            if (here >= 0.0) != (there >= 0.0) {
+                let share = here / (here - there);
+                clipped.push([
+                    point[0] + (next[0] - point[0]) * share,
+                    point[1] + (next[1] - point[1]) * share,
+                ]);
+            }
+        }
+        polygon = clipped;
+        if polygon.is_empty() {
+            return None;
+        }
+    }
+    let low = polygon
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::INFINITY, f32::min);
+    let high = polygon
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::NEG_INFINITY, f32::max);
+    (high > low).then_some((low, high))
+}
+
+/// Per line, the box from its first to its last revealed cluster that is not white space: its
+/// `line_box` when every cluster shows whole, none when nothing shows. `extents` are each
+/// cluster's drawn advance and its revealed span.
+fn revealed_boxes(
+    layout: &Layout,
+    clusters: &[ClusterInfo],
+    drawn: &[Option<(f32, f32)>],
+    shown: &[Option<(f32, f32)>],
+    line_box: impl Fn(usize) -> (f32, f32, f32, f32),
+) -> Vec<(f32, f32, f32, f32)> {
+    let mut boxes = Vec::new();
+    for (index, line) in layout.lines.iter().enumerate() {
+        if line.width <= 0.0 {
+            continue;
+        }
+        let mut whole = true;
+        let (mut first, mut last) = (f32::INFINITY, f32::NEG_INFINITY);
+        for (cluster, info) in clusters.iter().enumerate() {
+            if info.line as usize != index {
+                continue;
+            }
+            whole &= drawn[cluster].map(|extent| extent.0.to_bits())
+                == shown[cluster].map(|extent| extent.0.to_bits())
+                && drawn[cluster].map(|extent| extent.1.to_bits())
+                    == shown[cluster].map(|extent| extent.1.to_bits());
+            if let (Some((left, right)), false) = (shown[cluster], info.is_space) {
+                first = first.min(left);
+                last = last.max(right);
+            }
+        }
+        if whole {
+            boxes.push(line_box(index));
+        } else if first <= last {
+            let (_, _, top, height) = line_box(index);
+            boxes.push((first, last - first, top, height));
+        }
+    }
+    boxes
+}
+
+/// How much of a cluster's tiles its reveal edges keep.
+enum Keep {
+    /// All of them: no edge cuts its unit.
+    Whole,
+    /// None: an edge at progress 0 hides its unit, or its transform is degenerate.
+    Nothing,
+    /// The share each tile pixel's centre keeps, mapped back by `inverse` into the unit's frame,
+    /// where its box is `unit`.
+    Part {
+        inverse: Affine,
+        unit: [f32; 4],
+        edges: [Option<RevealEdge>; MAX_REVEAL_EDGES],
+    },
+}
+
+impl Keep {
+    fn of(state: &ClusterState, affine: Affine, unit: [f32; 4]) -> Self {
+        if !state.reveals() {
+            return Self::Whole;
+        }
+        if state
+            .reveals
+            .iter()
+            .flatten()
+            .any(|edge| edge.progress <= 0.0)
+        {
+            return Self::Nothing;
+        }
+        let Some(inverse) = invert(affine) else {
+            return Self::Nothing;
+        };
+        Self::Part {
+            inverse,
+            unit,
+            edges: state.reveals,
+        }
+    }
+
+    /// `values` (`channels` bytes per pixel of `tile`) scaled by the share each pixel keeps.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "tile coordinates and bytes scaled by a share in [0, 1]"
+    )]
+    fn applied<'a>(
+        &self,
+        tile: &Tile,
+        values: &'a [u8],
+        channels: usize,
+    ) -> std::borrow::Cow<'a, [u8]> {
+        let Self::Part {
+            inverse,
+            unit,
+            edges,
+        } = self
+        else {
+            return std::borrow::Cow::Borrowed(values);
+        };
+        let mut kept = values.to_vec();
+        for row in 0..tile.height {
+            for column in 0..tile.width {
+                let at = (row * tile.width + column) * channels;
+                let pixel = &mut kept[at..at + channels];
+                if pixel.iter().all(|value| *value == 0) {
+                    continue;
+                }
+                let point = apply(
+                    *inverse,
+                    [
+                        (tile.left + i64::try_from(column).unwrap_or(0)) as f32 + 0.5,
+                        (tile.top + i64::try_from(row).unwrap_or(0)) as f32 + 0.5,
+                    ],
+                );
+                let share = edges
+                    .iter()
+                    .flatten()
+                    .fold(1.0_f32, |share, edge| share * edge.keep(*unit, point));
+                for value in pixel {
+                    *value = (f32::from(*value) * share).round() as u8;
+                }
+            }
+        }
+        std::borrow::Cow::Owned(kept)
+    }
+}
+
+/// Where an animated text's clusters go along their lines: tracked, then pushed apart by their
+/// advance scales, group by group in visual order, and the line re-aligned.
+struct Pushed {
+    /// Per line, each glyph's tracking shift, in visual order.
+    shifts: Vec<Vec<f32>>,
+    /// Per line, where it starts once tracked and pushed.
+    offsets: Vec<f32>,
+    /// Per line, its advance once tracked and pushed.
+    widths: Vec<f32>,
+    /// Per cluster, how far its group moved along its line, from its tracked place at the
+    /// line's final start.
+    moves: Vec<f32>,
+    /// Per cluster, the point it scales and turns about.
+    pivots: Vec<[f32; 2]>,
+    /// Per cluster, its group's box once pushed, `[left, top, right, bottom]`: its clusters'
+    /// advances by their em boxes.
+    units: Vec<[f32; 4]>,
+}
+
+impl Pushed {
+    fn of(
+        layout: &Layout,
+        shaping: &super::runs::Shaping,
+        request: &TextRasterRequest,
+        states: &[ClusterState],
+    ) -> Self {
+        let tracked = Tracked::of(layout, request, states);
+        let groups = group_ids(layout, shaping, request);
+        let mut boxes = vec![GroupBox::default(); groups.iter().max().map_or(0, |last| last + 1)];
+        for (cluster, extent) in tracked.extents.iter().enumerate() {
+            if let Some(extent) = extent {
+                let line = layout.clusters[cluster].line;
+                let size = tracked.sizes[cluster];
+                boxes[groups[cluster]].add(*extent, line, layout.baseline(line), size);
+            }
+        }
+        let group_pivots = boxes
+            .iter()
+            .map(|group| group.pivot(request.animator_pivot))
+            .collect::<Vec<_>>();
+        let mut moves = vec![0.0_f32; states.len()];
+        let mut pivots = groups
+            .iter()
+            .map(|&group| group_pivots[group])
+            .collect::<Vec<_>>();
+        let mut offsets = Vec::with_capacity(layout.lines.len());
+        let mut widths = Vec::with_capacity(layout.lines.len());
+        let mut placed = vec![GroupBox::default(); boxes.len()];
+        for (line, &(tracked_offset, shift)) in layout.lines.iter().zip(&tracked.lines) {
+            let (group_moves, pushed) =
+                push_line(line, &tracked.extents, &groups, &group_pivots, states);
+            let offset = if pushed == 0.0 {
+                tracked_offset
+            } else {
+                line_start(layout, line.rtl, line.width + shift + pushed, request)
+            };
+            for glyph in &line.glyphs {
+                let (cluster, group) = (glyph.cluster, groups[glyph.cluster]);
+                let group_move = group_moves.get(&group).copied().unwrap_or(0.0);
+                moves[cluster] = group_move;
+                pivots[cluster][0] =
+                    group_pivots[group][0] + group_move + (offset - tracked_offset);
+            }
+            for cluster in line.glyphs.iter().map(|glyph| glyph.cluster) {
+                if let Some((left, right)) = tracked.extents[cluster] {
+                    let delta = moves[cluster] + (offset - tracked_offset);
+                    let at = layout.clusters[cluster].line;
+                    placed[groups[cluster]].add(
+                        (left + delta, right + delta),
+                        at,
+                        layout.baseline(at),
+                        tracked.sizes[cluster],
+                    );
+                }
+            }
+            offsets.push(offset);
+            widths.push(line.width + shift + pushed);
+        }
+        let units = groups
+            .iter()
+            .map(|&group| {
+                let [left, right, top, bottom] = placed[group].bounds.unwrap_or_default();
+                [left, top, right, bottom]
+            })
+            .collect();
+        Self {
+            shifts: tracked.shifts,
+            offsets,
+            widths,
+            moves,
+            pivots,
+            units,
+        }
+    }
+}
+
+/// An animated text's clusters placed with their tracking, before any push.
+struct Tracked {
+    /// Per line, each glyph's tracking shift, in visual order.
+    shifts: Vec<Vec<f32>>,
+    /// Per line, where it starts once tracked, and its tracking in all.
+    lines: Vec<(f32, f32)>,
+    /// Per cluster, its advance's extent from the layout box's left edge; `None` without glyphs.
+    extents: Vec<Option<(f32, f32)>>,
+    /// Per cluster, its glyphs' size.
+    sizes: Vec<f32>,
+}
+
+impl Tracked {
+    fn of(layout: &Layout, request: &TextRasterRequest, states: &[ClusterState]) -> Self {
+        let mut tracked = Self {
+            shifts: Vec::with_capacity(layout.lines.len()),
+            lines: Vec::with_capacity(layout.lines.len()),
+            extents: vec![None; states.len()],
+            sizes: vec![0.0; states.len()],
+        };
+        for line in &layout.lines {
+            // Tracking goes after each cluster except the line's last, in visual order.
+            let mut shifts = Vec::with_capacity(line.glyphs.len());
+            let mut shift = 0.0_f32;
+            let mut previous: Option<usize> = None;
+            for glyph in &line.glyphs {
+                if let Some(before) = previous.filter(|&before| before != glyph.cluster) {
+                    shift += states[before].tracking;
+                }
+                previous = Some(glyph.cluster);
+                shifts.push(shift);
+            }
+            let offset = line_start(layout, line.rtl, line.width + shift, request);
+            for (glyph, shift) in line.glyphs.iter().zip(&shifts) {
+                let left = glyph.x + shift + offset;
+                let extent = tracked.extents[glyph.cluster].get_or_insert((left, left));
+                *extent = (extent.0.min(left), extent.1.max(left + glyph.advance));
+                tracked.sizes[glyph.cluster] = glyph.size;
+            }
+            tracked.shifts.push(shifts);
+            tracked.lines.push((offset, shift));
+        }
+        tracked
+    }
+}
+
+/// How far each group on `line` moves, in visual order, as the groups before it grow by their
+/// clusters' advance scales about their pivots; and how much the line grew in all.
+fn push_line(
+    line: &super::LaidLine,
+    extents: &[Option<(f32, f32)>],
+    groups: &[usize],
+    pivots: &[[f32; 2]],
+    states: &[ClusterState],
+) -> (HashMap<usize, f32>, f32) {
+    let mut order = Vec::<usize>::new();
+    let mut spans = HashMap::<usize, [f32; 4]>::new();
+    let mut seen = std::collections::HashSet::new();
+    for glyph in &line.glyphs {
+        let cluster = glyph.cluster;
+        let Some((left, right)) = extents[cluster].filter(|_| seen.insert(cluster)) else {
+            continue;
+        };
+        let group = groups[cluster];
+        let scale = states[cluster].advance_scale;
+        let mapped = if scale - 1.0 == 0.0 {
+            (left, right)
+        } else {
+            let pivot = pivots[group][0];
+            (
+                pivot + (left - pivot) * scale,
+                pivot + (right - pivot) * scale,
+            )
+        };
+        let span = spans.entry(group).or_insert_with(|| {
+            order.push(group);
+            [left, right, mapped.0, mapped.1]
+        });
+        *span = [
+            span[0].min(left),
+            span[1].max(right),
+            span[2].min(mapped.0),
+            span[3].max(mapped.1),
+        ];
+    }
+    let mut pushed = 0.0_f32;
+    let mut moves = HashMap::<usize, f32>::new();
+    for group in order {
+        let [left, right, mapped_left, mapped_right] = spans[&group];
+        moves.insert(group, pushed + (left - mapped_left));
+        pushed += (left - mapped_left) + (mapped_right - right);
+    }
+    (moves, pushed)
+}
+
+/// Each cluster's group under the request's grouping, numbered from 0.
+fn group_ids(
+    layout: &Layout,
+    shaping: &super::runs::Shaping,
+    request: &TextRasterRequest,
+) -> Vec<usize> {
+    let count = layout.clusters.len();
+    match request.animator_grouping {
+        ClusterGrouping::Character => (0..count).collect(),
+        ClusterGrouping::Line => layout.clusters.iter().map(|cluster| cluster.line).collect(),
+        ClusterGrouping::All => vec![0; count],
+        ClusterGrouping::Word => {
+            let clusters = text_layout(layout, shaping, request).clusters;
+            let words = clusters
+                .iter()
+                .filter_map(|cluster| cluster.word)
+                .max()
+                .map_or(0, |last| last as usize + 1);
+            clusters
+                .iter()
+                .enumerate()
+                .map(|(index, cluster)| cluster.word.map_or(words + index, |word| word as usize))
+                .collect()
+        }
+    }
+}
+
+/// A group's box: the union of its clusters' advances by their em boxes.
+#[derive(Copy, Clone, Debug, Default)]
+struct GroupBox {
+    /// `[left, right, top, bottom]`, once a cluster is added.
+    bounds: Option<[f32; 4]>,
+    /// Its one line's baseline and largest size, while it lies on one line.
+    line: Option<(usize, f32, f32)>,
+    clusters: usize,
+}
+
+impl GroupBox {
+    fn add(&mut self, (left, right): (f32, f32), line: usize, baseline: f32, size: f32) {
+        let (top, bottom) = (baseline - 0.8 * size, baseline + 0.2 * size);
+        self.bounds = Some(self.bounds.map_or([left, right, top, bottom], |held| {
+            [
+                held[0].min(left),
+                held[1].max(right),
+                held[2].min(top),
+                held[3].max(bottom),
+            ]
+        }));
+        self.line = match self.line {
+            None if self.clusters == 0 => Some((line, baseline, size)),
+            Some((held, baseline, largest)) if held == line => {
+                Some((line, baseline, largest.max(size)))
+            }
+            _ => None,
+        };
+        self.clusters += 1;
+    }
+
+    /// The point at fractions `[x, y]` of the box. On one line every em box shares the baseline,
+    /// so the box is the largest one's.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a point between two f32 values"
+    )]
+    fn pivot(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        let Some([left, right, top, bottom]) = self.bounds else {
+            return [0.0; 2];
+        };
+        let across =
+            (f64::from(left) * f64::from(1.0 - x) + f64::from(right) * f64::from(x)) as f32;
+        let down = match self.line {
+            Some((_, baseline, size)) => baseline - size * (0.8 - y),
+            None => top + (bottom - top) * y,
+        };
+        [across, down]
     }
 }
 
@@ -1339,7 +2046,7 @@ fn line_start(layout: &Layout, rtl: bool, width: f32, request: &TextRasterReques
     }
 }
 
-fn text_layout(
+pub(crate) fn text_layout(
     layout: &Layout,
     shaping: &super::runs::Shaping,
     request: &TextRasterRequest,
@@ -1378,6 +2085,7 @@ fn text_layout(
                 advance: 0.0,
                 baseline: 0.0,
                 font_size: shaping.looks[usize::from(span.look)].size,
+                ink: None,
                 ellipsis: span.ellipsis,
             }
         })
@@ -1407,11 +2115,14 @@ fn text_layout(
             info.advance = end - start;
             info.baseline = baseline;
         }
+        let size = layout.line_size(index);
         lines.push(LineInfo {
             clusters: first_cluster..last_cluster,
             left,
             width: line.width,
             baseline,
+            size,
+            box_top: layout.line_top(index) - super::half_leading(size, request.line_height),
         });
         first_cluster = last_cluster;
     }

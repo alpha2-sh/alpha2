@@ -534,6 +534,31 @@
         }
       ]
     },
+    "AnimatorGrouping": {
+      "description": "The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point\nGrouping.",
+      "oneOf": [
+        {
+          "const": "character",
+          "description": "Each grapheme cluster about its own pivot.",
+          "type": "string"
+        },
+        {
+          "const": "word",
+          "description": "Each UAX #29 word holding a letter or digit; a cluster in no word is its own group.",
+          "type": "string"
+        },
+        {
+          "const": "line",
+          "description": "Each line.",
+          "type": "string"
+        },
+        {
+          "const": "all",
+          "description": "The whole text.",
+          "type": "string"
+        }
+      ]
+    },
     "AudioEffect": {
       "description": "A serializable single-input audio effect applied to a clip or track bus.\n\nSidechain ducking takes a second input, so it is authored per track through [`Ducking`].",
       "oneOf": [
@@ -2760,6 +2785,21 @@
         }
       ]
     },
+    "HighlightGap": {
+      "description": "What a highlight does after its run ends, before the next starts.",
+      "oneOf": [
+        {
+          "const": "hold",
+          "description": "Stays on the run until the next starts or its holder ends.",
+          "type": "string"
+        },
+        {
+          "const": "hide",
+          "description": "Is drawn only while its run lasts; a run that starts after the last one ended takes the\nbox without sliding.",
+          "type": "string"
+        }
+      ]
+    },
     "Insets": {
       "anyOf": [
         {
@@ -4216,8 +4256,30 @@
           ],
           "description": "How lines align within the content width. Inherited; the root's is `start`."
         },
+        "text_animator_grouping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnimatorGrouping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The units whose characters `text_animators` scale and turn about one pivot, as a text\nstyle's `animator_grouping`. Not inherited."
+        },
+        "text_animator_pivot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not\ninherited."
+        },
         "text_animators": {
-          "description": "Per-character motion of the box's own text, Range selectors only (layout text has no\nruns). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never\nchanges layout.",
+          "description": "Per-character motion of the box's own text, Range selectors only (layout text has no\nruns). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited. They\nnever change layout, except that one whose advance follows its scale makes the text wrap,\nand measure as wide, with room for its largest scale.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
@@ -6730,6 +6792,10 @@
       "additionalProperties": false,
       "description": "What an animator does to each character, in proportion to its selection. A property left\nout does nothing.",
       "properties": {
+        "advance_follows_scale": {
+          "description": "Whether the character's advance follows this animator's horizontal scale, pushing the\ncharacters after it along its line, which is re-aligned; lines are not re-broken, and the\ntext wraps with room for the largest scale this can reach. Needs `scale`.",
+          "type": "boolean"
+        },
         "fill": {
           "anyOf": [
             {
@@ -6762,6 +6828,17 @@
             }
           ],
           "description": "The opacity a fully selected character takes, in `[0, 1]`."
+        },
+        "reveal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextReveal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight\nedge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows\n`progress` of itself."
         },
         "rotation_degrees": {
           "anyOf": [
@@ -6812,15 +6889,34 @@
     },
     "TextBackground": {
       "additionalProperties": false,
-      "description": "A box behind each line of text.",
+      "description": "A box behind each line of text, as CSS draws an inline box's background with\n`box-decoration-break: clone`: each line's box has its own padding, radius and border.",
       "properties": {
+        "border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextBoxBorder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A line inside the box's edge, as a CSS border. `None` draws none."
+        },
         "color": {
           "$ref": "#/$defs/Rgba",
           "description": "Box color."
         },
+        "extent": {
+          "$ref": "#/$defs/TextBoxExtent",
+          "description": "Which part of each line the box spans."
+        },
         "padding": {
+          "$ref": "#/$defs/TextInsets",
           "default": 0.0,
-          "description": "Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.",
+          "description": "Space between the text and the box edge, as fractions of the font size, each side in\n`[0, 2]`."
+        },
+        "radius": {
+          "description": "Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is\ncapped at half its shorter side, as CSS `border-radius`. Default 0.",
           "format": "float",
           "type": "number"
         }
@@ -6829,6 +6925,57 @@
         "color"
       ],
       "type": "object"
+    },
+    "TextBoxBorder": {
+      "additionalProperties": false,
+      "description": "The border of a text box, drawn inside the box's edge.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Line color."
+        },
+        "dash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextDash"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Dashes along the border's centre line; `None` draws it solid."
+        },
+        "width": {
+          "description": "Width as a fraction of the font size, in `(0, 0.5]`.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "color"
+      ],
+      "type": "object"
+    },
+    "TextBoxExtent": {
+      "description": "Which part of each line a text's background box spans, where tracking and pushing place its\ncharacters.",
+      "oneOf": [
+        {
+          "const": "line",
+          "description": "From the line's first character to its last that is not a hanging space.",
+          "type": "string"
+        },
+        {
+          "const": "revealed",
+          "description": "From the first to the last revealed character that is not white space: shown, not scaled\nto nothing, and not hidden by a reveal. A line with none has no box; a text without\nanimators draws as `line`.",
+          "type": "string"
+        },
+        {
+          "const": "block",
+          "description": "One box over the whole layout box, `max_width` wide and as tall as the lines.",
+          "type": "string"
+        }
+      ]
     },
     "TextContent": {
       "anyOf": [
@@ -6846,6 +6993,144 @@
         }
       ],
       "description": "A text: one string, or runs whose texts joined are the text.\n\nWritten as `\"Hello\"` or `[{ \"text\": \"Hel\" }, { \"text\": \"lo\", \"class\": [\"key\"] }]`."
+    },
+    "TextDash": {
+      "additionalProperties": false,
+      "description": "Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at\nthe end of the top-left corner and run clockwise.",
+      "properties": {
+        "offset": {
+          "description": "How far into the pattern the border starts, in font sizes, in `[-16, 16]`.",
+          "format": "float",
+          "type": "number"
+        },
+        "pattern": {
+          "description": "Alternating dash and gap lengths, as fractions of the font size: one to\n[`crate::MAX_DASH_ENTRIES`] entries in `[0, 4]`, not all zero. An odd count repeats once\nmore to pair up.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "TextHighlight": {
+      "additionalProperties": false,
+      "description": "A box over the timed run being said, sliding from run to run, drawn over the background\nboxes and under the glyphs. The run is the timed run that started last; before the first\nstarts there is none.",
+      "properties": {
+        "border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextBoxBorder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A line inside the box's edge, as a background's `border`."
+        },
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Box color."
+        },
+        "easing": {
+          "$ref": "#/$defs/Easing",
+          "description": "The slide's timing curve."
+        },
+        "gap": {
+          "$ref": "#/$defs/HighlightGap",
+          "description": "What the box does between a run's end and the next run's start."
+        },
+        "padding": {
+          "$ref": "#/$defs/TextInsets",
+          "default": 0.0,
+          "description": "Space between the run and the box edge, as a background's `padding`."
+        },
+        "radius": {
+          "description": "Every corner's radius, as a background's `radius`.",
+          "format": "float",
+          "type": "number"
+        },
+        "transition": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "How long the box takes to slide to the next run once it starts, at most\n[`MAX_HIGHLIGHT_TRANSITION`]; 0 jumps. A change during a slide starts where the box is."
+        }
+      },
+      "required": [
+        "color"
+      ],
+      "type": "object"
+    },
+    "TextInsets": {
+      "anyOf": [
+        {
+          "format": "float",
+          "type": "number"
+        },
+        {
+          "pattern": "^ *-?(\\d+\\.?\\d*|\\.\\d+)( +-?(\\d+\\.?\\d*|\\.\\d+)){0,3} *$",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bottom": {
+              "format": "float",
+              "type": "number"
+            },
+            "left": {
+              "format": "float",
+              "type": "number"
+            },
+            "right": {
+              "format": "float",
+              "type": "number"
+            },
+            "top": {
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers (\"0.1 0.3\": top first, clockwise), or the sides object, missing sides 0."
+    },
+    "TextReveal": {
+      "additionalProperties": false,
+      "description": "A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its\nadvances by its em boxes, outset by its strokes) in the direction `angle_degrees`.",
+      "properties": {
+        "angle_degrees": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,\n90 top to bottom. Default 0."
+        },
+        "feather": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel\nantialiased step. Default 0."
+        },
+        "progress": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit\nselected by `w` shows `1 + w (progress - 1)`. Default 0."
+        }
+      },
+      "type": "object"
     },
     "TextRun": {
       "additionalProperties": false,
@@ -7171,8 +7456,16 @@
           },
           "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre. Each coordinate within [`MAX_TEXT_POSITION`]."
         },
+        "animator_grouping": {
+          "$ref": "#/$defs/AnimatorGrouping",
+          "description": "The units whose characters the animators scale and turn about one pivot."
+        },
+        "animator_pivot": {
+          "$ref": "#/$defs/Vec2",
+          "description": "Where in each group's box (the union of its characters' advances by their em boxes) the\npivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`\npercentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre\non one line. Not animated."
+        },
         "animators": {
-          "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never change line layout.",
+          "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never re-break lines while they play; an animator whose advance\nfollows its scale makes the text wrap with room for its largest scale.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
@@ -7239,6 +7532,17 @@
           "maximum": 65535,
           "minimum": 0,
           "type": "integer"
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextHighlight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A box over the timed run being said. Needs timed runs; without them it draws nothing."
         },
         "letter_spacing": {
           "default": 0.0,
@@ -7338,6 +7642,28 @@
           ],
           "description": "See [`TextStyle::anchor`]."
         },
+        "animator_grouping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnimatorGrouping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::animator_grouping`]."
+        },
+        "animator_pivot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::animator_pivot`]."
+        },
         "animators": {
           "description": "See [`TextStyle::animators`].",
           "items": {
@@ -7417,6 +7743,17 @@
             "integer",
             "null"
           ]
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextHighlight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The box over the timed run being said; `null` removes the base's."
         },
         "letter_spacing": {
           "description": "See [`TextStyle::letter_spacing`].",
