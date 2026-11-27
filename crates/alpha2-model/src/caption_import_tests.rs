@@ -5,6 +5,7 @@ fn run(text: &str, class: &[&str]) -> TextRun {
         text: text.into(),
         class: class.iter().map(|&name| name.into()).collect(),
         time: None,
+        style: None,
     }
 }
 
@@ -534,6 +535,7 @@ fn webvtt_inline_timestamps_become_timed_runs() {
             start: ms(start),
             end: ms(end),
         }),
+        style: None,
     };
     assert_eq!(
         imported.cues[0].text,

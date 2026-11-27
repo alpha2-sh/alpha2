@@ -154,6 +154,9 @@ MAX_FOLLOW_DEPTH = 8
 MAX_FONT_FAMILY_BYTES = 256
 """Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`."""
 
+MAX_FONT_SCALE = 10
+"""Mirrors `alpha2_model::MAX_FONT_SCALE`."""
+
 MAX_FONT_WEIGHT = 1000
 """Mirrors `alpha2_model::MAX_FONT_WEIGHT`."""
 
@@ -289,6 +292,9 @@ MAX_TEXT_ANIMATORS = 8
 MAX_TEXT_CONTENT_BYTES = 4096
 """Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`."""
 
+MAX_TEXT_FONT_SELECTIONS = 16
+"""Mirrors `alpha2_model::MAX_TEXT_FONT_SELECTIONS`."""
+
 MAX_TEXT_GENERATOR_FONT_SIZE = 1
 """Mirrors `alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE`."""
 
@@ -330,6 +336,9 @@ MIN_EQ_FREQUENCY_HZ = 10
 
 MIN_EQ_Q = 0.05
 """Mirrors `alpha2_model::MIN_EQ_Q`."""
+
+MIN_FONT_SCALE = 0.1
+"""Mirrors `alpha2_model::MIN_FONT_SCALE`."""
 
 MIN_FONT_WEIGHT = 1
 """Mirrors `alpha2_model::MIN_FONT_WEIGHT`."""
@@ -415,6 +424,9 @@ FLEX_DIRECTION_VALUES: tuple[FlexDirection, ...] = ("row", "column", "row_revers
 
 FLEX_WRAP_VALUES: tuple[FlexWrap, ...] = ("nowrap", "wrap")
 """Every `FlexWrap`, in the model's order."""
+
+FONT_STYLE_VALUES: tuple[FontStyle, ...] = ("normal", "italic", "oblique")
+"""Every `FontStyle`, in the model's order."""
 
 GRID_AUTO_FLOW_VALUES: tuple[GridAutoFlow, ...] = ("row", "column", "row_dense", "column_dense")
 """Every `GridAutoFlow`, in the model's order."""
@@ -1423,6 +1435,10 @@ class FontSizeFit(TypedDict):
     """Smallest font size, positive. At most the holder's largest font size."""
 
 
+FontStyle: TypeAlias = Literal["normal", "italic", "oblique"]
+"""Which faces of a family text prefers, as CSS `font-style`."""
+
+
 class FrameRate(TypedDict):
     """A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps)."""
 
@@ -1787,10 +1803,11 @@ class LayoutNode(TypedDict):
     """Bands around the glyphs, as a text style's `strokes`. Inherited as a whole list; the root
     has none.
     """
-    text: NotRequired[Keyframed[str] | None]
-    """The box's text, wrapped at its content width in the inherited style; `\\n` starts a line.
-    At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty. Keyframes all `hold`.
-    Not with `children` or `shape`.
+    text: NotRequired[Keyframed[TextContent] | None]
+    """The box's text, a string or runs, wrapped at its content width in the inherited style;
+    `\\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty.
+    Keyframes all `hold`. A run takes a `style` with a constant `font_scale` only: no
+    `class`, `time` or keyframes. Not with `children` or `shape`.
     """
     text_align: NotRequired[TextAlign | None]
     """How lines align within the content width. Inherited; the root's is `start`."""
@@ -2977,11 +2994,48 @@ TextRun = TypedDict(
     "TextRun",
     {
         "class": "NotRequired[list[str]]",
+        "style": "NotRequired[TextRunStyle | None]",
         "text": "str",
         "time": "NotRequired[RunTime | None]",
     },
 )
-TextRun.__doc__ = "A piece of a text that animators' Class and Timing selectors can pick."
+TextRun.__doc__ = "A piece of a text with its own style, that animators' Class and Timing selectors can pick."
+
+
+class TextRunStyle(TypedDict):
+    """A run's changes to its holder's text style, as an inline box's own CSS properties. Each
+    field set replaces the holder's value for the run's characters; a field left out keeps it.
+    A change of family, weight, style, size or letter spacing shapes the run apart and can move
+    line breaks; fill, strokes, background and decorations only paint.
+    """
+
+    background_color: NotRequired[Rgba | None]
+    """A box behind the run on each line, its advances wide and its em box tall, as CSS
+    `background-color` paints an inline box.
+    """
+    fill: NotRequired[Paint | None]
+    """What paints the run's glyphs; gradient positions are in the text's layout box, as the
+    text's fill.
+    """
+    font_family: NotRequired[str | None]
+    """The family, as a text style's `font_family`; `null` draws from the fallback order alone."""
+    font_scale: NotRequired[Animated[float] | None]
+    """The run's size as a multiple of the text's font size, in `[0.1, 10]`, as CSS
+    `font-size: <n>em`. Lines are laid out again when it changes; keyframes are in the
+    holder's time.
+    """
+    font_style: NotRequired[FontStyle | None]
+    """The face style, as a text style's `font_style`."""
+    font_weight: NotRequired[int | None]
+    """The weight in `[1, 1000]`, as a text style's `font_weight`."""
+    letter_spacing: NotRequired[float | None]
+    """Space after each character, as a fraction of the run's size, in `[-0.5, 1]`."""
+    line_through: NotRequired[bool | None]
+    """See `TextStyle::line_through`."""
+    strokes: NotRequired[list[TextStroke] | None]
+    """The run's bands, as a text style's `strokes`, widths in fractions of the run's size."""
+    underline: NotRequired[bool | None]
+    """See `TextStyle::underline`."""
 
 
 class TextSelectorRange(TypedDict):
@@ -3146,6 +3200,11 @@ class TextStyle(TypedDict):
     """The range the font size is fitted in so the text fits its box. `None` draws at the
     font size as set.
     """
+    font_style: NotRequired[FontStyle]
+    """The face style matched before weight, as CSS Fonts 4 matches `font-style`. A face that is
+    neither italic nor oblique is sheared by 14 degrees when one is asked; bitmap glyphs stay
+    upright. Default `normal`.
+    """
     font_weight: NotRequired[int]
     """The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
     `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
@@ -3167,6 +3226,10 @@ class TextStyle(TypedDict):
     sizes above the baseline, 0.2 below) is centred in a taller line.
 
     Default: `1.2`.
+    """
+    line_through: NotRequired[bool]
+    """A line through the glyphs, as CSS `text-decoration-line: line-through`, placed by the
+    font.
     """
     max_height: NotRequired[float | None]
     """Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
@@ -3192,6 +3255,8 @@ class TextStyle(TypedDict):
     """Bands around the glyphs, innermost first, each outside the one before. At most
     `MAX_TEXT_STROKES`, widths summing to at most `MAX_TEXT_STROKE_EXTENT`.
     """
+    underline: NotRequired[bool]
+    """A line under the glyphs, as CSS `text-decoration-line: underline`, placed by the font."""
 
 
 class TextStylePatch(TypedDict):
@@ -3215,6 +3280,8 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::font_size`."""
     font_size_fit: NotRequired[FontSizeFit | None]
     """See `TextStyle::font_size_fit`; `null` removes the base's."""
+    font_style: NotRequired[FontStyle | None]
+    """See `TextStyle::font_style`."""
     font_weight: NotRequired[int | None]
     """See `TextStyle::font_weight`."""
     letter_spacing: NotRequired[float | None]
@@ -3223,6 +3290,8 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::line_clamp`; `null` removes the base's."""
     line_height: NotRequired[float | None]
     """See `TextStyle::line_height`."""
+    line_through: NotRequired[bool | None]
+    """See `TextStyle::line_through`."""
     max_height: NotRequired[float | None]
     """See `TextStyle::max_height`; `null` removes the base's."""
     max_width: NotRequired[float | None]
@@ -3233,6 +3302,8 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::shadows`."""
     strokes: NotRequired[list[TextStroke] | None]
     """See `TextStyle::strokes`."""
+    underline: NotRequired[bool | None]
+    """See `TextStyle::underline`."""
 
 
 TextUnit: TypeAlias = Literal["characters", "characters_excluding_spaces", "words", "lines"]

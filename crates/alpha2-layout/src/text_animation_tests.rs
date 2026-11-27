@@ -164,6 +164,7 @@ fn timed_runs() -> Vec<TextRun> {
             start: MediaTime(start),
             end: MediaTime(end),
         }),
+        style: None,
     };
     vec![
         run("abc ", 0, 1_000, &["first"]),

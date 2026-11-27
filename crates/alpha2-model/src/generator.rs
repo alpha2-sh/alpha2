@@ -296,8 +296,16 @@ impl Generator {
             }
             Self::Layout { root } => return crate::layout::validate_layout(root, canvas),
             Self::Text { text, style } => {
-                text.is_valid(MAX_TEXT_CONTENT_BYTES)
-                    && style.is_valid(MAX_TEXT_GENERATOR_FONT_SIZE)
+                if !(text.is_valid(MAX_TEXT_CONTENT_BYTES)
+                    && style.is_valid(MAX_TEXT_GENERATOR_FONT_SIZE))
+                {
+                    return Err(GeneratorIssue::Invalid);
+                }
+                return match text.invalid_run_style(crate::text_animation::FontSelection::of(style))
+                {
+                    Some(run) => Err(GeneratorIssue::TextRun { run }),
+                    None => Ok(()),
+                };
             }
         };
         valid.then_some(()).ok_or(GeneratorIssue::Invalid)

@@ -130,7 +130,8 @@ pub fn measure_layout_json(
                     issue.at, issue.problem
                 )
             }
-            alpha2_model::GeneratorIssue::Invalid => {
+            alpha2_model::GeneratorIssue::Invalid
+            | alpha2_model::GeneratorIssue::TextRun { .. } => {
                 "the layout generator has a field out of range".into()
             }
         }));

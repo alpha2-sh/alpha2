@@ -1050,6 +1050,26 @@ fn validate_captions(track: &crate::Track) -> Result<(), ModelError> {
     }
 }
 
+pub(crate) fn generator_error(
+    owner: crate::ShapeOwner,
+    issue: crate::GeneratorIssue,
+) -> Option<ModelError> {
+    Some(match issue {
+        crate::GeneratorIssue::Invalid => return None,
+        crate::GeneratorIssue::Shape(issue) => ModelError::InvalidShape {
+            owner,
+            at: issue.at,
+            problem: issue.problem,
+        },
+        crate::GeneratorIssue::Layout(issue) => ModelError::InvalidLayout {
+            owner,
+            at: issue.at,
+            problem: issue.problem,
+        },
+        crate::GeneratorIssue::TextRun { run } => ModelError::InvalidTextRunStyle { owner, run },
+    })
+}
+
 /// Checks one source. A generated source has a valid generator and nothing a host would
 /// supply; any other source has a locator and no generator, and an image has no audio. A
 /// declared color is HDR exactly when its transfer is PQ or HLG. `canvas` is the project's,
@@ -1101,26 +1121,13 @@ fn validate_source_content(source: &MediaSource, canvas: (u32, u32)) -> Result<(
     }
     if source.kind == MediaKind::Generated {
         let owner = || crate::ShapeOwner::Source(source.id.clone());
-        match source
+        if let Some(Err(issue)) = source
             .generator
             .as_ref()
             .map(|generator| generator.validate_on(canvas.0, canvas.1))
+            && let Some(error) = generator_error(owner(), issue)
         {
-            Some(Err(crate::GeneratorIssue::Shape(issue))) => {
-                return Err(ModelError::InvalidShape {
-                    owner: owner(),
-                    at: issue.at,
-                    problem: issue.problem,
-                });
-            }
-            Some(Err(crate::GeneratorIssue::Layout(issue))) => {
-                return Err(ModelError::InvalidLayout {
-                    owner: owner(),
-                    at: issue.at,
-                    problem: issue.problem,
-                });
-            }
-            _ => {}
+            return Err(error);
         }
         let valid = source.generator.as_ref().is_some_and(Generator::is_valid)
             && source.locator.is_empty()

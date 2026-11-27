@@ -605,6 +605,7 @@ impl Runs {
                             start: MediaTime(bounds[segment]),
                             end: MediaTime(bounds[segment + 1]),
                         }),
+                        style: None,
                     }
                 })
                 .collect()

@@ -119,7 +119,7 @@ pub(crate) fn text_request(
     content_version: u64,
 ) -> TextRasterRequest {
     TextRasterRequest {
-        text: text.content.clone(),
+        text: text.content.text().into_owned(),
         font_size,
         max_width,
         line_height: text.line_height,

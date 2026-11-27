@@ -339,6 +339,7 @@ fn run_times_lie_in_their_cue() {
             start: MediaTime(start),
             end: MediaTime(end),
         }),
+        style: None,
     };
     for (runs, valid) in [
         (vec![run(0, 500), run(500, 1_000)], true),

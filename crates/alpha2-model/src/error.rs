@@ -231,6 +231,14 @@ pub enum ModelError {
         /// What is wrong there.
         problem: crate::LayoutProblem,
     },
+    /// A text generator's run has a style out of range once applied, or the runs draw in more
+    /// than [`crate::MAX_TEXT_FONT_SELECTIONS`] font selections from this run on.
+    InvalidTextRunStyle {
+        /// What holds the text generator.
+        owner: ShapeOwner,
+        /// The run's position among the text's runs.
+        run: usize,
+    },
     /// An effect resource locator was empty.
     EmptyEffectResourceLocator {
         /// Resource whose locator was empty.
@@ -474,7 +482,9 @@ pub enum ModelError {
         /// The style it names.
         name: String,
     },
-    /// A caption cue's style (its track's with the cue's patch applied) is out of range.
+    /// A caption cue's style (its track's with the cue's patch applied), or the style of one of
+    /// its runs over it, is out of range, or its runs draw in more than
+    /// [`crate::MAX_TEXT_FONT_SELECTIONS`] font selections.
     InvalidCaptionCueStyle {
         /// The track.
         track: TrackId,
@@ -702,7 +712,9 @@ impl ModelError {
                 DataOwner::Node { composition, .. } => Composition(composition),
                 DataOwner::Source(source) => Source(source),
             },
-            Self::InvalidShape { owner, .. } | Self::InvalidLayout { owner, .. } => match owner {
+            Self::InvalidShape { owner, .. }
+            | Self::InvalidLayout { owner, .. }
+            | Self::InvalidTextRunStyle { owner, .. } => match owner {
                 ShapeOwner::Source(source) => Source(source),
                 ShapeOwner::Clip(clip) => Clip(clip),
                 ShapeOwner::Node { composition, .. } => Composition(composition),
@@ -799,6 +811,12 @@ impl fmt::Display for ModelError {
             }
             Self::InvalidLayout { owner, at, problem } => {
                 write!(formatter, "{owner} has an invalid layout: {at} {problem}")
+            }
+            Self::InvalidTextRunStyle { owner, run } => {
+                write!(
+                    formatter,
+                    "{owner} has text run {run} with a style out of range"
+                )
             }
             Self::ContradictoryColor { source } => write!(
                 formatter,

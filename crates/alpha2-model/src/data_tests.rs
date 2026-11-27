@@ -967,6 +967,10 @@ mod schema {
         ),
         ("TextAnimatorProperties.opacity", "picture: text time"),
         ("TextAnimatorProperties.tracking", "picture: text time"),
+        (
+            "TextRunStyle.font_scale",
+            "picture: text time, data refused as out of range",
+        ),
         ("TextSelector[range].start", "picture: text time"),
         ("TextSelector[range].end", "picture: text time"),
         ("TextSelector[range].offset", "picture: text time"),
@@ -1180,7 +1184,7 @@ mod schema {
             assert!(offers(name), "{name}");
         }
         for name in [
-            "Keyframed_string",
+            "Keyframed_TextContent",
             "Keyframed_Paint",
             "Keyframed_Rgba",
             "Keyframed_Path",

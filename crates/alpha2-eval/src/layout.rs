@@ -245,8 +245,8 @@ pub enum NodeContent {
 /// A text node's sampled text and the style it inherits.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EvaluatedText {
-    /// The text; may be empty.
-    pub content: String,
+    /// The text, a string or runs; may be empty.
+    pub content: alpha2_model::TextContent,
     /// The family it draws in.
     pub font_family: Option<String>,
     /// Font size, a fraction of the picture's shorter side; positive.
@@ -504,6 +504,60 @@ fn hash_color(hash: &mut StableHash, color: Rgba) {
     }
 }
 
+fn hash_run_styles(hash: &mut StableHash, runs: &[alpha2_model::TextRun]) {
+    if !runs.iter().any(|run| run.style.is_some()) {
+        return;
+    }
+    hash.u64(runs.len() as u64);
+    for run in runs {
+        hash.u64(run.text.len() as u64);
+        let Some(style) = &run.style else {
+            hash.u32(0);
+            continue;
+        };
+        hash.u32(1);
+        match &style.font_family {
+            None => hash.u32(0),
+            Some(None) => hash.u32(1),
+            Some(Some(family)) => {
+                hash.u32(2);
+                hash.bytes(family.as_bytes());
+            }
+        }
+        hash.u32(style.font_weight.map_or(0, |weight| u32::from(weight) + 1));
+        hash.u32(
+            style
+                .font_style
+                .map_or(0, |font_style| font_style as u32 + 1),
+        );
+        hash.f32(style.font_scale.as_ref().map_or(1.0, |scale| {
+            crate::sample_scalar(scale, MediaTime::ZERO, &SampleContext::NONE)
+        }));
+        hash.f32(style.letter_spacing.unwrap_or(f32::NAN));
+        hash_paint(hash, style.fill.as_ref());
+        match &style.strokes {
+            None => hash.u32(0),
+            Some(strokes) => {
+                hash.u64(strokes.len() as u64 + 1);
+                for stroke in strokes {
+                    hash_color(hash, stroke.color);
+                    hash.f32(stroke.width);
+                }
+            }
+        }
+        match style.background_color {
+            None => hash.u32(0),
+            Some(color) => {
+                hash.u32(1);
+                hash_color(hash, color);
+            }
+        }
+        for flag in [style.underline, style.line_through] {
+            hash.u32(flag.map_or(0, |flag| u32::from(flag) + 1));
+        }
+    }
+}
+
 fn hash_paint(hash: &mut StableHash, paint: Option<&Paint>) {
     let stops = |hash: &mut StableHash, stops: &[alpha2_model::GradientStop]| {
         hash.u64(stops.len() as u64);
@@ -671,7 +725,8 @@ fn hash_node_in(
         }
         NodeContent::Text(text) => {
             hash.u32(2);
-            hash.bytes(text.content.as_bytes());
+            hash.bytes(text.content.text().as_bytes());
+            hash_run_styles(hash, text.content.runs());
             match &text.font_family {
                 None => hash.u32(0),
                 Some(family) => {
@@ -745,7 +800,10 @@ pub(crate) fn layout_bytes(
         Animated::Constant { value } => value.len(),
         Animated::Keyframes { keyframes } => keyframes
             .iter()
-            .map(|keyframe| size_of::<alpha2_model::Keyframe<String>>() + keyframe.value.len())
+            .map(|keyframe| {
+                size_of::<alpha2_model::Keyframe<alpha2_model::TextContent>>()
+                    + keyframe.value.len()
+            })
             .sum(),
         Animated::Data(_) => 0,
     });

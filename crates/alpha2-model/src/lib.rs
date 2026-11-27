@@ -131,17 +131,18 @@ pub use shapes::{
 };
 pub use source::{MediaKind, MediaSource};
 pub use text::{
-    BlockEllipsis, FONT_SIZE_FIT_STEPS, FONT_WEIGHT_RANGE, FontSizeFit, LETTER_SPACING_RANGE,
-    LINE_HEIGHT_RANGE, LineClamp, MAX_BLOCK_ELLIPSIS_BYTES, MAX_FONT_FAMILY_BYTES,
-    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_POSITION,
-    MAX_TEXT_SHADOW_BLUR, MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT,
-    MAX_TEXT_STROKES, TextAlign, TextBackground, TextShadow, TextStroke, TextStyle,
+    BlockEllipsis, FONT_SCALE_RANGE, FONT_SIZE_FIT_STEPS, FONT_WEIGHT_RANGE, FontSizeFit,
+    FontStyle, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE, LineClamp, MAX_BLOCK_ELLIPSIS_BYTES,
+    MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES, MAX_TEXT_FONT_SELECTIONS,
+    MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_POSITION, MAX_TEXT_SHADOW_BLUR,
+    MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT, MAX_TEXT_STROKES, TextAlign,
+    TextBackground, TextShadow, TextStroke, TextStyle,
 };
 pub use text_animation::{
     ANIMATOR_SCALE_RANGE, MAX_ANIMATOR_OFFSET, MAX_CLASS_NAME_BYTES, MAX_RANGE_INDEX,
     MAX_RUN_CLASSES, MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS, RANGE_PERCENT, RangeShape, RangeUnits,
-    RunState, RunTime, TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextSelector,
-    TextUnit, valid_class_name,
+    RunState, RunTime, TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextRunStyle,
+    TextSelector, TextUnit, valid_class_name,
 };
 pub use time_map::{LOOP_FADE_SECONDS, LoopMode, MAX_LOOP_PASSES, TimeMap, loop_passes};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};

@@ -4052,6 +4052,9 @@ pub(crate) fn issue_text(issue: &alpha2_model::GeneratorIssue) -> String {
         alpha2_model::GeneratorIssue::Layout(issue) => format!("{} {}", issue.at, issue.problem),
         alpha2_model::GeneratorIssue::Shape(issue) => format!("{} {}", issue.at, issue.problem),
         alpha2_model::GeneratorIssue::Invalid => "a field is out of range".to_owned(),
+        alpha2_model::GeneratorIssue::TextRun { run } => {
+            format!("text run {run} has a style out of range")
+        }
     }
 }
 

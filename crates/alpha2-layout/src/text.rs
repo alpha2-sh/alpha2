@@ -240,6 +240,9 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         line_height,
         letter_spacing,
         font_weight,
+        font_style,
+        underline,
+        line_through,
         align,
         max_width,
         max_height,
@@ -307,6 +310,12 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         feed(&clamp.max_lines.unwrap_or(0).to_le_bytes());
         feed(clamp.block_ellipsis.text().unwrap_or_default().as_bytes());
         feed(&[0xff, u8::from(clamp.block_ellipsis.text().is_some())]);
+    }
+    if !font_style.is_normal() {
+        feed(&[0xf3, *font_style as u8]);
+    }
+    if *underline || *line_through {
+        feed(&[0xf4, u8::from(*underline), u8::from(*line_through)]);
     }
     feed(&size.width().to_le_bytes());
     feed(&size.height().to_le_bytes());

@@ -12,7 +12,9 @@ fn issue(issue: GeneratorIssue) -> (String, String) {
     match issue {
         GeneratorIssue::Layout(issue) => (issue.at, issue.problem.to_string()),
         GeneratorIssue::Shape(issue) => (issue.at, format!("shape: {}", issue.problem)),
-        GeneratorIssue::Invalid => (String::new(), "invalid".into()),
+        GeneratorIssue::Invalid | GeneratorIssue::TextRun { .. } => {
+            (String::new(), "invalid".into())
+        }
     }
 }
 

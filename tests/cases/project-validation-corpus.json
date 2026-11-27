@@ -37684,5 +37684,376 @@
         }
       ]
     }
+  },
+  {
+    "name": "text-run-style-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "title",
+          "kind": "generated",
+          "locator": "",
+          "generator": {
+            "type": "text",
+            "text": [
+              {
+                "text": "Big ",
+                "style": {
+                  "font_scale": {
+                    "mode": "constant",
+                    "value": 1.5
+                  },
+                  "font_weight": 700,
+                  "font_style": "italic",
+                  "fill": "#ffcc00",
+                  "strokes": [
+                    {
+                      "color": "#000000",
+                      "width": 0.1
+                    }
+                  ],
+                  "background_color": "#00000080",
+                  "underline": true,
+                  "line_through": false,
+                  "letter_spacing": 0.05,
+                  "font_family": null
+                }
+              },
+              {
+                "text": "word"
+              }
+            ],
+            "style": {
+              "font_size": 0.1
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "title",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-run-style-scale-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source title has text run 1 with a style out of range"
+    ],
+    "error": "source title has text run 1 with a style out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "title",
+          "kind": "generated",
+          "locator": "",
+          "generator": {
+            "type": "text",
+            "text": [
+              {
+                "text": "a"
+              },
+              {
+                "text": "b",
+                "style": {
+                  "font_scale": {
+                    "mode": "constant",
+                    "value": 12
+                  }
+                }
+              }
+            ],
+            "style": {
+              "font_size": 0.1
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "title",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-run-font-selections-too-many",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source title has text run 16 with a style out of range"
+    ],
+    "error": "source title has text run 16 with a style out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "title",
+          "kind": "generated",
+          "locator": "",
+          "generator": {
+            "type": "text",
+            "text": [
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 100
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 150
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 200
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 250
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 300
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 350
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 400
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 450
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 500
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 550
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 600
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 650
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 700
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 750
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 800
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 850
+                }
+              },
+              {
+                "text": "a",
+                "style": {
+                  "font_weight": 900
+                }
+              }
+            ],
+            "style": {
+              "font_size": 0.1
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "title",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-text-run-time-refused",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source card has an invalid layout: root.text has a run with a class, a time or a keyframed font scale"
+    ],
+    "error": "source card has an invalid layout: root.text has a run with a class, a time or a keyframed font scale",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "card",
+          "kind": "generated",
+          "locator": "",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "text": {
+                "mode": "constant",
+                "value": [
+                  {
+                    "text": "hi",
+                    "time": {
+                      "start": 0,
+                      "end": 1000
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
+    }
   }
 ]

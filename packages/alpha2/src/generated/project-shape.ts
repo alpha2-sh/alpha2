@@ -1085,6 +1085,13 @@ export const PROJECT_SHAPE: unknown = {
       required: ["min"],
       type: "object",
     },
+    FontStyle: {
+      oneOf: [
+        { const: "normal", type: "string" },
+        { const: "italic", type: "string" },
+        { const: "oblique", type: "string" },
+      ],
+    },
     FrameRate: {
       additionalProperties: false,
       properties: {
@@ -1333,6 +1340,16 @@ export const PROJECT_SHAPE: unknown = {
       required: ["time", "value", "interpolation"],
       type: "object",
     },
+    Keyframe_TextContent: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/TextContent" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
     Keyframe_Vec2: {
       additionalProperties: false,
       properties: {
@@ -1349,16 +1366,6 @@ export const PROJECT_SHAPE: unknown = {
         interpolation: { $ref: "#/$defs/Interpolation" },
         time: { $ref: "#/$defs/MediaTime" },
         value: { format: "float", type: "number" },
-      },
-      required: ["time", "value", "interpolation"],
-      type: "object",
-    },
-    Keyframe_string: {
-      additionalProperties: false,
-      properties: {
-        interpolation: { $ref: "#/$defs/Interpolation" },
-        time: { $ref: "#/$defs/MediaTime" },
-        value: { type: "string" },
       },
       required: ["time", "value", "interpolation"],
       type: "object",
@@ -1545,13 +1552,13 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
-    Keyframed_string: {
+    Keyframed_TextContent: {
       oneOf: [
         {
           additionalProperties: false,
           properties: {
             mode: { const: "constant", type: "string" },
-            value: { type: "string" },
+            value: { $ref: "#/$defs/TextContent" },
           },
           required: ["mode", "value"],
           type: "object",
@@ -1560,7 +1567,7 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             keyframes: {
-              items: { $ref: "#/$defs/Keyframe_string" },
+              items: { $ref: "#/$defs/Keyframe_TextContent" },
               maxItems: 100000,
               type: "array",
             },
@@ -1753,7 +1760,7 @@ export const PROJECT_SHAPE: unknown = {
           type: ["array", "null"],
         },
         text: {
-          anyOf: [{ $ref: "#/$defs/Keyframed_string" }, { type: "null" }],
+          anyOf: [{ $ref: "#/$defs/Keyframed_TextContent" }, { type: "null" }],
         },
         text_align: {
           anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }],
@@ -2850,10 +2857,42 @@ export const PROJECT_SHAPE: unknown = {
       additionalProperties: false,
       properties: {
         class: { items: { type: "string" }, maxItems: 8, type: "array" },
+        style: { anyOf: [{ $ref: "#/$defs/TextRunStyle" }, { type: "null" }] },
         text: { type: "string" },
         time: { anyOf: [{ $ref: "#/$defs/RunTime" }, { type: "null" }] },
       },
       required: ["text"],
+      type: "object",
+    },
+    TextRunStyle: {
+      additionalProperties: false,
+      properties: {
+        background_color: {
+          anyOf: [{ $ref: "#/$defs/Rgba" }, { type: "null" }],
+        },
+        fill: { anyOf: [{ $ref: "#/$defs/Paint" }, { type: "null" }] },
+        font_family: { type: ["string", "null"] },
+        font_scale: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        font_style: {
+          anyOf: [{ $ref: "#/$defs/FontStyle" }, { type: "null" }],
+        },
+        font_weight: {
+          format: "uint16",
+          maximum: 65535,
+          minimum: 0,
+          type: ["integer", "null"],
+        },
+        letter_spacing: { format: "float", type: ["number", "null"] },
+        line_through: { type: ["boolean", "null"] },
+        strokes: {
+          items: { $ref: "#/$defs/TextStroke" },
+          maxItems: 4,
+          type: ["array", "null"],
+        },
+        underline: { type: ["boolean", "null"] },
+      },
       type: "object",
     },
     TextSelector: {
@@ -2952,6 +2991,7 @@ export const PROJECT_SHAPE: unknown = {
         font_size_fit: {
           anyOf: [{ $ref: "#/$defs/FontSizeFit" }, { type: "null" }],
         },
+        font_style: { $ref: "#/$defs/FontStyle" },
         font_weight: {
           default: 400,
           format: "uint16",
@@ -2964,6 +3004,7 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
         },
         line_height: { default: 1.2, format: "float", type: "number" },
+        line_through: { type: "boolean" },
         max_height: { format: "float", type: ["number", "null"] },
         max_width: { default: 0.9, format: "float", type: "number" },
         position: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 0.92 } },
@@ -2977,6 +3018,7 @@ export const PROJECT_SHAPE: unknown = {
           maxItems: 4,
           type: "array",
         },
+        underline: { type: "boolean" },
       },
       type: "object",
     },
@@ -2999,6 +3041,9 @@ export const PROJECT_SHAPE: unknown = {
         font_size_fit: {
           anyOf: [{ $ref: "#/$defs/FontSizeFit" }, { type: "null" }],
         },
+        font_style: {
+          anyOf: [{ $ref: "#/$defs/FontStyle" }, { type: "null" }],
+        },
         font_weight: {
           format: "uint16",
           maximum: 65535,
@@ -3010,6 +3055,7 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
         },
         line_height: { format: "float", type: ["number", "null"] },
+        line_through: { type: ["boolean", "null"] },
         max_height: { format: "float", type: ["number", "null"] },
         max_width: { format: "float", type: ["number", "null"] },
         position: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
@@ -3023,6 +3069,7 @@ export const PROJECT_SHAPE: unknown = {
           maxItems: 4,
           type: ["array", "null"],
         },
+        underline: { type: ["boolean", "null"] },
       },
       type: "object",
     },
