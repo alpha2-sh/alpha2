@@ -325,8 +325,31 @@ fn verify_hashes_a_remote_original_and_skip_does_not() {
     );
 }
 
+/// A cancel also stops every export of no known request, as the other tests in this process run
+/// theirs, so this one runs in a child process.
 #[test]
 fn a_conform_reading_a_remote_source_is_cancelled() {
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "tests::remote_media::a_conform_reading_a_remote_source_is_cancelled_alone",
+            "--ignored",
+            "--test-threads=1",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "run by a_conform_reading_a_remote_source_is_cancelled in a process of its own"]
+fn a_conform_reading_a_remote_source_is_cancelled_alone() {
     let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let tone = Arc::new(wav(30));
     let etag = Arc::new(Mutex::new("\"v1\"".to_owned()));
