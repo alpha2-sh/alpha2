@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-abi"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "alpha2-plugin-beats"
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-fixture-digest"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alpha2-plugin-abi",
  "alpha2-plugin-sdk",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-fixture-scripted"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alpha2-plugin-abi",
  "alpha2-plugin-sdk",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-fixture-supplied"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alpha2-plugin-abi",
  "alpha2-plugin-sdk",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-pack"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde_json",
  "sha2",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-sdk"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "alpha2-plugin-abi",
  "serde",
