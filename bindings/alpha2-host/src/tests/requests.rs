@@ -102,8 +102,17 @@ fn a_closed_stderr_does_not_end_the_host() {
 
 /// Runs a child whose GPU waits are 1 s. Its exit status is `None` when it hung and was killed.
 fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, String) {
+    run_with_a_hung_release_in(test, input, &[])
+}
+
+fn run_with_a_hung_release_in(
+    test: &str,
+    input: &str,
+    environment: &[(&str, &std::ffi::OsStr)],
+) -> (Option<i32>, String, String) {
     use std::io::Read as _;
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .envs(environment.iter().copied())
         .env("ALPHA2_GPU_TIMEOUT_MS", "1000")
         .args([
             "--exact",
@@ -202,6 +211,48 @@ fn export_on_the_cli_with_a_hung_release() {
     assert!(host.is_some(), "the export failed before its host started");
     let code = conclude(result, host);
     panic!("the release returned (status {code}) although it never finishes");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn auto_on_a_pinned_software_adapter_makes_no_gpu_host_it_would_drop() {
+    let _gpu = gpu_test_lock();
+    let Some(lavapipe) = std::fs::read_dir("/usr/share/vulkan/icd.d")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("lvp_icd"))
+        })
+    else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::SoftwareAdapter,
+            "no lavapipe ICD in /usr/share/vulkan/icd.d"
+        );
+        return;
+    };
+    let (status, _, stderr) = run_with_a_hung_release_in(
+        "tests::requests::export_on_the_cli_with_a_hung_release",
+        "",
+        &[
+            ("VK_ICD_FILENAMES", lavapipe.as_os_str()),
+            ("WGPU_BACKEND", "vulkan".as_ref()),
+            ("ALPHA2_GPU_ADAPTER", "llvmpipe".as_ref()),
+            ("ALPHA2_RENDERER", "auto".as_ref()),
+        ],
+    );
+    assert_eq!(status, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("renderer: CPU") && stderr.contains("software adapter llvmpipe"),
+        "{stderr}"
+    );
+    assert_reported_before_the_release(
+        &stderr,
+        "alpha2-host: the project's media is not ready: video-source: offline",
+    );
 }
 
 #[test]

@@ -581,26 +581,22 @@ pub(crate) fn create_host_on(
     use crate::config::RendererPolicy;
     let create_gpu_host = |policy| create_gpu_host_with_adapter(policy, adapter_policy, renderer);
     match renderer {
-        RendererPolicy::Gpu => create_gpu_host(policy),
+        RendererPolicy::Gpu => match create_gpu_host(policy)? {
+            GpuHostStart::Started(host) => Ok(*host),
+            GpuHostStart::SoftwareAdapter(adapter) => Err(HostError::new(
+                "INTERNAL",
+                format!(
+                    "a gpu host start gave up the software adapter {adapter}, as only auto does"
+                ),
+            )),
+        },
         RendererPolicy::Cpu => create_cpu_host(policy, "requested (--renderer cpu)".to_owned()),
         RendererPolicy::Auto => match create_gpu_host(policy) {
-            Ok(host) => {
-                let software = host
-                    .renderer
-                    .gpu()
-                    .filter(|renderer| renderer.gpu_capabilities().software_rasterizer)
-                    .map(|renderer| renderer.gpu_capabilities().adapter_name.clone());
-                match software {
-                    None => Ok(host),
-                    Some(adapter) => {
-                        drop(host);
-                        create_cpu_host(
-                            policy,
-                            format!("the GPU host started on the software adapter {adapter}"),
-                        )
-                    }
-                }
-            }
+            Ok(GpuHostStart::Started(host)) => Ok(*host),
+            Ok(GpuHostStart::SoftwareAdapter(adapter)) => create_cpu_host(
+                policy,
+                format!("the GPU host started on the software adapter {adapter}"),
+            ),
             // A missing shader compiler is a broken installation, not a machine without a
             // GPU: rendering on the CPU would hide it.
             Err(error)
@@ -682,33 +678,35 @@ fn gpu_init_error(
 
 const SHADER_COMPILER_CAUSE: &str = "shader-compiler";
 
-fn refuse_unpinned_software_adapter(
-    host: &Host,
+enum GpuHostStart {
+    Started(Box<Host>),
+    SoftwareAdapter(String),
+}
+
+/// `wgpu`'s queue drop waits in `vkQueueWaitIdle` without a timeout, so no GPU host is made to drop.
+fn software_adapter_start(
+    gpu: &alpha2_gpu::GpuContext,
+    renderer_policy: crate::config::RendererPolicy,
     adapter_policy: &crate::adapter_choice::AdapterPolicy,
-) -> Result<(), HostError> {
-    let Some(renderer) = host.renderer.gpu() else {
-        return Ok(());
-    };
-    let capabilities = renderer.gpu_capabilities();
-    let backend = [
-        wgpu::Backend::Vulkan,
-        wgpu::Backend::Metal,
-        wgpu::Backend::Dx12,
-        wgpu::Backend::Gl,
-    ]
-    .into_iter()
-    .find(|backend| format!("{backend:?}") == capabilities.backend)
-    .map_or("unknown", wgpu::Backend::to_str);
+    seen: Option<&crate::adapter_choice::AdapterChoiceReport>,
+) -> Result<Option<String>, HostError> {
+    let capabilities = gpu.capabilities();
+    if !capabilities.software_rasterizer {
+        return Ok(None);
+    }
+    if renderer_policy != crate::config::RendererPolicy::Gpu {
+        return Ok(Some(capabilities.adapter_name.clone()));
+    }
     explicit_gpu_adapter(
         adapter_policy,
-        capabilities
-            .software_rasterizer
-            .then(|| (capabilities.adapter_name.clone(), backend)),
-        host.adapter_choice
-            .as_ref()
-            .map(|report| report.records.clone())
+        Some((
+            capabilities.adapter_name.clone(),
+            gpu.adapter().get_info().backend.to_str(),
+        )),
+        seen.map(|report| report.records.clone())
             .unwrap_or_default(),
-    )
+    )?;
+    Ok(None)
 }
 
 pub(crate) fn explicit_gpu_adapter(
@@ -802,15 +800,15 @@ thread_local! {
 
 /// Picks among the DX12 adapters on Windows, the Vulkan adapters that can carry the shared video
 /// device on Linux, and the one Metal device on macOS ([`alpha2_gpu::rank_adapters`]). A software
-/// adapter is taken only when nothing else renders or a pin names it; `gpu` then refuses one
-/// nothing pinned ([`refuse_unpinned_software_adapter`]), and `auto` lets its host go for the CPU
-/// renderer.
+/// adapter is taken only when nothing else renders or a pin names it; once its device is open,
+/// `gpu` refuses one nothing pinned and `auto` goes for the CPU renderer
+/// ([`software_adapter_start`]).
 #[allow(clippy::too_many_lines)]
-pub(crate) fn create_gpu_host_with_adapter(
+fn create_gpu_host_with_adapter(
     policy: VideoDecodePolicy,
     adapter_policy: &crate::adapter_choice::AdapterPolicy,
     renderer_policy: crate::config::RendererPolicy,
-) -> Result<Host, HostError> {
+) -> Result<GpuHostStart, HostError> {
     // Without hardware decode, `hardware-required` would decode every frame in software under the
     // mode's name.
     if policy.requires_hardware()
@@ -917,6 +915,18 @@ pub(crate) fn create_gpu_host_with_adapter(
         all(target_os = "windows", feature = "hwdevice")
     )))]
     let gpu = request_default()?;
+    #[cfg(all(target_os = "linux", feature = "hwdevice"))]
+    let seen = adapter_choice.as_ref();
+    #[cfg(all(target_os = "windows", feature = "hwdevice"))]
+    let seen = dx12.report.as_ref();
+    #[cfg(not(any(
+        all(target_os = "linux", feature = "hwdevice"),
+        all(target_os = "windows", feature = "hwdevice")
+    )))]
+    let seen = None;
+    if let Some(adapter) = software_adapter_start(&gpu, renderer_policy, adapter_policy, seen)? {
+        return Ok(GpuHostStart::SoftwareAdapter(adapter));
+    }
     #[cfg(all(target_os = "macos", feature = "hwdevice"))]
     let mut no_shared_device = None;
     #[cfg(all(target_os = "macos", feature = "hwdevice"))]
@@ -1044,15 +1054,12 @@ pub(crate) fn create_gpu_host_with_adapter(
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     report_dx12_encode(&host, encode_on_gpu);
     report_adapter_choice(&host);
-    if renderer_policy == crate::config::RendererPolicy::Gpu {
-        refuse_unpinned_software_adapter(&host, adapter_policy)?;
-    }
     host.device_mut().gpu_log = gpu_log;
     // Read now, before an upgrade can replace the file this process runs.
     if let Err(reason) = crate::host::host_binary_digest() {
         alpha2_os::diagnostic!("alpha2-host render cache unavailable: {reason}");
     }
-    Ok(host)
+    Ok(GpuHostStart::Started(Box::new(host)))
 }
 
 fn log_runtime_codecs() {
