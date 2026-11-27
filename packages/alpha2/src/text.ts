@@ -143,10 +143,25 @@ export interface WasmTextRequest {
     readonly color: WasmTextColor;
     readonly width: number;
   }[];
-  /** A box behind each line, grown by `padding` pixels (at most 256). */
+  /**
+   * A box behind each line, grown by `padding` pixels (at most 256): one number for every side or
+   * `[top, right, bottom, left]`. `radius` rounds its corners, capped at half its shorter side; a
+   * `border` lies inside it, dashed by `dash` from the end of the top-left corner clockwise, and is
+   * hidden where another line's box covers it.
+   */
   readonly background?: {
     readonly color: WasmTextColor;
-    readonly padding: number;
+    readonly padding: number | readonly [number, number, number, number];
+    readonly radius?: number;
+    readonly border?: {
+      readonly color: WasmTextColor;
+      readonly width: number;
+      /** At most 16 lengths, not all 0; an odd count repeats once more, as SVG. */
+      readonly dash?: {
+        readonly pattern: readonly number[];
+        readonly offset?: number;
+      };
+    };
   };
   /**
    * Returns the boxes as their own plane ({@link BrowserTextTexture.background}) so the page can

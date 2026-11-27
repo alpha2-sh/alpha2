@@ -25,6 +25,7 @@ use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
 mod animated;
+mod boxes;
 mod color;
 mod font_check;
 mod gradient;
@@ -290,14 +291,82 @@ pub struct TextStroke {
     pub width: f32,
 }
 
-/// A box behind each non-empty line (advance by one em, grown by `padding`). Touching boxes
-/// merge.
-#[derive(Copy, Clone, Debug, PartialEq)]
+/// A box behind each non-empty line: its advance by its em box, grown by `padding`, with a
+/// radius and a border. Overlapping boxes show their union with one outline.
+#[derive(Clone, Debug, PartialEq)]
 pub struct TextBackground {
     /// Straight sRGB RGBA.
     pub color: [u8; 4],
-    /// Space between the text and the box edge, in `[0, 256]` pixels.
-    pub padding: f32,
+    /// Space between the text and the box edge in pixels, top first, clockwise, each in
+    /// `[0, 256]`.
+    pub padding: [f32; 4],
+    /// Every corner's radius in pixels, capped at half the box's shorter side.
+    pub radius: f32,
+    /// A border inside the box's edge.
+    pub border: Option<TextBoxBorder>,
+}
+
+/// A text box's border.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBoxBorder {
+    /// Width in pixels, positive.
+    pub width: f32,
+    /// Straight sRGB RGBA.
+    pub color: [u8; 4],
+    /// Dashes along the border's centre line; `None` draws it solid.
+    pub dash: Option<TextBoxDash>,
+}
+
+/// SVG `stroke-dasharray` and `stroke-dashoffset` in pixels, from the end of the top-left
+/// corner clockwise.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBoxDash {
+    /// Alternating dash and gap lengths, 1 to 16 non-negative entries, not all zero; an odd
+    /// count repeats once more.
+    pub pattern: Vec<f32>,
+    /// How far into the pattern the border starts.
+    pub offset: f32,
+}
+
+impl TextBackground {
+    /// A box with the same padding on every side, no radius and no border.
+    #[must_use]
+    pub const fn padded(color: [u8; 4], padding: f32) -> Self {
+        Self {
+            color,
+            padding: [padding; 4],
+            radius: 0.0,
+            border: None,
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        let length = |value: f32| value.is_finite() && value >= 0.0;
+        self.padding
+            .iter()
+            .all(|side| length(*side) && *side <= MAX_BACKGROUND_PADDING)
+            && length(self.radius)
+            && self.radius <= MAX_TEXT_BOX_PIXELS
+            && self.border.as_ref().is_none_or(|border| {
+                border.width.is_finite()
+                    && border.width > 0.0
+                    && border.width <= MAX_TEXT_BOX_PIXELS
+                    && border.dash.as_ref().is_none_or(|dash| {
+                        (1..=16).contains(&dash.pattern.len())
+                            && dash
+                                .pattern
+                                .iter()
+                                .all(|entry| length(*entry) && *entry <= MAX_TEXT_BOX_PIXELS)
+                            && dash.pattern.iter().any(|entry| *entry > 0.0)
+                            && dash.offset.is_finite()
+                    })
+            })
+    }
+
+    /// Whether the boxes are plain rectangles.
+    pub(crate) fn is_plain(&self) -> bool {
+        self.radius == 0.0 && self.border.is_none()
+    }
 }
 
 /// Rasterized pixels and their text-specific layout descriptor.
@@ -321,8 +390,8 @@ pub struct TextMeasure {
     pub box_width: u32,
     /// All lines' em boxes, rounded up.
     pub box_height: u32,
-    /// [`TextRasterRequest::decoration_margin`].
-    pub decoration_margin: u32,
+    /// [`TextRasterRequest::decoration_margin`], horizontally and vertically.
+    pub decoration_margin: [u32; 2],
     /// Horizontal extent of the line advances by the box height, grown by the decoration
     /// margin. Unlike `ink`, it does not depend on glyph shapes.
     pub content: [f32; 4],
@@ -1012,19 +1081,21 @@ impl TextRasterizer {
         for run in &paint.boxes {
             include(&mut ink, [run.left, run.top, run.right, run.bottom]);
         }
-        let padding = request.background.map(|background| background.padding);
         let mut content = None;
         for (index, line) in layout.lines.iter().enumerate() {
             let left = layout.line_offset(line, request.align);
             let top = layout.line_top(index);
             include(&mut content, [left, 0.0, left + line.width, layout.height]);
-            if let (Some(padding), true) = (padding, line.width > 0.0) {
+            if let (Some(background), true) = (&request.background, line.width > 0.0) {
+                let [pad_top, pad_right, pad_bottom, pad_left] = background.padding;
                 include(
                     &mut ink,
-                    grown(
-                        [left, top, left + line.width, top + layout.line_size(index)],
-                        padding,
-                    ),
+                    [
+                        left - pad_left,
+                        top - pad_top,
+                        left + line.width + pad_right,
+                        top + layout.line_size(index) + pad_bottom,
+                    ],
                 );
             }
         }
@@ -1036,7 +1107,7 @@ impl TextRasterizer {
             box_width: layout.box_width,
             box_height: layout.box_height,
             decoration_margin: request.decoration_margin(),
-            content: grown(content, request.decoration_margin() as f32),
+            content: grown_by(content, request.decoration_margin().map(|side| side as f32)),
             ink,
             line_count: layout.line_count,
             truncated: layout.truncated,
@@ -1306,14 +1377,17 @@ impl TextRasterizer {
         );
         // A symmetric margin keeps the box centered and leaves room for decorations and overflow.
         let (outline, padding) = decoration_extents(request);
-        let margin = |overflow: i64| -> Result<u32, TextRasterError> {
+        let margin = |overflow: i64, padding: u32| -> Result<u32, TextRasterError> {
             u32::try_from(overflow)
                 .map_err(|_| TextRasterError::TooLarge)?
                 .checked_add(outline)
                 .map(|margin| margin.max(outline.max(padding)))
                 .ok_or(TextRasterError::TooLarge)
         };
-        let (margin_x, margin_y) = (margin(overflow_x)?, margin(overflow_y)?);
+        let (margin_x, margin_y) = (
+            margin(overflow_x, padding[0])?,
+            margin(overflow_y, padding[1])?,
+        );
         let width = margin_x
             .checked_mul(2)
             .and_then(|margins| box_width.checked_add(margins))
@@ -1868,6 +1942,10 @@ fn include(bounds: &mut Option<[f32; 4]>, [left, top, right, bottom]: [f32; 4]) 
 
 fn grown([left, top, right, bottom]: [f32; 4], by: f32) -> [f32; 4] {
     [left - by, top - by, right + by, bottom + by]
+}
+
+fn grown_by([left, top, right, bottom]: [f32; 4], [x, y]: [f32; 2]) -> [f32; 4] {
+    [left - x, top - y, right + x, bottom + y]
 }
 
 /// Byte range (paragraph-relative during layout, then text-relative) and line of a cluster.
@@ -2884,11 +2962,10 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
         && request.content_version > 0
         && request.fill.is_valid()
         && valid_strokes(&request.strokes)
-        && request.background.is_none_or(|background| {
-            background.padding.is_finite()
-                && background.padding >= 0.0
-                && background.padding <= MAX_BACKGROUND_PADDING
-        })
+        && request
+            .background
+            .as_ref()
+            .is_none_or(TextBackground::is_valid)
         && request.clamp.as_ref().is_none_or(|clamp| {
             clamp.max_lines != Some(0)
                 && clamp.max_height.is_finite()
@@ -2974,22 +3051,25 @@ fn place_color_glyph(
 }
 
 impl TextRasterRequest {
-    /// Whole pixels the strokes or background reach past the layout box. The texture margin
-    /// ([`TextTexture::layout_x`]) adds room for ink overflow to this.
+    /// Whole pixels the strokes or background reach past the layout box, horizontally and
+    /// vertically. The texture margin ([`TextTexture::layout_x`]) adds room for ink overflow to
+    /// this.
     #[must_use]
-    pub fn decoration_margin(&self) -> u32 {
+    pub fn decoration_margin(&self) -> [u32; 2] {
         let (outline, padding) = decoration_extents(self);
-        outline.max(padding)
+        padding.map(|padding| outline.max(padding))
     }
 }
 
-/// Whole-pixel reach of the outermost stroke past the ink and the background past the box.
-fn decoration_extents(request: &TextRasterRequest) -> (u32, u32) {
+/// Whole-pixel reach of the outermost stroke past the ink, and of the background past the box
+/// horizontally and vertically.
+fn decoration_extents(request: &TextRasterRequest) -> (u32, [u32; 2]) {
     let outline = stroke_radius(&request.strokes).map_or(0, disc_extent);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let padding = request
-        .background
-        .map_or(0, |background| background.padding.ceil() as u32);
+    let padding = request.background.as_ref().map_or([0; 2], |background| {
+        let [top, right, bottom, left] = background.padding;
+        [right.max(left), top.max(bottom)].map(|side| side.ceil() as u32)
+    });
     (outline, padding)
 }
 
@@ -3129,21 +3209,23 @@ fn compose(
     bands: &[Vec<u8>],
     look: &impl PixelLook,
 ) -> (Vec<u8>, Option<Vec<u8>>) {
-    let background = request.background.map(|background| {
+    let background = request.background.as_ref().map(|background| {
         let [margin_x, margin_y] = margin.map(|margin| margin as f32);
-        let padding = background.padding;
         let boxes = line_boxes
             .iter()
             .map(|&(left, line_width, top, height)| {
-                (
-                    margin_x + left - padding,
-                    margin_x + left + line_width + padding,
-                    margin_y + top - padding,
-                    margin_y + top + height + padding,
+                boxes::LineBox::padded(
+                    background,
+                    [
+                        margin_x + left,
+                        margin_x + left + line_width,
+                        margin_y + top,
+                        margin_y + top + height,
+                    ],
                 )
             })
             .collect::<Vec<_>>();
-        (background.color, boxes)
+        (background, boxes)
     });
     let split = request.split_background && (background.is_some() || !run_boxes.is_empty());
     let mut split_plane = split.then(|| vec![0_u8; coverage.len() * 4]);
@@ -3164,25 +3246,17 @@ fn compose(
                     .filter(|run| margin_y + run.top < y + 1.0 && margin_y + run.bottom > y),
             );
         }
-        if let Some((color, boxes)) = &background {
+        if let Some((background, boxes)) = &background {
             if index % width as usize == 0 {
-                while first < boxes.len() && boxes[first].3 <= y {
+                while first < boxes.len() && boxes[first].bottom <= y {
                     first += 1;
                 }
                 last = last.max(first);
-                while last < boxes.len() && boxes[last].2 < y + 1.0 {
+                while last < boxes.len() && boxes[last].top < y + 1.0 {
                     last += 1;
                 }
             }
-            let covered = boxes[first..last]
-                .iter()
-                .map(|&(left, right, top, bottom)| {
-                    let across = (right.min(x + 1.0) - left.max(x)).clamp(0.0, 1.0);
-                    let down = (bottom.min(y + 1.0) - top.max(y)).clamp(0.0, 1.0);
-                    across * down
-                })
-                .fold(0.0_f32, f32::max);
-            pixel = premultiplied(*color, (covered * 255.0).round() as u8);
+            pixel = boxes::paint(background, &boxes[first..last], [x, y]);
         }
         if let Some(run) = run_cover(&row_runs, [margin_x, margin_y], [x, y]) {
             pixel = over(run, pixel);
@@ -3465,3 +3539,7 @@ mod clamp_tests;
 #[cfg(test)]
 #[path = "runs_tests.rs"]
 mod runs_tests;
+
+#[cfg(test)]
+#[path = "box_tests.rs"]
+mod box_tests;

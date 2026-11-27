@@ -1007,6 +1007,67 @@
           }
         ]
       }
+    },
+    {
+      "contentVersion": 60,
+      "expected": {
+        "ascent": 19.200000762939453,
+        "descent": 4.800000190734863,
+        "firstBaseline": 22.799999237060547,
+        "height": 75,
+        "layoutHeight": 62.39999771118164,
+        "layoutWidth": 245.56640625,
+        "layoutX": 12.0,
+        "layoutY": 6.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "bca378da16175176",
+        "width": 270
+      },
+      "name": "box-rounded-dashed",
+      "request": {
+        "align": "center",
+        "background": {
+          "border": {
+            "color": [
+              255,
+              210,
+              40,
+              255
+            ],
+            "dash": {
+              "offset": 3,
+              "pattern": [
+                7,
+                4,
+                2
+              ]
+            },
+            "width": 2.5
+          },
+          "color": [
+            30,
+            60,
+            160,
+            200
+          ],
+          "padding": [
+            4,
+            12,
+            6,
+            12
+          ],
+          "radius": 10
+        },
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 24,
+        "lineHeight": 1.3,
+        "text": "Rounded boxes\nwith dashed borders"
+      }
     }
   ],
   "fonts": [

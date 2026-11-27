@@ -98,6 +98,9 @@ import {
   MAX_LETTER_SPACING,
   MAX_LINE_HEIGHT,
   MAX_TEXT_PADDING,
+  MAX_TEXT_BORDER_WIDTH,
+  MAX_TEXT_DASH_ENTRY,
+  MAX_TEXT_DASH_OFFSET,
   MAX_ANIMATOR_SCALE,
   MAX_CLASS_NAME_BYTES,
   MAX_RANGE_INDEX,
@@ -1561,6 +1564,23 @@ function insetsRead(value: unknown): unknown {
   ]);
 }
 
+/** Mirrors `TextInsets`'s writer: one number when every side is the same, else the sides. */
+function textInsetsRead(value: unknown): unknown {
+  const sides = textInsetsSides(value);
+  if (sides === undefined) return value;
+  const [top, right, bottom, left] = sides.map((side) => Math.fround(side));
+  if (top === right && top === bottom && top === left) return sides[0];
+  if (
+    isRecord(value) &&
+    Object.keys(value).length === 4 &&
+    SIDE_NAMES.every((side) => value[side] !== undefined)
+  )
+    return value;
+  return Object.fromEntries(
+    SIDE_NAMES.map((side, index) => [side, sides[index]]),
+  );
+}
+
 function offsetRead(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const parsed = parseOffset(value);
@@ -1598,6 +1618,7 @@ const CANONICAL_DEFS: ReadonlySet<string> = (() => {
     "Rgba",
     "Paint",
     "Insets",
+    "TextInsets",
     "LayoutOffset",
     "VisualProperties",
   ]);
@@ -1655,6 +1676,7 @@ function canonicalWalk(node: ShapeNode, value: unknown): unknown {
   if (schema === SHAPE_DEFS.Rgba) return rgbaRead(value);
   if (schema === SHAPE_DEFS.Paint) return paintRead(value);
   if (schema === SHAPE_DEFS.Insets) return insetsRead(value);
+  if (schema === SHAPE_DEFS.TextInsets) return textInsetsRead(value);
   if (schema === SHAPE_DEFS.LayoutOffset) return offsetRead(value);
   const variants = (schema.oneOf ?? schema.anyOf) as ShapeNode[] | undefined;
   if (variants !== undefined) {
@@ -3273,10 +3295,66 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
     (style.shadows === undefined || validTextShadows(style.shadows)) &&
     (style.animators === undefined ||
       validTextAnimators(style.animators, false)) &&
-    (background == null ||
-      (isRecord(background) &&
-        validRgba(background.color) &&
-        within(background.padding ?? 0, 0, MAX_TEXT_PADDING)))
+    (background == null || validTextBackground(background))
+  );
+}
+
+/** The four sides of a text box's padding, top first, or `undefined` when unreadable. */
+function textInsetsSides(value: unknown): number[] | undefined {
+  if (value === undefined) return [0, 0, 0, 0];
+  if (finiteNumber(value)) return [value, value, value, value];
+  if (typeof value === "string") {
+    const values = value
+      .split(" ")
+      .filter((token) => token.length > 0)
+      .map(Number);
+    if (values.some((side) => !Number.isFinite(side))) return undefined;
+    const [top, right = top, bottom = top, left = right] = values;
+    return values.length >= 1 && values.length <= 4
+      ? [top, right, bottom, left].map((side) => side as number)
+      : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  const sides = SIDE_NAMES.map((side) => value[side] ?? 0);
+  return sides.every(finiteNumber) ? (sides as number[]) : undefined;
+}
+
+/** Mirrors `TextBackground::is_valid`. */
+function validTextBackground(background: unknown): boolean {
+  if (!isRecord(background) || !validRgba(background.color)) return false;
+  const within = (value: unknown, low: number, high: number) =>
+    finiteNumber(value) && value >= low && value <= high;
+  const sides = textInsetsSides(background.padding);
+  const border = background.border;
+  return (
+    sides !== undefined &&
+    sides.every((side) => within(side, 0, MAX_TEXT_PADDING)) &&
+    within(background.radius ?? 0, 0, MAX_TEXT_PADDING) &&
+    (border == null ||
+      (isRecord(border) &&
+        finiteNumber(border.width) &&
+        Math.fround(border.width) > 0 &&
+        Math.fround(border.width) <= Math.fround(MAX_TEXT_BORDER_WIDTH) &&
+        validRgba(border.color) &&
+        (border.dash == null || validTextDash(border.dash))))
+  );
+}
+
+/** Mirrors `TextDash::is_valid`. */
+function validTextDash(dash: unknown): boolean {
+  if (!isRecord(dash) || !Array.isArray(dash.pattern)) return false;
+  const pattern = dash.pattern as readonly unknown[];
+  const offset = dash.offset ?? 0;
+  return (
+    pattern.length >= 1 &&
+    pattern.length <= MAX_DASH_ENTRIES &&
+    pattern.every(
+      (entry) =>
+        finiteNumber(entry) && entry >= 0 && entry <= MAX_TEXT_DASH_ENTRY,
+    ) &&
+    pattern.some((entry) => (entry as number) > 0) &&
+    finiteNumber(offset) &&
+    Math.abs(offset) <= MAX_TEXT_DASH_OFFSET
   );
 }
 

@@ -285,7 +285,9 @@ fn a_patch_replaces_whole_lists() {
     .apply(&crate::TextStyle {
         background: Some(crate::TextBackground {
             color: crate::Rgba::new(0.0, 0.0, 0.0, 0.5),
-            padding: 0.2,
+            padding: crate::TextInsets::all(0.2),
+            radius: 0.0,
+            border: None,
         }),
         ..base.clone()
     });

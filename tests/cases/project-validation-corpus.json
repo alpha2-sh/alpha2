@@ -38278,5 +38278,277 @@
         "tracks": []
       }
     }
+  },
+  {
+    "name": "text-box-shape-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "background": {
+                  "color": "#00000080",
+                  "padding": "0.1 0.3",
+                  "radius": 0.4,
+                  "border": {
+                    "width": 0.05,
+                    "color": "#ffffff",
+                    "dash": {
+                      "pattern": [
+                        0.2,
+                        0.1,
+                        0.05
+                      ],
+                      "offset": 0.1
+                    }
+                  }
+                }
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-box-radius-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs has invalid captions"
+    ],
+    "error": "track subs has invalid captions",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "background": {
+                  "color": "#000000",
+                  "padding": 0.1,
+                  "radius": 2.5
+                }
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-box-dash-empty",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": [
+      "project.timeline.tracks[0].captions.style.background.border.dash.pattern must have at least 1 items"
+    ],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "background": {
+                  "color": "#000000",
+                  "border": {
+                    "width": 0.05,
+                    "color": "#ffffff",
+                    "dash": {
+                      "pattern": []
+                    }
+                  }
+                }
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-box-dash-all-zero",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs has invalid captions"
+    ],
+    "error": "track subs has invalid captions",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "background": {
+                  "color": "#000000",
+                  "border": {
+                    "width": 0.05,
+                    "color": "#ffffff",
+                    "dash": {
+                      "pattern": [
+                        0,
+                        0
+                      ]
+                    }
+                  }
+                }
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-box-padding-px-refused",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": [
+      "project.timeline.tracks[0].captions.style.background.padding matches none of its allowed forms"
+    ],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "background": {
+                  "color": "#000000",
+                  "padding": "4px 8px"
+                }
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
   }
 ]

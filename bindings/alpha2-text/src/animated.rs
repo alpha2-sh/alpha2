@@ -51,6 +51,10 @@ pub struct ClusterInfo {
     pub baseline: f32,
     /// Font size in pixels: its span's, else the request's.
     pub font_size: f32,
+    /// The bounds of what it draws, strokes and a rim pixel included, when
+    /// [`TextRasterizer::layout_with_ink`] reports it; `None` for a cluster that draws nothing
+    /// and from [`TextRasterizer::layout`].
+    pub ink: Option<[f32; 4]>,
     /// Whether it is the ellipsis a [`crate::TextClamp`] ends a cut line with. Its byte range
     /// is empty, at the cut, and it is in no word.
     pub ellipsis: bool,
@@ -67,6 +71,11 @@ pub struct LineInfo {
     pub width: f32,
     /// Baseline in pixels from the layout box's top.
     pub baseline: f32,
+    /// Its largest size in pixels, at least the request's.
+    pub size: f32,
+    /// Its line box's top in pixels from the layout box's top; the box is the request's line
+    /// height times `size` tall.
+    pub box_top: f32,
 }
 
 /// A color change `base * keep + add` in premultiplied linear light. Mixing toward a target by
@@ -479,6 +488,54 @@ impl TextRasterizer {
         Ok(text_layout(&layout, &shaping, request))
     }
 
+    /// [`Self::layout`] with each cluster's [`ClusterInfo::ink`]: the bounds of its glyphs as
+    /// drawn (outlines, sheared ones included, or color glyphs' placed boxes) grown by its
+    /// strokes' reach and a rim pixel.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::rasterize`].
+    pub fn layout_with_ink(
+        &self,
+        request: &TextRasterRequest,
+    ) -> Result<TextLayout, TextRasterError> {
+        validate_request(request)?;
+        if self.fonts.is_empty() {
+            return Err(TextRasterError::NoFonts);
+        }
+        let (faces, shaping) = self.prepare(request)?;
+        let layout = Self::lay_out(&faces, &shaping, request)?;
+        let mut inks = vec![None; layout.clusters.len()];
+        layout.each_glyph(
+            &faces,
+            &shaping,
+            request,
+            &mut HashMap::new(),
+            |drawing, origin, scale, glyph| {
+                if let Some([x_min, y_min, x_max, y_max]) = drawing.ink_bounds() {
+                    super::include(
+                        &mut inks[glyph.cluster],
+                        [
+                            origin[0] + x_min * scale,
+                            origin[1] - y_max * scale,
+                            origin[0] + x_max * scale,
+                            origin[1] - y_min * scale,
+                        ],
+                    );
+                }
+            },
+        );
+        for (ink, span) in inks.iter_mut().zip(&layout.clusters) {
+            let look = &shaping.looks[usize::from(span.look)];
+            let band = stroke_radius(&look.strokes).map_or(0.0, |radius| radius + 1.0);
+            *ink = ink.map(|bounds| super::grown(bounds, band));
+        }
+        let mut reported = text_layout(&layout, &shaping, request);
+        for (cluster, ink) in reported.clusters.iter_mut().zip(inks) {
+            cluster.ink = ink;
+        }
+        Ok(reported)
+    }
+
     /// [`Self::rasterize`] with one state per [`Self::layout`] cluster, in logical order. Identity
     /// states match [`Self::rasterize`] exactly. Results are cached by content version, so give
     /// each set of states its own version.
@@ -686,14 +743,17 @@ impl TextRasterizer {
                 .max(bounds.top.saturating_neg())
                 .max(bounds.bottom.saturating_sub(i64::from(box_height)));
         }
-        let margin = |overflow: i64| -> Result<u32, TextRasterError> {
+        let margin = |overflow: i64, padding: u32| -> Result<u32, TextRasterError> {
             u32::try_from(overflow)
                 .map_err(|_| TextRasterError::TooLarge)?
                 .checked_add(outline)
                 .map(|margin| margin.max(outline.max(padding)))
                 .ok_or(TextRasterError::TooLarge)
         };
-        let (margin_x, margin_y) = (margin(overflow_x)?, margin(overflow_y)?);
+        let (margin_x, margin_y) = (
+            margin(overflow_x, padding[0])?,
+            margin(overflow_y, padding[1])?,
+        );
         let width = margin_x
             .checked_mul(2)
             .and_then(|margins| box_width.checked_add(margins))
@@ -1378,6 +1438,7 @@ fn text_layout(
                 advance: 0.0,
                 baseline: 0.0,
                 font_size: shaping.looks[usize::from(span.look)].size,
+                ink: None,
                 ellipsis: span.ellipsis,
             }
         })
@@ -1407,11 +1468,14 @@ fn text_layout(
             info.advance = end - start;
             info.baseline = baseline;
         }
+        let size = layout.line_size(index);
         lines.push(LineInfo {
             clusters: first_cluster..last_cluster,
             left,
             width: line.width,
             baseline,
+            size,
+            box_top: layout.line_top(index) - super::half_leading(size, request.line_height),
         });
         first_cluster = last_cluster;
     }

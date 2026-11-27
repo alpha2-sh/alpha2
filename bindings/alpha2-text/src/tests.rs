@@ -212,9 +212,30 @@ fn fixture_requests_match_the_pinned_rasters() {
                     .collect()
             }),
             split_background: request["splitBackground"].as_bool().unwrap_or(false),
-            background: request.get("background").map(|background| TextBackground {
-                color: rgba(&background["color"]),
-                padding: background["padding"].as_f64().expect("padding") as f32,
+            background: request.get("background").map(|background| {
+                let float = |value: &serde_json::Value| value.as_f64().expect("number") as f32;
+                let padding = &background["padding"];
+                TextBackground {
+                    color: rgba(&background["color"]),
+                    padding: padding.as_array().map_or_else(
+                        || [float(padding); 4],
+                        |sides| std::array::from_fn(|side| float(&sides[side])),
+                    ),
+                    radius: background["radius"].as_f64().unwrap_or(0.0) as f32,
+                    border: background.get("border").map(|border| TextBoxBorder {
+                        width: float(&border["width"]),
+                        color: rgba(&border["color"]),
+                        dash: border.get("dash").map(|dash| TextBoxDash {
+                            pattern: dash["pattern"]
+                                .as_array()
+                                .expect("pattern")
+                                .iter()
+                                .map(float)
+                                .collect(),
+                            offset: dash["offset"].as_f64().unwrap_or(0.0) as f32,
+                        }),
+                    }),
+                }
             }),
             font_family: request["fontFamily"].as_str().map(Into::into),
             letter_spacing: request["letterSpacing"].as_f64().unwrap_or(0.0) as f32,
@@ -734,10 +755,7 @@ fn caption(text: &str, outline: Option<TextStroke>, version: u64) -> TextRasterR
         content_version: version,
         strokes: outline.into_iter().collect(),
         split_background: false,
-        background: Some(TextBackground {
-            color: [0, 0, 0, 160],
-            padding: 8.0,
-        }),
+        background: Some(TextBackground::padded([0, 0, 0, 160], 8.0)),
         font_family: None,
         letter_spacing: 0.0,
         font_weight: 400,
@@ -1585,10 +1603,7 @@ fn requests_outside_the_limits_are_refused() {
         }
     }
     fn background(padding: f32) -> TextBackground {
-        TextBackground {
-            color: [0; 4],
-            padding,
-        }
+        TextBackground::padded([0; 4], padding)
     }
     let mut rasterizer = fixture();
     let mut outcome = |change: Change| {
@@ -1775,10 +1790,7 @@ fn background_boxes_cost_their_area_not_every_line_at_every_pixel() {
     let mut rasterizer = fixture();
     let request = TextRasterRequest {
         max_width: 400.0,
-        background: Some(TextBackground {
-            color: [0, 0, 0, 160],
-            padding: 2.0,
-        }),
+        background: Some(TextBackground::padded([0, 0, 0, 160], 2.0)),
         ..request(&vec!["a"; 500].join("\n"), 8.0)
     };
     let result = rasterizer.rasterize(&request).expect("draws");
@@ -1814,9 +1826,9 @@ fn background_box_by_box(
     margin: [u32; 2],
     line_boxes: &[(f32, f32, f32, f32)],
 ) -> Vec<u8> {
-    let background = request.background.expect("a background");
+    let background = request.background.clone().expect("a background");
     let [margin_x, margin_y] = margin.map(|margin| margin as f32);
-    let padding = background.padding;
+    let padding = background.padding[0];
     let mut rgba8 = vec![0_u8; pixels * 4];
     for index in 0..pixels {
         let x = (index % width as usize) as f32;
@@ -1852,10 +1864,7 @@ fn the_background_is_every_line_box_byte_for_byte() {
     for (padding, line_height) in [(0.0, 1.2), (2.5, 1.2), (9.75, 1.05), (30.0, 1.0)] {
         let font_size = 21.3;
         let request = TextRasterRequest {
-            background: Some(TextBackground {
-                color: [10, 20, 30, 200],
-                padding,
-            }),
+            background: Some(TextBackground::padded([10, 20, 30, 200], padding)),
             line_height,
             ..request("", font_size)
         };
@@ -2876,10 +2885,7 @@ fn a_radial_fill_is_centred_on_the_box() {
 fn a_split_background_and_glyph_plane_over_each_other_equal_the_joined_raster() {
     let mut rasterizer = fixture();
     let looked = TextRasterRequest {
-        background: Some(TextBackground {
-            color: [20, 40, 60, 180],
-            padding: 5.0,
-        }),
+        background: Some(TextBackground::padded([20, 40, 60, 180], 5.0)),
         strokes: vec![TextStroke {
             color: [0, 0, 0, 255],
             width: 2.0,
@@ -2988,10 +2994,7 @@ fn identity_states_raster_the_static_bytes() {
                 width: 1.5,
             },
         ],
-        background: Some(TextBackground {
-            color: [20, 40, 60, 160],
-            padding: 4.0,
-        }),
+        background: Some(TextBackground::padded([20, 40, 60, 160], 4.0)),
         ..request("Static\nbytes", 28.0)
     };
     let plain = rasterizer.rasterize(&looked).expect("draws");
@@ -3332,10 +3335,7 @@ fn rasters_over_the_frame_area_are_refused_before_they_allocate() {
                 width: 2.0,
             },
         ],
-        background: Some(TextBackground {
-            color: [0, 0, 0, 128],
-            padding: 8.0,
-        }),
+        background: Some(TextBackground::padded([0, 0, 0, 128], 8.0)),
         ..request(
             &"The quick brown fox jumps over the lazy dog. ".repeat(60),
             96.0,

@@ -17,6 +17,7 @@ mod provider_sources;
 mod scaling;
 mod shapes;
 mod shared_corpora;
+mod text_boxes;
 mod text_fit;
 mod text_runs;
 mod visuals;

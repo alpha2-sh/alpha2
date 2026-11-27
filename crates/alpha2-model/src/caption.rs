@@ -232,8 +232,8 @@ impl TextStylePatch {
         if let Some(shadows) = &self.shadows {
             style.shadows.clone_from(shadows);
         }
-        if let Some(background) = self.background {
-            style.background = background;
+        if let Some(background) = &self.background {
+            style.background.clone_from(background);
         }
         if let Some(animators) = &self.animators {
             style.animators.clone_from(animators);

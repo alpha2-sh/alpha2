@@ -24,7 +24,18 @@ from .builder import Time, to_ticks
 if TYPE_CHECKING:
     from .types import Generator, LayoutNode
 
-__all__ = ["Baselines", "LayoutBounds", "NodeBounds", "Rect", "TextBounds", "TextMeasurer"]
+__all__ = [
+    "Baselines",
+    "ClusterPosition",
+    "LayoutBounds",
+    "LinePosition",
+    "NodeBounds",
+    "Rect",
+    "TextBounds",
+    "TextLayout",
+    "TextMeasurer",
+    "WordPosition",
+]
 
 
 class Rect(TypedDict):
@@ -79,6 +90,57 @@ class LayoutBounds(TypedDict):
     nodes: list[NodeBounds]
 
 
+class LinePosition(TypedDict):
+    """One laid-out line."""
+
+    clusters: list[int]
+    """Its clusters, ``[first, end)`` indices into ``clusters``."""
+    box: Rect
+    """Its line box: the line height times its largest size tall, its advance wide."""
+    em: Rect
+    """The em box of its largest size over its advance."""
+    baseline: float
+
+
+class WordPosition(TypedDict):
+    """One word holding a letter or digit (UAX #29)."""
+
+    clusters: list[int]
+    boxes: list[Rect]
+    """Its advance by its em box, one rectangle per line it lies on."""
+    ink: Rect | None
+
+
+class ClusterPosition(TypedDict):
+    """One grapheme cluster."""
+
+    range: list[int]
+    """``[start, end)`` in code points of the text; the ellipsis's is empty, at the cut."""
+    run: int | None
+    word: int | None
+    line: int
+    space: bool
+    ellipsis: bool
+    fontSize: float
+    """A fraction of the canvas's shorter side."""
+    baseline: float
+    box: Rect
+    """Its advance by its own em box."""
+    ink: Rect | None
+    """What it draws, strokes included; ``None`` for white space."""
+
+
+class TextLayout(TypedDict):
+    """Where a text generator's lines, words and clusters lie: its static layout (no animators),
+    at its fitted size and after its clamp."""
+
+    fontSize: float
+    layout: Rect
+    lines: list[LinePosition]
+    words: list[WordPosition]
+    clusters: list[ClusterPosition]
+
+
 def _size(field: str, value: object) -> tuple[int, int]:
     if (
         not isinstance(value, (tuple, list))
@@ -117,6 +179,17 @@ class TextMeasurer:
         width, height = _size("canvas", canvas)
         measured = self._native.text(_json(generator), width, height)
         return cast("TextBounds", json.loads(measured))
+
+    def text_layout(self, generator: Generator, *, canvas: tuple[int, int]) -> TextLayout:
+        """Where each line, word and cluster of the text generator ``generator`` lies on a
+        ``canvas`` (width, height) pixels canvas. A caption cue lies where a text generator with
+        its content and its resolved style lies.
+
+        Raises ``ValueError`` with the engine's message for a generator it refuses.
+        """
+        width, height = _size("canvas", canvas)
+        reported = self._native.text_layout(_json(generator), width, height)
+        return cast("TextLayout", json.loads(reported))
 
     def layout(
         self,

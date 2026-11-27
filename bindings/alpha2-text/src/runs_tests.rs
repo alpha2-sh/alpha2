@@ -90,10 +90,7 @@ fn spans_with_the_base_values_draw_the_plain_bytes() {
     let mut rasterizer = rasterizer(&["Alpha2Fixture.ttf", "Alpha2FixtureHangul.ttf"]);
     let plain = TextRasterRequest {
         max_width: 120.0,
-        background: Some(TextBackground {
-            color: [0, 0, 0, 128],
-            padding: 4.0,
-        }),
+        background: Some(TextBackground::padded([0, 0, 0, 128], 4.0)),
         strokes: vec![TextStroke {
             color: [0, 0, 0, 255],
             width: 2.0,

@@ -293,7 +293,56 @@ impl FillWire {
 #[serde(deny_unknown_fields)]
 struct BackgroundWire {
     color: [u8; 4],
-    padding: f32,
+    padding: PaddingWire,
+    #[serde(default)]
+    radius: f32,
+    #[serde(default)]
+    border: Option<BorderWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PaddingWire {
+    All(f32),
+    Sides([f32; 4]),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BorderWire {
+    width: f32,
+    color: [u8; 4],
+    #[serde(default)]
+    dash: Option<DashWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DashWire {
+    pattern: Vec<f32>,
+    #[serde(default)]
+    offset: f32,
+}
+
+impl BackgroundWire {
+    fn into_background(self) -> alpha2_text::TextBackground {
+        alpha2_text::TextBackground {
+            color: self.color,
+            padding: match self.padding {
+                PaddingWire::All(padding) => [padding; 4],
+                PaddingWire::Sides(sides) => sides,
+            },
+            radius: self.radius,
+            border: self.border.map(|border| alpha2_text::TextBoxBorder {
+                width: border.width,
+                color: border.color,
+                dash: border.dash.map(|dash| alpha2_text::TextBoxDash {
+                    pattern: dash.pattern,
+                    offset: dash.offset,
+                }),
+            }),
+        }
+    }
 }
 
 const fn default_line_height() -> f32 {
@@ -355,12 +404,7 @@ impl TextRequestWire {
             content_version,
             strokes: strokes(self.strokes),
             split_background: self.split_background,
-            background: self
-                .background
-                .map(|background| alpha2_text::TextBackground {
-                    color: background.color,
-                    padding: background.padding,
-                }),
+            background: self.background.map(BackgroundWire::into_background),
             font_family: self.font_family,
             letter_spacing: self.letter_spacing,
             font_weight: self.font_weight,
@@ -712,6 +756,35 @@ mod web {
             height: u32,
         ) -> Result<String, JsValue> {
             measure_text_json(&self.inner, generator_json, width, height).map_err(measure_error)
+        }
+
+        /// Where each line, word and cluster of the text generator `generator_json` lies on a
+        /// `width` by `height` canvas, as JSON `{ fontSize, layout, lines, words, clusters }`:
+        /// the static layout (no animator states), at the fitted size and after the clamp.
+        ///
+        /// Lines are `{ clusters: [first, end], box, em, baseline }`, words `{ clusters, boxes,
+        /// ink }` (a box per line), clusters `{ range: [start, end], run, word, line, space,
+        /// ellipsis, fontSize, baseline, box, ink }` with `range` in UTF-16 code units of the
+        /// text. Rectangles are `{ left, top, right, bottom }` in canvas fractions before the
+        /// clip's transform; `run`, `word` and `ink` may be `null`.
+        ///
+        /// # Errors
+        /// Rejects an invalid text generator, an empty canvas, and a measurer without fonts.
+        #[wasm_bindgen(js_name = layoutText)]
+        pub fn layout_text(
+            &self,
+            generator_json: &str,
+            width: u32,
+            height: u32,
+        ) -> Result<String, JsValue> {
+            alpha2_layout::json::text_layout_json(
+                &self.inner,
+                generator_json,
+                width,
+                height,
+                alpha2_layout::json::StringUnit::Utf16,
+            )
+            .map_err(measure_error)
         }
 
         /// Where each node of the layout generator `generator_json` (`{ "type": "layout",

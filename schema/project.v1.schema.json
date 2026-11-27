@@ -6749,20 +6749,66 @@
     },
     "TextBackground": {
       "additionalProperties": false,
-      "description": "A box behind each line of text.",
+      "description": "A box behind each line of text, as CSS draws an inline box's background with\n`box-decoration-break: clone`: each line's box has its own padding, radius and border.",
       "properties": {
+        "border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextBoxBorder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A line inside the box's edge, as a CSS border. `None` draws none."
+        },
         "color": {
           "$ref": "#/$defs/Rgba",
           "description": "Box color."
         },
         "padding": {
+          "$ref": "#/$defs/TextInsets",
           "default": 0.0,
-          "description": "Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.",
+          "description": "Space between the text and the box edge, as fractions of the font size, each side in\n`[0, 2]`."
+        },
+        "radius": {
+          "description": "Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is\ncapped at half its shorter side, as CSS `border-radius`. Default 0.",
           "format": "float",
           "type": "number"
         }
       },
       "required": [
+        "color"
+      ],
+      "type": "object"
+    },
+    "TextBoxBorder": {
+      "additionalProperties": false,
+      "description": "The border of a text box, drawn inside the box's edge.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Line color."
+        },
+        "dash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextDash"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Dashes along the border's centre line; `None` draws it solid."
+        },
+        "width": {
+          "description": "Width as a fraction of the font size, in `(0, 0.5]`.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
         "color"
       ],
       "type": "object"
@@ -6783,6 +6829,66 @@
         }
       ],
       "description": "A text: one string, or runs whose texts joined are the text.\n\nWritten as `\"Hello\"` or `[{ \"text\": \"Hel\" }, { \"text\": \"lo\", \"class\": [\"key\"] }]`."
+    },
+    "TextDash": {
+      "additionalProperties": false,
+      "description": "Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at\nthe end of the top-left corner and run clockwise.",
+      "properties": {
+        "offset": {
+          "description": "How far into the pattern the border starts, in font sizes, in `[-16, 16]`.",
+          "format": "float",
+          "type": "number"
+        },
+        "pattern": {
+          "description": "Alternating dash and gap lengths, as fractions of the font size: one to\n[`crate::MAX_DASH_ENTRIES`] entries in `[0, 4]`, not all zero. An odd count repeats once\nmore to pair up.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "TextInsets": {
+      "anyOf": [
+        {
+          "format": "float",
+          "type": "number"
+        },
+        {
+          "pattern": "^ *-?(\\d+\\.?\\d*|\\.\\d+)( +-?(\\d+\\.?\\d*|\\.\\d+)){0,3} *$",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bottom": {
+              "format": "float",
+              "type": "number"
+            },
+            "left": {
+              "format": "float",
+              "type": "number"
+            },
+            "right": {
+              "format": "float",
+              "type": "number"
+            },
+            "top": {
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers (\"0.1 0.3\": top first, clockwise), or the sides object, missing sides 0."
     },
     "TextRun": {
       "additionalProperties": false,

@@ -281,8 +281,17 @@ export const MAX_SVG_DOCUMENT_BYTES = 33554432;
 /** Mirrors `alpha2_model::MAX_TEXT_ANIMATORS`. */
 export const MAX_TEXT_ANIMATORS = 8;
 
+/** Mirrors `alpha2_model::MAX_TEXT_BORDER_WIDTH`. */
+export const MAX_TEXT_BORDER_WIDTH = 0.5;
+
 /** Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`. */
 export const MAX_TEXT_CONTENT_BYTES = 4096;
+
+/** Mirrors `alpha2_model::MAX_TEXT_DASH_ENTRY`. */
+export const MAX_TEXT_DASH_ENTRY = 4;
+
+/** Mirrors `alpha2_model::MAX_TEXT_DASH_OFFSET`. */
+export const MAX_TEXT_DASH_OFFSET = 16;
 
 /** Mirrors `alpha2_model::MAX_TEXT_FONT_SELECTIONS`. */
 export const MAX_TEXT_FONT_SELECTIONS = 16;
@@ -3923,19 +3932,48 @@ export interface TextAnimatorProperties {
 }
 
 /**
- * A box behind each line of text.
+ * A box behind each line of text, as CSS draws an inline box's background with
+ * `box-decoration-break: clone`: each line's box has its own padding, radius and border.
  */
 export interface TextBackground {
+  /**
+   * A line inside the box's edge, as a CSS border. `None` draws none.
+   */
+  readonly border?: TextBoxBorder | null;
   /**
    * Box color.
    */
   readonly color: Rgba;
   /**
-   * Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.
+   * Space between the text and the box edge, as fractions of the font size, each side in
+   * `[0, 2]`.
    *
    * @defaultValue `0`
    */
-  readonly padding?: number;
+  readonly padding?: TextInsets;
+  /**
+   * Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is
+   * capped at half its shorter side, as CSS `border-radius`. Default 0.
+   */
+  readonly radius?: number;
+}
+
+/**
+ * The border of a text box, drawn inside the box's edge.
+ */
+export interface TextBoxBorder {
+  /**
+   * Line color.
+   */
+  readonly color: Rgba;
+  /**
+   * Dashes along the border's centre line; `None` draws it solid.
+   */
+  readonly dash?: TextDash | null;
+  /**
+   * Width as a fraction of the font size, in `(0, 0.5]`.
+   */
+  readonly width: number;
 }
 
 /**
@@ -3944,6 +3982,36 @@ export interface TextBackground {
  * Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]`.
  */
 export type TextContent = string | readonly TextRun[];
+
+/**
+ * Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at
+ * the end of the top-left corner and run clockwise.
+ */
+export interface TextDash {
+  /**
+   * How far into the pattern the border starts, in font sizes, in `[-16, 16]`.
+   */
+  readonly offset?: number;
+  /**
+   * Alternating dash and gap lengths, as fractions of the font size: one to
+   * `MAX_DASH_ENTRIES` entries in `[0, 4]`, not all zero. An odd count repeats once
+   * more to pair up.
+   */
+  readonly pattern: readonly number[];
+}
+
+/**
+ * A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers ("0.1 0.3": top first, clockwise), or the sides object, missing sides 0.
+ */
+export type TextInsets =
+  | number
+  | string
+  | {
+      readonly bottom?: number;
+      readonly left?: number;
+      readonly right?: number;
+      readonly top?: number;
+    };
 
 /**
  * A piece of a text with its own style, that animators' Class and Timing selectors can pick.

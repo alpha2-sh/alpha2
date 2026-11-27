@@ -518,3 +518,36 @@ fn a_held_run_scale_shares_its_key() {
     assert_eq!(key(12_000), key(30_000));
     assert_ne!(key(11_000), key(12_000));
 }
+
+#[test]
+fn box_fields_change_the_text_key() {
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let background = |value: serde_json::Value| TextStyle {
+        background: Some(serde_json::from_value(value).expect("a box")),
+        ..TextStyle::default()
+    };
+    let plain = background(serde_json::json!({ "color": "#000000", "padding": 0.2 }));
+    let key = |style: &TextStyle| text_key(&TextAt::from("Hi"), style, size);
+    assert_eq!(
+        key(&plain),
+        key(&background(
+            serde_json::json!({ "color": "#000000", "padding": "0.2 0.2" })
+        )),
+        "the same sides key alike however written"
+    );
+    let keys = [
+        serde_json::json!({ "color": "#000000", "padding": "0.2 0.3" }),
+        serde_json::json!({ "color": "#000000", "padding": 0.2, "radius": 0.1 }),
+        serde_json::json!({ "color": "#000000", "padding": 0.2,
+            "border": { "width": 0.05, "color": "#ffffff" } }),
+        serde_json::json!({ "color": "#000000", "padding": 0.2,
+            "border": { "width": 0.05, "color": "#ffffff", "dash": { "pattern": [0.1] } } }),
+        serde_json::json!({ "color": "#000000", "padding": 0.2,
+            "border": { "width": 0.05, "color": "#ffffff", "dash": { "pattern": [0.1], "offset": 0.2 } } }),
+    ]
+    .into_iter()
+    .map(|value| key(&background(value)))
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), 5);
+    assert!(!keys.contains(&key(&plain)));
+}

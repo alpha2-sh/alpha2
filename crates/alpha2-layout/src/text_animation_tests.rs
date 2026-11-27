@@ -16,6 +16,7 @@ fn row(count: usize) -> TextLayout {
             advance: 10.0,
             baseline: 16.0,
             font_size: 20.0,
+            ink: None,
             ellipsis: false,
         })
         .collect();
@@ -27,6 +28,8 @@ fn row(count: usize) -> TextLayout {
             #[allow(clippy::cast_precision_loss)]
             width: count as f32 * 10.0,
             baseline: 16.0,
+            size: 20.0,
+            box_top: 0.0,
         }],
         font_size: 20.0,
     }
@@ -370,6 +373,7 @@ fn cut_row(count: usize) -> TextLayout {
         advance: 10.0,
         baseline: 16.0,
         font_size: 20.0,
+        ink: None,
         ellipsis: true,
     });
     layout.lines[0].clusters.end += 1;

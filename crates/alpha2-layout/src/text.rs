@@ -269,7 +269,7 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
     if let Some(background) = background {
         feed(&[0xfb]);
         feed(&background.color);
-        feed(&background.padding.to_bits().to_le_bytes());
+        feed_box_shape(feed, background);
     }
     // The default policy feeds nothing, so keys of requests that never set it stay as they were.
     match emoji_policy {
@@ -332,6 +332,37 @@ fn feed_spans(feed: &mut impl FnMut(&[u8]), spans: &[alpha2_text::TextSpan]) {
             None => feed(&[0]),
         }
         feed(&[u8::from(*underline), u8::from(*line_through)]);
+    }
+}
+
+/// Feeds a box's padding (one side alone when all four are the same, as the single padding
+/// keyed before), radius and border, the last two only when set.
+fn feed_box_shape(feed: &mut impl FnMut(&[u8]), background: &alpha2_text::TextBackground) {
+    let padding = background.padding;
+    let [top, right, bottom, left] = padding.map(f32::to_bits);
+    if top == right && top == bottom && top == left {
+        feed(&padding[0].to_bits().to_le_bytes());
+    } else {
+        feed(&[0xf7]);
+        for side in padding {
+            feed(&side.to_bits().to_le_bytes());
+        }
+    }
+    if background.radius != 0.0 {
+        feed(&[0xf6]);
+        feed(&background.radius.to_bits().to_le_bytes());
+    }
+    if let Some(border) = &background.border {
+        feed(&[0xf5]);
+        feed(&border.width.to_bits().to_le_bytes());
+        feed(&border.color);
+        if let Some(dash) = &border.dash {
+            feed_count(feed, dash.pattern.len());
+            for entry in &dash.pattern {
+                feed(&entry.to_bits().to_le_bytes());
+            }
+            feed(&dash.offset.to_bits().to_le_bytes());
+        }
     }
 }
 
@@ -453,9 +484,10 @@ pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 
     feed_look(&mut feed, strokes, shadows);
     match background {
         Some(background) => {
+            let unit = text_background(background, 1.0);
             feed(&[1]);
-            feed(&rgba8(background.color));
-            feed(&background.padding.to_bits().to_le_bytes());
+            feed(&unit.color);
+            feed_box_shape(&mut feed, &unit);
         }
         None => feed(&[0]),
     }
@@ -497,13 +529,65 @@ pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 
 ///
 /// # Errors
 /// Returns the text host's refusal: no fonts, or a style out of range.
-#[allow(clippy::cast_precision_loss)]
 pub fn measure_text(
     rasterizer: &TextRasterizer,
     text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
 ) -> Result<TextBounds, TextRasterError> {
+    let placed = place(rasterizer, text, style, size)?;
+    let shaped = rasterizer.shape(&placed.request)?;
+    let boxed = style_lines(&shaped, style, size, &placed.request);
+    let measure = &placed.measure;
+    let height = placed.canvas[1];
+    Ok(TextBounds {
+        layout: placed.layout,
+        content: placed.rect(measure.content),
+        ink: measure.ink.map(|ink| placed.rect(ink)),
+        line_count: measure.line_count,
+        baselines: Baselines {
+            first: (placed.origin[1] + measure.first_baseline) / height,
+            last: (placed.origin[1] + measure.last_baseline) / height,
+        },
+        font_size: placed.font_size,
+        truncated: measure.truncated,
+        overflow: boxed.overflow,
+    })
+}
+
+/// A text's request at its fitted size, its measure, and where its layout box lies.
+pub(crate) struct Placed {
+    pub(crate) request: TextRasterRequest,
+    pub(crate) measure: alpha2_text::TextMeasure,
+    /// The layout box's top-left corner on the canvas, in pixels.
+    pub(crate) origin: [f32; 2],
+    pub(crate) canvas: [f32; 2],
+    pub(crate) layout: CanvasRect,
+    pub(crate) font_size: f32,
+}
+
+impl Placed {
+    /// A rectangle of the layout box, in pixels, on the canvas in fractions.
+    pub(crate) fn rect(&self, [left, top, right, bottom]: [f32; 4]) -> CanvasRect {
+        CanvasRect {
+            left: (self.origin[0] + left) / self.canvas[0],
+            top: (self.origin[1] + top) / self.canvas[1],
+            right: (self.origin[0] + right) / self.canvas[0],
+            bottom: (self.origin[1] + bottom) / self.canvas[1],
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "picture sides are far below 2^24"
+)]
+pub(crate) fn place(
+    rasterizer: &TextRasterizer,
+    text: &TextAt<'_>,
+    style: &TextStyle,
+    size: PictureSize,
+) -> Result<Placed, TextRasterError> {
     let fitted = fit_text(text, style, size, |request| {
         rasterizer.shape(request).map(std::sync::Arc::new)
     })?;
@@ -515,36 +599,35 @@ pub fn measure_text(
         fitted.font_pixels,
     );
     let measure = rasterizer.measure(&request)?;
-    let shaped = rasterizer.shape(&request)?;
-    let boxed = style_lines(&shaped, style, size, &request);
     let (width, height) = (size.width() as f32, size.height() as f32);
-    let margin = measure.decoration_margin as f32;
+    let [margin_x, margin_y] = measure.decoration_margin.map(|margin| margin as f32);
     let (box_width, box_height) = (measure.box_width as f32, measure.box_height as f32);
     // The layout box's top-left corner on the canvas. The anchor of the decorated box lies at the
     // position, as `text_placement` places the texture.
     let origin = [
-        style.position.x * width - style.anchor.x * (box_width + 2.0 * margin) + margin,
-        style.position.y * height - style.anchor.y * (box_height + 2.0 * margin) + margin,
+        style.position.x * width - style.anchor.x * (box_width + 2.0 * margin_x) + margin_x,
+        style.position.y * height - style.anchor.y * (box_height + 2.0 * margin_y) + margin_y,
     ];
-    let rect = |[left, top, right, bottom]: [f32; 4]| CanvasRect {
-        left: (origin[0] + left) / width,
-        top: (origin[1] + top) / height,
-        right: (origin[0] + right) / width,
-        bottom: (origin[1] + bottom) / height,
-    };
-    Ok(TextBounds {
-        layout: rect([-margin, -margin, box_width + margin, box_height + margin]),
-        content: rect(measure.content),
-        ink: measure.ink.map(rect),
-        line_count: measure.line_count,
-        baselines: Baselines {
-            first: (origin[1] + measure.first_baseline) / height,
-            last: (origin[1] + measure.last_baseline) / height,
+    let mut placed = Placed {
+        request,
+        measure,
+        origin,
+        canvas: [width, height],
+        layout: CanvasRect {
+            left: 0.0,
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
         },
         font_size: fitted.font_size,
-        truncated: measure.truncated,
-        overflow: boxed.overflow,
-    })
+    };
+    placed.layout = placed.rect([
+        -margin_x,
+        -margin_y,
+        box_width + margin_x,
+        box_height + margin_y,
+    ]);
+    Ok(placed)
 }
 
 /// The height in pixels of `style`'s box on a picture of `size`, zero for none.
@@ -647,10 +730,8 @@ pub fn text_request_at(
                 || spans.iter().any(|span| span.background_color.is_some())),
         background: style
             .background
-            .map(|background| alpha2_text::TextBackground {
-                color: rgba8(background.color),
-                padding: (background.padding * font_size).clamp(0.0, MAX_PADDING_PIXELS),
-            }),
+            .as_ref()
+            .map(|background| text_background(background, font_size)),
         font_family: style.font_family.clone(),
         letter_spacing: style.letter_spacing * font_size,
         font_weight: style.font_weight,
@@ -659,6 +740,33 @@ pub fn text_request_at(
             .as_ref()
             .map(|clamp| crate::fit::text_clamp(clamp, box_height(style, size))),
         spans,
+    }
+}
+
+/// `background` in pixels of a `font_size`-pixel font, padding clamped to what the host draws.
+#[must_use]
+pub fn text_background(
+    background: &alpha2_model::TextBackground,
+    font_size: f32,
+) -> alpha2_text::TextBackground {
+    alpha2_text::TextBackground {
+        color: rgba8(background.color),
+        padding: background
+            .padding
+            .sides()
+            .map(|side| (side * font_size).clamp(0.0, MAX_PADDING_PIXELS)),
+        radius: background.radius * font_size,
+        border: background
+            .border
+            .as_ref()
+            .map(|border| alpha2_text::TextBoxBorder {
+                width: border.width * font_size,
+                color: rgba8(border.color),
+                dash: border.dash.as_ref().map(|dash| alpha2_text::TextBoxDash {
+                    pattern: dash.pattern.iter().map(|entry| entry * font_size).collect(),
+                    offset: dash.offset * font_size,
+                }),
+            }),
     }
 }
 

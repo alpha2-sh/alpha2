@@ -2089,10 +2089,8 @@ impl Context<'_> {
                 position.unwrap_or(low)
             }
             CaptionStyle::Boxed => {
-                style.background = Some(alpha2_model::TextBackground {
-                    color: self.theme.panel,
-                    padding: 0.3,
-                });
+                style.background =
+                    Some(alpha2_model::TextBackground::padded(self.theme.panel, 0.3));
                 position.unwrap_or(low)
             }
             CaptionStyle::BarBottom => {

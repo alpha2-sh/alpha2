@@ -2841,16 +2841,64 @@ export const PROJECT_SHAPE: unknown = {
     TextBackground: {
       additionalProperties: false,
       properties: {
+        border: {
+          anyOf: [{ $ref: "#/$defs/TextBoxBorder" }, { type: "null" }],
+        },
         color: { $ref: "#/$defs/Rgba" },
-        padding: { default: 0, format: "float", type: "number" },
+        padding: { $ref: "#/$defs/TextInsets", default: 0 },
+        radius: { format: "float", type: "number" },
       },
       required: ["color"],
+      type: "object",
+    },
+    TextBoxBorder: {
+      additionalProperties: false,
+      properties: {
+        color: { $ref: "#/$defs/Rgba" },
+        dash: { anyOf: [{ $ref: "#/$defs/TextDash" }, { type: "null" }] },
+        width: { format: "float", type: "number" },
+      },
+      required: ["width", "color"],
       type: "object",
     },
     TextContent: {
       anyOf: [
         { type: "string" },
         { items: { $ref: "#/$defs/TextRun" }, maxItems: 512, type: "array" },
+      ],
+    },
+    TextDash: {
+      additionalProperties: false,
+      properties: {
+        offset: { format: "float", type: "number" },
+        pattern: {
+          items: { format: "float", type: "number" },
+          maxItems: 16,
+          minItems: 1,
+          type: "array",
+        },
+      },
+      required: ["pattern"],
+      type: "object",
+    },
+    TextInsets: {
+      anyOf: [
+        { format: "float", type: "number" },
+        {
+          pattern:
+            "^ *-?(\\d+\\.?\\d*|\\.\\d+)( +-?(\\d+\\.?\\d*|\\.\\d+)){0,3} *$",
+          type: "string",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            bottom: { format: "float", type: "number" },
+            left: { format: "float", type: "number" },
+            right: { format: "float", type: "number" },
+            top: { format: "float", type: "number" },
+          },
+          type: "object",
+        },
       ],
     },
     TextRun: {

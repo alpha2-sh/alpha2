@@ -283,6 +283,9 @@ pub fn project_limits_json() -> Value {
             json!(crate::ANIMATOR_SCALE_RANGE.end()),
         ),
         ("MAX_TEXT_PADDING", json!(crate::MAX_TEXT_PADDING)),
+        ("MAX_TEXT_BORDER_WIDTH", json!(crate::MAX_TEXT_BORDER_WIDTH)),
+        ("MAX_TEXT_DASH_ENTRY", json!(crate::MAX_TEXT_DASH_ENTRY)),
+        ("MAX_TEXT_DASH_OFFSET", json!(crate::MAX_TEXT_DASH_OFFSET)),
         ("MAX_SEQUENCE_FRAMES", json!(crate::MAX_SEQUENCE_FRAMES)),
         ("MAX_SELECTED_CHANNELS", json!(crate::MAX_SELECTED_CHANNELS)),
         (

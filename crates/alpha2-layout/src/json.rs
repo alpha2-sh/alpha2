@@ -94,6 +94,111 @@ pub fn measure_text_json(
     .to_string())
 }
 
+/// The unit a report counts a text's positions in: each binding's string unit.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum StringUnit {
+    /// UTF-8 bytes (Rust).
+    Utf8,
+    /// UTF-16 code units (JavaScript).
+    Utf16,
+    /// Unicode scalar values (Python).
+    CodePoints,
+}
+
+impl StringUnit {
+    /// The position of each UTF-8 byte offset of `text` in this unit, plus one for its end.
+    fn positions(self, text: &str) -> Vec<usize> {
+        let mut positions = vec![0; text.len() + 1];
+        let mut at = 0;
+        for (start, character) in text.char_indices() {
+            let width = match self {
+                Self::Utf8 => character.len_utf8(),
+                Self::Utf16 => character.len_utf16(),
+                Self::CodePoints => 1,
+            };
+            for slot in &mut positions[start..start + character.len_utf8()] {
+                *slot = at;
+            }
+            at += width;
+        }
+        positions[text.len()] = at;
+        positions
+    }
+}
+
+/// Reports where each line, word and cluster of the text generator `generator_json` lies on a
+/// `width` by `height` canvas ([`crate::text_layout`]), ranges in `unit`.
+///
+/// Returns JSON `{ fontSize, layout, lines, words, clusters }`: lines as `{ clusters: [first,
+/// end], box, em, baseline }`, words as `{ clusters, boxes, ink }`, clusters as `{ range:
+/// [start, end], run, word, line, space, ellipsis, fontSize, baseline, box, ink }`. Rectangles
+/// are `{ left, top, right, bottom }` in fractions of the canvas, baselines fractions of its
+/// height, font sizes fractions of its shorter side; `run`, `word` and `ink` may be `null`.
+///
+/// # Errors
+/// Returns [`MeasureError::Input`] for invalid generator JSON or an empty canvas, and
+/// [`MeasureError::Text`] for the text host's refusal.
+pub fn text_layout_json(
+    rasterizer: &TextRasterizer,
+    generator_json: &str,
+    width: u32,
+    height: u32,
+    unit: StringUnit,
+) -> Result<String, MeasureError> {
+    let generator: alpha2_model::Generator = serde_json::from_str(generator_json)
+        .map_err(|error| MeasureError::Input(format!("invalid text generator: {error}")))?;
+    if !generator.is_valid() {
+        return Err(MeasureError::Input(
+            "the text generator has a field out of range".into(),
+        ));
+    }
+    let alpha2_model::Generator::Text { text, style } = &generator else {
+        return Err(MeasureError::Input(
+            "only a text generator draws text".into(),
+        ));
+    };
+    let size = PictureSize::new(width, height)
+        .map_err(|error| MeasureError::Input(format!("invalid canvas size: {error}")))?;
+    let report = crate::text_layout(
+        rasterizer,
+        &crate::TextAt::new(text, MediaTime::ZERO),
+        style,
+        size,
+    )
+    .map_err(MeasureError::Text)?;
+    let positions = unit.positions(&text.text());
+    let at = |byte: usize| positions.get(byte).copied().unwrap_or(0);
+    let span = |range: &std::ops::Range<usize>| serde_json::json!([range.start, range.end]);
+    Ok(serde_json::json!({
+        "fontSize": report.font_size,
+        "layout": rect(report.layout),
+        "lines": report.lines.iter().map(|line| serde_json::json!({
+            "clusters": span(&line.clusters),
+            "box": rect(line.line_box),
+            "em": rect(line.em),
+            "baseline": line.baseline,
+        })).collect::<Vec<_>>(),
+        "words": report.words.iter().map(|word| serde_json::json!({
+            "clusters": span(&word.clusters),
+            "boxes": word.boxes.iter().copied().map(rect).collect::<Vec<_>>(),
+            "ink": word.ink.map(rect),
+        })).collect::<Vec<_>>(),
+        "clusters": report.clusters.iter().map(|cluster| serde_json::json!({
+            "range": [at(cluster.bytes.start), at(cluster.bytes.end)],
+            "run": cluster.run,
+            "word": cluster.word,
+            "line": cluster.line,
+            "space": cluster.space,
+            "ellipsis": cluster.ellipsis,
+            "fontSize": cluster.font_size,
+            "baseline": cluster.baseline,
+            "box": rect(cluster.cluster_box),
+            "ink": cluster.ink.map(rect),
+        })).collect::<Vec<_>>(),
+    })
+    .to_string())
+}
+
 /// Measures each node of the layout generator `generator_json` on a `width` by `height`
 /// picture at picture time `time` ([`crate::measure_layout`]).
 ///

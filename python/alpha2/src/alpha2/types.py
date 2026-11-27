@@ -289,8 +289,17 @@ MAX_SVG_DOCUMENT_BYTES = 33554432
 MAX_TEXT_ANIMATORS = 8
 """Mirrors `alpha2_model::MAX_TEXT_ANIMATORS`."""
 
+MAX_TEXT_BORDER_WIDTH = 0.5
+"""Mirrors `alpha2_model::MAX_TEXT_BORDER_WIDTH`."""
+
 MAX_TEXT_CONTENT_BYTES = 4096
 """Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`."""
+
+MAX_TEXT_DASH_ENTRY = 4
+"""Mirrors `alpha2_model::MAX_TEXT_DASH_ENTRY`."""
+
+MAX_TEXT_DASH_OFFSET = 16
+"""Mirrors `alpha2_model::MAX_TEXT_DASH_OFFSET`."""
 
 MAX_TEXT_FONT_SELECTIONS = 16
 """Mirrors `alpha2_model::MAX_TEXT_FONT_SELECTIONS`."""
@@ -2972,15 +2981,35 @@ class TextAnimatorProperties(TypedDict):
 
 
 class TextBackground(TypedDict):
-    """A box behind each line of text."""
+    """A box behind each line of text, as CSS draws an inline box's background with
+    `box-decoration-break: clone`: each line's box has its own padding, radius and border.
+    """
 
+    border: NotRequired[TextBoxBorder | None]
+    """A line inside the box's edge, as a CSS border. `None` draws none."""
     color: Rgba
     """Box color."""
-    padding: NotRequired[float]
-    """Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.
+    padding: NotRequired[TextInsets]
+    """Space between the text and the box edge, as fractions of the font size, each side in
+    `[0, 2]`.
 
     Default: `0`.
     """
+    radius: NotRequired[float]
+    """Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is
+    capped at half its shorter side, as CSS `border-radius`. Default 0.
+    """
+
+
+class TextBoxBorder(TypedDict):
+    """The border of a text box, drawn inside the box's edge."""
+
+    color: Rgba
+    """Line color."""
+    dash: NotRequired[TextDash | None]
+    """Dashes along the border's centre line; `None` draws it solid."""
+    width: float
+    """Width as a fraction of the font size, in `(0, 0.5]`."""
 
 
 TextContent: TypeAlias = "str | list[TextRun]"
@@ -2988,6 +3017,31 @@ TextContent: TypeAlias = "str | list[TextRun]"
 
 Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]`.
 """
+
+
+class TextDash(TypedDict):
+    """Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at
+    the end of the top-left corner and run clockwise.
+    """
+
+    offset: NotRequired[float]
+    """How far into the pattern the border starts, in font sizes, in `[-16, 16]`."""
+    pattern: list[float]
+    """Alternating dash and gap lengths, as fractions of the font size: one to
+    `MAX_DASH_ENTRIES` entries in `[0, 4]`, not all zero. An odd count repeats once
+    more to pair up.
+    """
+
+
+class TextInsetsVariant3(TypedDict):
+    bottom: NotRequired[float]
+    left: NotRequired[float]
+    right: NotRequired[float]
+    top: NotRequired[float]
+
+
+TextInsets: TypeAlias = "float | str | TextInsetsVariant3"
+"""A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers ("0.1 0.3": top first, clockwise), or the sides object, missing sides 0."""
 
 
 TextRun = TypedDict(

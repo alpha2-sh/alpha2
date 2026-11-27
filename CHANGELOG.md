@@ -29,6 +29,20 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- A text style's `background` takes `padding` per side (a number as before, a CSS shorthand string
+  of one to four numbers such as `"0.1 0.3"`, or `{ top, right, bottom, left }`, each 0 to 2 font
+  sizes), a corner `radius` (0 to 2 font sizes, capped at half the box's shorter side) and a
+  `border` (`width` up to 0.5 font sizes, `color`, and a `dash` of 1 to 16 lengths with an
+  `offset`, as SVG `stroke-dasharray`) drawn inside the box and hidden where another line's box
+  covers it. A number padding draws the same box as in 0.7.x; hosts and engines of 0.7.x refuse
+  documents that use the new fields.
+- `WasmTextMeasurer.layoutText`, Python `TextMeasurer.text_layout` and Rust
+  `alpha2_layout::text_layout`: where a text generator's lines, words and grapheme clusters lie
+  (boxes, em boxes, baselines, ink and font sizes, in canvas fractions), at the fitted size and
+  after the clamp, before animators. Cluster ranges count UTF-16 code units in JavaScript, code
+  points in Python and bytes in Rust.
+- `WasmTextRasterizer.rasterize`'s `background` takes `padding` as four sides, `radius` and
+  `border`.
 - `alpha2.transcribe` 1.1.0 runs whisper.cpp on the GPU on Apple silicon (Metal), about 1.2x to
   2.6x faster there by model size. A new param `device` (`auto`, the default, or `cpu`) turns it
   off. Words and times can differ from the CPU's in a fraction of a percent of words, as they do

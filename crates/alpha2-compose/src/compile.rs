@@ -2319,10 +2319,9 @@ impl<'a> Context<'a> {
                     anchor: Vec2::new(x, y),
                     strokes: text.strokes.clone(),
                     shadows: text.shadows.clone(),
-                    background: text.background.map(|color| TextBackground {
-                        color,
-                        padding: 0.3,
-                    }),
+                    background: text
+                        .background
+                        .map(|color| TextBackground::padded(color, 0.3)),
                     animators: text
                         .reveal
                         .map(|reveal| vec![reveal_animator(reveal, font_px, slot.len)])
