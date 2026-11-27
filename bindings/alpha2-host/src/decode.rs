@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Condvar, Mutex};
@@ -395,7 +394,7 @@ impl DecodeWorker {
     /// A source without an uploaded asset, or an OS refusal of the pool thread.
     pub fn spawn(
         project: &Project,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         config: &DecodeWorkerConfig,
         cancel: CancelToken,
         failure: PipelineFailure,
@@ -905,7 +904,7 @@ enum NextRead {
 pub struct ExportDecodeState {
     pub providers: Arc<alpha2_host_core::providers::ProviderMedia>,
     pub decoding: Arc<crate::recovery::ExportDecoding>,
-    pub paths: HashMap<SourceId, PathBuf>,
+    pub paths: HashMap<SourceId, alpha2_host_core::remote::SourceLocation>,
     pub kinds: HashMap<SourceId, MediaKind>,
     /// The color each video source's project declares, which its frames carry.
     pub declared_colors: HashMap<SourceId, alpha2_media::ColorMetadata>,
@@ -982,7 +981,10 @@ pub struct ExportDecodedPosition {
 
 impl ExportDecodeState {
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn new(project: &Project, assets: &HashMap<String, PathBuf>) -> Result<Self, String> {
+    pub fn new(
+        project: &Project,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
+    ) -> Result<Self, String> {
         Self::new_with_limits(
             project,
             assets,
@@ -994,7 +996,7 @@ impl ExportDecodeState {
 
     pub fn new_with_limits(
         project: &Project,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         decoder_threads: i64,
         max_sessions: usize,
         max_reverse_cache_bytes: u64,
@@ -1021,7 +1023,7 @@ impl ExportDecodeState {
 
     pub fn new_with_limits_and_vulkan(
         project: &Project,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         decoder_threads: i64,
         max_sessions: usize,
         max_reverse_cache_bytes: u64,
@@ -1379,7 +1381,7 @@ impl ExportDecodeState {
     fn open_software(
         &self,
         source: &SourceId,
-        path: &std::path::Path,
+        path: &alpha2_host_core::remote::SourceLocation,
     ) -> Result<NativeExportDecoder, String> {
         let decoder = NativeExportDecoder::open_with_threads(path, self.decoder_threads)
             .map_err(error_message)?

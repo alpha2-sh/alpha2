@@ -189,7 +189,8 @@ fn shared_source_clips_keep_independent_decoder_cursors() {
     let first_clip = ClipId::new("clip-a").expect("clip ID");
     let second_clip = ClipId::new("clip-b").expect("clip ID");
     let assets = HashMap::from([(source.as_str().to_owned(), corpus("long-gop.mp4"))]);
-    let mut state = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut state =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     let cancel = CancelToken::default();
 
     for (index, (first_time, second_time)) in [
@@ -289,7 +290,8 @@ fn repeated_requests_retain_one_physical_decoded_frame() {
     let source = SourceId::new("video-source").expect("source ID");
     let clip = ClipId::new("clip-a").expect("clip ID");
     let assets = HashMap::from([(source.as_str().to_owned(), corpus("long-gop.mp4"))]);
-    let mut state = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut state =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     let cancel = CancelToken::default();
     let first_request = MediaTime::from_ticks(2_000);
     let first = state
@@ -362,7 +364,8 @@ fn sequential_requests_get_the_frame_presented_at_each_time() {
     let source = SourceId::new("video-source").expect("source ID");
     let clip = ClipId::new("clip-a").expect("clip ID");
     let assets = HashMap::from([(source.as_str().to_owned(), corpus("vfr.mp4"))]);
-    let mut state = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut state =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     let cancel = CancelToken::default();
     let presented: Vec<i64> = [2_000, 6_000, 12_000, 20_000, 30_000, 43_000]
         .into_iter()
@@ -427,12 +430,14 @@ fn shown_source_frames(name: &str, frames: &[i64], times: &[MediaTime]) -> Vec<u
             .position(|&frame| frame == pts)
             .expect("a source frame")
     };
-    let mut sequential = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut sequential =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     let in_order = times
         .iter()
         .map(|&time| shown(&mut sequential, time))
         .collect::<Vec<_>>();
-    let mut backward = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut backward =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     let mut sought = times
         .iter()
         .rev()
@@ -603,7 +608,7 @@ fn the_synchronous_supply_shows_the_frames_of_the_frame_selection_table() {
                 RenderSize::new(64, 48).expect("size"),
                 crate::frames::next_cache_scope(),
                 &project,
-                &assets,
+                &crate::tests::locations(&assets),
                 std::sync::Arc::default(),
             )
             .expect("frames");
@@ -670,7 +675,8 @@ fn a_long_jump_forward_seeks_instead_of_decoding_every_frame_between() {
     ))
     .expect("video export project");
     let assets = HashMap::from([("video-source".to_owned(), corpus("vfr-rising.mp4"))]);
-    let mut state = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut state =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     let cancel = CancelToken::default();
     let decode = |state: &mut ExportDecodeState, ticks: i64| {
         let before = state.software_decoded_frames;
@@ -713,7 +719,8 @@ fn long_gop_state(frames: u64) -> ExportDecodeState {
     ))
     .expect("video export project");
     let assets = HashMap::from([("video-source".to_owned(), corpus("long-gop.mp4"))]);
-    let mut state = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut state =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     presented(&mut state, "probe", 0);
     let frame_bytes = state.decoded[&cursor_of("probe")].frame.retained_bytes();
     state.max_reverse_cache_bytes = frames * frame_bytes;
@@ -859,8 +866,14 @@ fn a_shard_past_its_sessions_evicts_the_least_recently_used_and_reopens_it() {
     ))
     .expect("video export project");
     let assets = HashMap::from([("video-source".to_owned(), corpus("long-gop.mp4"))]);
-    let mut state = ExportDecodeState::new_with_limits(&project, &assets, 1, 2, 128 << 20)
-        .expect("decode state");
+    let mut state = ExportDecodeState::new_with_limits(
+        &project,
+        &crate::tests::locations(&assets),
+        1,
+        2,
+        128 << 20,
+    )
+    .expect("decode state");
     // long-gop.mp4 presents a frame every 4 000 ticks; three cursors take turns on two sessions.
     for frame in 0..6 {
         for clip in ["a", "b", "c"] {
@@ -912,8 +925,14 @@ fn copy_source_state(sessions: usize) -> ExportDecodeState {
     ))
     .expect("video export project");
     let assets = HashMap::from([("video-source".to_owned(), corpus("h264-bt709-copy.mp4"))]);
-    ExportDecodeState::new_with_limits(&project, &assets, 1, sessions, 128 << 20)
-        .expect("decode state")
+    ExportDecodeState::new_with_limits(
+        &project,
+        &crate::tests::locations(&assets),
+        1,
+        sessions,
+        128 << 20,
+    )
+    .expect("decode state")
 }
 
 fn frame_job(frame: u64, clips: &[&str]) -> DecodeJob {
@@ -1360,7 +1379,8 @@ fn composition_readers_of_one_source_keep_their_own_cursors() {
     let clip = ClipId::new("clip-a").expect("clip ID");
     let reader = |id: &str| Some(alpha2_model::NodeId::new(id).expect("node ID"));
     let assets = HashMap::from([(source.as_str().to_owned(), corpus("long-gop.mp4"))]);
-    let mut state = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut state =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     let cancel = CancelToken::default();
     for (index, (early, late)) in [(0, 60_000), (4_000, 64_000)].into_iter().enumerate() {
         let need = |step: &str, ticks: i64| FrameNeed {

@@ -12,7 +12,6 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,7 +38,7 @@ use serde_json::{Value, json};
 /// Owns its parts because the plan reads the sources on its own worker thread.
 pub(crate) struct CopyRequest {
     pub project: Project,
-    pub assets: HashMap<String, PathBuf>,
+    pub assets: HashMap<String, alpha2_host_core::remote::SourceLocation>,
     pub effective_range: TimeRange,
     pub rate: FrameRate,
     pub frames: u64,
@@ -187,12 +186,13 @@ pub(crate) fn packet_copy_plan(request: &CopyRequest) -> Result<CopyPlan, String
             .assets
             .get(segment.source_id.as_str())
             .ok_or_else(|| format!("source {} has no file", segment.source_id))?;
+        let source = alpha2_host_core::remote::SourceLocation::from(source);
         let frame_times = shown
             .iter()
             .map(|time| segment.source_time(*time))
             .collect::<Vec<_>>();
         let run = planner.plan(&PacketCopyRequest {
-            source,
+            source: &source,
             frame_times: &frame_times,
             width: request.project.settings.width,
             height: request.project.settings.height,
@@ -242,7 +242,7 @@ impl ExportAudioFeed {
     pub(crate) fn new(
         snapshot: Arc<EngineProject>,
         project: &Project,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         range: TimeRange,
         loudness: Option<LoudnessRequest>,
         cancel: CancelToken,
@@ -382,7 +382,7 @@ pub(crate) struct CopyExport<'a> {
     pub plan: &'a CopyPlan,
     pub snapshot: &'a EngineProject,
     pub project: &'a Project,
-    pub assets: &'a HashMap<String, PathBuf>,
+    pub assets: &'a HashMap<String, alpha2_host_core::remote::SourceLocation>,
     pub effective_range: TimeRange,
     pub container: alpha2_media::Container,
     pub audio_codec: NativeAudioCodec,

@@ -105,7 +105,7 @@ fn software_decode_does_not_decode_on_the_encode_device() {
     let result = host
         .export(
             &project.to_string(),
-            &HashMap::from([("video".to_owned(), corpus("h264-long-gop.mp4"))]),
+            &crate::tests::sources([("video".to_owned(), corpus("h264-long-gop.mp4"))]),
             &HashMap::new(),
             Vec::new(),
             0,

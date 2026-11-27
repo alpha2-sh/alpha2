@@ -46,6 +46,7 @@ use alpha2_engine::{
     FramesWithText, QualityProfile, TextTextures,
 };
 use alpha2_gpu::CapabilityTier;
+use alpha2_host_core::remote::SourceLocation;
 use alpha2_media::{CancelToken, EncodeEvent};
 use alpha2_model::{MediaFingerprint, MediaKind, Project};
 use alpha2_native::{
@@ -137,6 +138,8 @@ pub struct Host {
     /// loop takes it.
     pub texts: std::sync::Mutex<TextTextures>,
     pub provider_files: alpha2_host_core::providers::ProviderFiles,
+    /// The current request's remote sources, read until it ends.
+    pub remote: Option<crate::remote_media::RemoteInputs>,
     /// As the current export's conform probed them; `None` when not conformed here, so the decode
     /// plan probes the files itself.
     pub conformed_video_frames: Option<HashMap<String, crate::assets::VideoFrameSize>>,
@@ -180,7 +183,7 @@ impl Drop for Host {
 
 struct ExportRequestFacts<'a> {
     project: &'a str,
-    assets: &'a HashMap<String, PathBuf>,
+    assets: &'a HashMap<String, alpha2_host_core::requests::MediaLocation>,
     start_ticks: i64,
     end_ticks: i64,
     frame_rate: RateRequest,
@@ -262,6 +265,7 @@ impl Host {
             held: Vec::new(),
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: alpha2_host_core::providers::ProviderFiles::default(),
+            remote: None,
             conformed_video_frames: None,
             largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
@@ -748,6 +752,7 @@ impl Host {
             memory,
             output,
             overwrite,
+            remote_content_hash,
             ..
         } = request;
         let output = OutputTarget {
@@ -784,6 +789,7 @@ impl Host {
                 resources: &resources,
                 effect_assets: &effect_assets,
                 font_files: &font_files,
+                remote_content_hash,
             },
             media,
             &[&output.path],
@@ -842,7 +848,7 @@ impl Host {
         exported.map_err(|message| {
             let position = crate::failure::phase_tag(&message);
             let message = crate::termination::cancelled_by_request_or_termination(message);
-            let error = HostError::classify(message);
+            let error = crate::remote_media::name_source(HostError::classify(message), &assets);
             self.attach_failure(error, position)
         })
     }
@@ -856,6 +862,13 @@ impl Host {
         media: crate::protocol::ExportMedia,
         outputs: &[&Path],
     ) -> Result<PreparedRequest, HostError> {
+        self.remote = crate::remote_media::RemoteInputs::for_request(
+            inputs.assets,
+            inputs.resources,
+            self.memory.remote_cache_bytes(),
+            inputs.remote_content_hash,
+        )
+        .map_err(|error| self.attach_failure(error, None))?;
         for output in outputs {
             inputs
                 .refuse_output(output)
@@ -880,7 +893,9 @@ impl Host {
             originals: resolved.paths.clone(),
             frames: inputs.frames.clone(),
             fonts: Vec::new(),
-            resources: inputs.resources.clone(),
+            resources: self
+                .resource_locations(inputs.resources)
+                .map_err(|error| self.attach_failure(error, None))?,
         };
         self.conformed_video_frames = Some(resolved.video_frames.clone());
         Ok(PreparedRequest {
@@ -906,6 +921,7 @@ impl Host {
             stills,
             overwrite,
             alpha,
+            remote_content_hash,
             ..
         } = request;
         let project = still_project(project.text(), size)?;
@@ -928,6 +944,7 @@ impl Host {
                 resources: &resources,
                 effect_assets: &effect_assets,
                 font_files: &font_files,
+                remote_content_hash,
             },
             media,
             &outputs,
@@ -967,18 +984,31 @@ impl Host {
     pub(crate) fn extract_media(
         &mut self,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::requests::MediaLocation>,
         proxies: &HashMap<String, Vec<ProxyRequest>>,
         frames: &HashMap<String, Vec<Option<PathBuf>>>,
-        resources: &HashMap<String, HashMap<String, PathBuf>>,
+        resources: &HashMap<String, HashMap<String, alpha2_host_core::requests::MediaLocation>>,
         effect_assets: &HashMap<String, PathBuf>,
         font_files: &[PathBuf],
         media: crate::protocol::ExportMedia,
         source: Option<&alpha2_media::SourceId>,
-    ) -> Result<(HashMap<String, PathBuf>, Option<MediaFingerprint>), HostError> {
+        remote_content_hash: alpha2_host_core::requests::RemoteContentHash,
+    ) -> Result<
+        (
+            HashMap<String, alpha2_host_core::remote::SourceLocation>,
+            Option<MediaFingerprint>,
+        ),
+        HostError,
+    > {
         self.begin_request(crate::memory::MemoryRequest::default(), None)?;
         // A source extraction reads its one source, placed on the timeline or not.
         if let Some(source) = source {
+            self.remote = crate::remote_media::RemoteInputs::for_request(
+                assets,
+                resources,
+                self.memory.remote_cache_bytes(),
+                remote_content_hash,
+            )?;
             let resolved = request_media(
                 project,
                 assets,
@@ -987,6 +1017,7 @@ impl Host {
                 media.purpose(),
                 &self.hardware_video_decode(),
                 Some(source),
+                self.remote.as_ref(),
             )?;
             if !resolved.report.ready {
                 return Err(
@@ -1010,6 +1041,7 @@ impl Host {
                 resources,
                 effect_assets,
                 font_files,
+                remote_content_hash,
             },
             media,
             &[],
@@ -1031,7 +1063,7 @@ impl Host {
         &mut self,
         request: crate::render_cache::RenderCacheRequest,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         providers: &alpha2_host_core::providers::ProviderFiles,
         effect_assets: &HashMap<String, PathBuf>,
         font_files: &[PathBuf],
@@ -1056,10 +1088,40 @@ impl Host {
         }
     }
 
+    /// Each resource's location: a file, or a remote object probed now.
+    fn resource_locations(
+        &self,
+        resources: &HashMap<String, HashMap<String, alpha2_host_core::requests::MediaLocation>>,
+    ) -> Result<HashMap<String, HashMap<String, SourceLocation>>, HostError> {
+        let mut located = HashMap::new();
+        for (id, locators) in resources {
+            let mut files = HashMap::new();
+            for (locator, location) in locators {
+                let source = match location {
+                    alpha2_host_core::requests::MediaLocation::Path(path) => {
+                        SourceLocation::File(path.clone())
+                    }
+                    alpha2_host_core::requests::MediaLocation::Url(url) => {
+                        let remote = self.remote.as_ref().ok_or_else(|| {
+                            HostError::new(
+                                "INTERNAL",
+                                "a remote resource was read without its request's session",
+                            )
+                        })?;
+                        SourceLocation::Remote(remote.open(id, url)?)
+                    }
+                };
+                files.insert(locator.clone(), source);
+            }
+            located.insert(id.clone(), files);
+        }
+        Ok(located)
+    }
+
     fn conform_export(
         &self,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::requests::MediaLocation>,
         proxies: &HashMap<String, Vec<ProxyRequest>>,
         frames: &HashMap<String, Vec<Option<PathBuf>>>,
         media: crate::protocol::ExportMedia,
@@ -1072,6 +1134,7 @@ impl Host {
             media.purpose(),
             &self.hardware_video_decode(),
             None,
+            self.remote.as_ref(),
         )
         .map_err(|error| self.attach_failure(error, None))?;
         if !resolved.report.ready {
@@ -1102,7 +1165,7 @@ impl Host {
     pub(crate) fn admit_render(
         &self,
         project: &Project,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         (size, pixels): (RenderSize, alpha2_media::PixelLayout),
         range: TimeRange,
     ) -> Result<(), String> {
@@ -1222,6 +1285,7 @@ impl Host {
 
     fn end_export(&mut self) {
         self.release_result_cache();
+        self.remote = None;
         self.conformed_video_frames = None;
         *self
             .largest_video_frames
@@ -1374,6 +1438,14 @@ impl Host {
         {
             failure["stage"] = stage.clone();
         }
+        if let Some(delay) = error
+            .details
+            .as_ref()
+            .and_then(|details| details.get("retryAfterMs"))
+            .filter(|_| failure["code"] == "RESOURCE_BUSY")
+        {
+            failure["retryAfterMs"] = delay.clone();
+        }
         error.with_failure(failure)
     }
 
@@ -1456,7 +1528,7 @@ impl Host {
     fn render_cache_identity(
         &self,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         providers: &alpha2_host_core::providers::ProviderFiles,
         effect_assets: &HashMap<String, PathBuf>,
         font_files: &[PathBuf],
@@ -1483,13 +1555,17 @@ impl Host {
         );
         identity.add("decode", self.decode_policy.as_str().as_bytes());
         identity.add("project", project.as_bytes());
-        for (label, files) in [("asset", assets), ("effect-asset", effect_assets)] {
-            let mut files = files.iter().collect::<Vec<_>>();
-            files.sort();
-            for (id, path) in files {
-                identity.add(label, id.as_bytes());
-                identity.add_file("file", path);
-            }
+        let mut sources = assets.iter().collect::<Vec<_>>();
+        sources.sort_by(|a, b| a.0.cmp(b.0));
+        for (id, source) in sources {
+            identity.add("asset", id.as_bytes());
+            identity.add_source("file", source);
+        }
+        let mut files = effect_assets.iter().collect::<Vec<_>>();
+        files.sort();
+        for (id, path) in files {
+            identity.add("effect-asset", id.as_bytes());
+            identity.add_file("file", path);
         }
         let mut sequences = providers.frames.iter().collect::<Vec<_>>();
         sequences.sort_by(|a, b| a.0.cmp(b.0));
@@ -1507,10 +1583,10 @@ impl Host {
         for (id, files) in resources {
             identity.add("resources", id.as_bytes());
             let mut files = files.iter().collect::<Vec<_>>();
-            files.sort();
-            for (locator, path) in files {
+            files.sort_by(|a, b| a.0.cmp(b.0));
+            for (locator, source) in files {
                 identity.add("locator", locator.as_bytes());
-                identity.add_file("resource", path);
+                identity.add_source("resource", source);
             }
         }
         for font in font_files {
@@ -1824,7 +1900,7 @@ impl Host {
     pub fn export(
         &mut self,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         effect_assets: &HashMap<String, PathBuf>,
         effects: Vec<EffectRequest>,
         start_ticks: i64,
@@ -1896,7 +1972,7 @@ impl Host {
     fn export_once(
         &mut self,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         effect_assets: &HashMap<String, PathBuf>,
         effects: Vec<EffectRequest>,
         start_ticks: i64,
@@ -3360,6 +3436,11 @@ impl Host {
             encode_state.completed_video,
         );
         crate::metrics::add_gpu_time_metrics(&mut result["performance"], self.renderer.gpu());
+        if let Some(remote) = &self.remote {
+            for (name, value) in remote.performance() {
+                result["performance"][name] = value;
+            }
+        }
         // A hardware encoder fed CPU frames copies each to its device inside the driver, where
         // nothing counts it, so the frame bytes are an estimate.
         let estimated = selection.hardware_accelerated;
@@ -3573,7 +3654,7 @@ thread_local! {
 /// missing size only costs that session the minimum worker count.
 pub(crate) fn max_video_source_frames(
     project: &Project,
-    assets: &HashMap<String, PathBuf>,
+    assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
     conformed: Option<&HashMap<String, crate::assets::VideoFrameSize>>,
 ) -> crate::assets::VideoFrameSize {
     project
@@ -3644,7 +3725,7 @@ pub(crate) fn normalize_export_audio(
     renderer: &mut AudioRenderer,
     snapshot: &EngineProject,
     project: &alpha2_model::Project,
-    assets: &HashMap<String, PathBuf>,
+    assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
     start_sample: i64,
     frames: usize,
     request: LoudnessRequest,
@@ -3963,10 +4044,17 @@ fn conform_answer(
         proxies,
         frames,
         purpose,
+        remote_content_hash,
         ..
     }: crate::protocol::ConformRequest,
     policy: VideoDecodePolicy,
 ) -> Result<Value, HostError> {
+    let remote = crate::remote_media::RemoteInputs::for_request(
+        &assets,
+        &HashMap::new(),
+        alpha2_host_core::remote::DEFAULT_CACHE_BYTES,
+        remote_content_hash,
+    )?;
     let resolved = request_media(
         project.text(),
         &assets,
@@ -3975,6 +4063,7 @@ fn conform_answer(
         purpose,
         &conform_hardware(policy),
         None,
+        remote.as_ref(),
     )?;
     Ok(json!({
         "catalog": resolved.catalog,
@@ -3991,15 +4080,21 @@ pub fn conform_hardware(policy: VideoDecodePolicy) -> HardwareVideoDecode {
 }
 
 /// # Errors
-/// A project that does not parse, or a proxy whose `madeFrom` is malformed.
+/// A project that does not parse, a proxy whose `madeFrom` is malformed, or a remote source that
+/// fails the request.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a request's media inputs, one by one"
+)]
 fn request_media(
     project: &str,
-    assets: &HashMap<String, PathBuf>,
+    assets: &HashMap<String, alpha2_host_core::requests::MediaLocation>,
     proxies: &HashMap<String, Vec<ProxyRequest>>,
     frames: &HashMap<String, Vec<Option<PathBuf>>>,
     purpose: MediaPurpose,
     hardware: &HardwareVideoDecode,
     reads: Option<&alpha2_media::SourceId>,
+    remote: Option<&crate::remote_media::RemoteInputs>,
 ) -> Result<ResolvedMedia, HostError> {
     #[cfg(test)]
     assert!(
@@ -4029,6 +4124,7 @@ fn request_media(
         originals: assets,
         proxies,
         frames,
+        remote,
     };
     let sources = match reads {
         Some(id) => project
@@ -4038,9 +4134,7 @@ fn request_media(
             .collect(),
         None => project.used_sources(),
     };
-    Ok(crate::assets::resolve_sources(
-        &project, sources, &links, &links, purpose, hardware,
-    ))
+    crate::assets::resolve_sources(&project, sources, &links, &links, purpose, hardware)
 }
 
 /// Which extension formats this build reads, including those that open without a provider.

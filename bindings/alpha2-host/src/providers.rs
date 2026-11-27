@@ -1,16 +1,15 @@
 //! Request checks for the provider sources the shared provider media reads.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use alpha2_model::{Project, ProviderSource};
 
 /// # Errors
 /// Returns an `INVALID_INPUT` message naming a source that is not an SVG or Lottie source of
 /// `project`.
-pub fn check_resources(
+pub fn check_resources<T>(
     project: &Project,
-    resources: &HashMap<String, HashMap<String, PathBuf>>,
+    resources: &HashMap<String, HashMap<String, T>>,
 ) -> Result<(), String> {
     let mut named = resources.keys().collect::<Vec<_>>();
     named.sort();

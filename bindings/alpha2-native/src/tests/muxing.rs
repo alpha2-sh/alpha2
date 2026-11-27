@@ -35,7 +35,10 @@ fn hevc_is_written_as_hvc1_and_a_copy_keeps_its_entry() {
         7
     );
     for (source, entry) in [("hevc-topleft.mp4", b"hev1"), ("hevc-hvc1.mp4", b"hvc1")] {
-        let mut input = crate::decode::open_input(&corpus(source)).expect("input");
+        let mut input = crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(
+            &corpus(source),
+        ))
+        .expect("input");
         let (parameters, time_base) = {
             let stream = &input.streams()[0];
             (stream.codecpar().clone(), stream.time_base)
@@ -59,7 +62,9 @@ fn hevc_is_written_as_hvc1_and_a_copy_keeps_its_entry() {
         muxer
             .close(&alpha2_media::CancelToken::default())
             .expect("close");
-        let written = crate::decode::open_input(&path).expect("output");
+        let written =
+            crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(&path))
+                .expect("output");
         assert_eq!(
             written.streams()[0].codecpar().codec_tag,
             tag(entry),
@@ -91,7 +96,10 @@ fn in_band_encoder_output(
     Vec<rsmpeg::avcodec::AVPacket>,
     rsmpeg::avutil::AVRational,
 ) {
-    let mut input = crate::decode::open_input(&corpus(name)).expect(name);
+    let mut input = crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(
+        &corpus(name),
+    ))
+    .expect(name);
     let index = input
         .streams()
         .iter()
@@ -222,7 +230,9 @@ fn decoded_pictures(
     ),
 )> {
     use std::hash::{Hash, Hasher};
-    let mut input = crate::decode::open_input(path).expect("input");
+    let mut input =
+        crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(path))
+            .expect("input");
     let index = input
         .streams()
         .iter()
@@ -348,7 +358,9 @@ fn mux_in_band(name: &str, color: ColorMetadata, audio: usize, audio_first: usiz
 /// description, `color` in the sequence header, and every picture decoding as the source's does.
 fn assert_in_band_stream_is_repaired(name: &str, color: ColorMetadata) {
     let path = mux_in_band(name, color, 0, 0);
-    let mut input = crate::decode::open_input(&path).expect("output");
+    let mut input =
+        crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(&path))
+            .expect("output");
     let parameters = input.streams()[0].codecpar().clone();
     let hevc = parameters.codec_id == ffi::AV_CODEC_ID_HEVC;
     let codec = if hevc {
@@ -412,7 +424,10 @@ fn assert_in_band_stream_is_repaired(name: &str, color: ColorMetadata) {
 #[test]
 fn the_colour_filter_rewrites_a_global_header_streams_sample_description() {
     use alpha2_host_core::parameter_sets::{ParameterSetCodec, VideoSignal, sequence_facts};
-    let mut input = crate::decode::open_input(&corpus("h264-bt709-copy.mp4")).expect("input");
+    let mut input = crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(
+        &corpus("h264-bt709-copy.mp4"),
+    ))
+    .expect("input");
     let (parameters, time_base) = {
         let stream = &input.streams()[0];
         (stream.codecpar().clone(), stream.time_base)
@@ -451,7 +466,10 @@ fn the_colour_filter_rewrites_a_global_header_streams_sample_description() {
     }
     written += filter.flush().expect("flush").len();
     assert_eq!(written, read, "one packet out for each in");
-    let vp9 = crate::decode::open_input(&corpus("vp9.webm")).expect("vp9");
+    let vp9 = crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(&corpus(
+        "vp9.webm",
+    )))
+    .expect("vp9");
     let vp9 = vp9.streams()[0].codecpar().clone();
     assert!(
         crate::bitstream::EncodedVideoFilter::tagging(&vp9, BT601_FULL_SRGB, time_base)
@@ -485,7 +503,9 @@ fn audio_before_a_deferred_header_waits_and_is_interleaved() {
     );
     let reference = export_muxed_audio("deferred-audio-reference", 48_000, samples);
     let audio_packets = |path: &Path| {
-        let mut input = crate::decode::open_input(path).expect("input");
+        let mut input =
+            crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(path))
+                .expect("input");
         let index = input
             .streams()
             .iter()

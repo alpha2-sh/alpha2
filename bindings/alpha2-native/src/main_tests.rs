@@ -222,7 +222,7 @@ fn run_transcode(source: &str, output: &str, flags: &[&str]) -> Result<(), Strin
 }
 
 fn selected_video(path: &str) -> alpha2_media::StreamInfo {
-    probe(path)
+    probe(std::path::Path::new(path))
         .expect("probe")
         .selected_video_stream()
         .expect("video")
@@ -250,7 +250,7 @@ fn a_transcode_shows_its_pictures_as_the_source_does() {
 }
 
 fn frame_times(path: &str) -> Vec<i64> {
-    let mut decoder = NativeDecoder::open(path).expect("open");
+    let mut decoder = NativeDecoder::open(std::path::Path::new(path)).expect("open");
     let mut times = Vec::new();
     while let DecodeEvent::Video(frame) = decoder
         .decode_next(&CancelToken::default())
@@ -312,7 +312,7 @@ fn a_transcode_runs_at_a_rate_mpeg4_cannot_time_exactly() {
 fn a_variable_rate_transcode_keeps_one_frame_per_slot() {
     let output = scratch("vfr", "mp4");
     run_transcode("vfr-rising.mp4", &output, &[]).expect("transcode");
-    let mut decoder = NativeDecoder::open(&output).expect("output");
+    let mut decoder = NativeDecoder::open(std::path::Path::new(&output)).expect("output");
     let mut frames = 0;
     while let DecodeEvent::Video(_) = decoder
         .decode_next(&CancelToken::default())

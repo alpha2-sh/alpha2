@@ -7,16 +7,16 @@ What alpha2 treats as hostile, what it bounds, and what a deployment must contai
 | Party | Examples | Trusted with |
 | --- | --- | --- |
 | Operator | whoever starts `alpha2-host` (a service's start command, or an app through a Node or Python client), the page that loads the browser package, the app that links the mobile library | everything the process can do: its files, its network, its environment, its flags |
-| Request sender | the program writing protocol requests, a caller of a client's API | paths on the host's file system, inside what the operator's flags allow |
+| Request sender | the program writing protocol requests, a caller of a client's API | paths on the host's file system, and `https:` media URLs on the origins the operator lists, inside what the operator's flags allow |
 | Content | media files, project documents, compose specs and template data, fonts, SVG, PDF, Lottie, OpenEXR, LaTeX and animated images, caption files, runtime effects, plugins | nothing: alpha2 parses and renders it under the limits below |
 
-A project document names no file and no URL: sources are ids, and a request's `assets` and other maps say which file each id reads. That is the boundary every surface keeps. The rest of this page is what lies beside it.
+A project document names no file and no URL: sources are ids, and a request's `assets` and other maps say which file (or, in `assets` and `resources`, which `https:` URL) each id reads. That is the boundary every surface keeps. The rest of this page is what lies beside it.
 
 ## `alpha2-host`
 
 ### Paths are the request's
 
-Every path in a request is a path on the host's file system, opened with the host's rights: `assets`, `proxies`, `frames`, `resources`, `effectAssets`, `fonts`, `output` and each still's `output`, `renderCache.directory`, and a plugin's `manifest`. There is no root directory and no allow-list for these; the files a request supplies for a plugin's resource slots (`plugin.supplied`) are the exception, refused unless the operator names where they may lie (below). A request can read any file the host can read by naming it as media (the rendered output and the `conform` report show what it holds: whether it exists, its size, modification time, stream facts, and its SHA-256 when the project records one), and can replace any regular file the host can write with `overwrite`.
+Every path in a request is a path on the host's file system, opened with the host's rights: `assets`, `proxies`, `frames`, `resources`, `effectAssets`, `fonts`, `output` and each still's `output`, `renderCache.directory`, and a plugin's `manifest`. There is no root directory and no allow-list for these; the files a request supplies for a plugin's resource slots (`plugin.supplied`) are the exception, refused unless the operator names where they may lie (below). A value of `assets` or `resources` that starts with `https://` is a URL instead (below); `http://` there is refused, and every other path field refuses a URL. A request can read any file the host can read by naming it as media (the rendered output and the `conform` report show what it holds: whether it exists, its size, modification time, stream facts, and its SHA-256 when the project records one), and can replace any regular file the host can write with `overwrite`.
 
 A compose spec or its template data chooses media and caption paths, and the clients send a compiled spec's `assets` to the host as they are. A service that takes paths, specs or template data from someone it does not trust checks every path against its own rules before it sends the request. The [MCP server](#the-mcp-server) does this for an agent.
 
@@ -24,14 +24,16 @@ Outputs are written beside their path and moved into place when complete; an exi
 
 ### Network and native code
 
-The host opens no listening socket; it talks to its parent over standard input and output. It reaches the network only to fetch [plugins](host-protocol.md#plugins), and loads code other than its own and FFmpeg's only as a native plugin (in a worker process of its own by default) or as a library its environment names (below). The operator decides these when it starts `serve`, and no request can widen them:
+The host opens no listening socket; it talks to its parent over standard input and output. It reaches the network only to fetch [plugins](host-protocol.md#plugins) and to read media from the `https:` origins `--media-origins` lists (none by default, [Remote media](host-protocol.md#remote-media)), and loads code other than its own and FFmpeg's only as a native plugin (in a worker process of its own by default) or as a library its environment names (below). The operator decides these when it starts `serve`, and no request can widen them:
 
 - `--plugins off|wasm|native` (default `wasm`). A request's `allow_native` takes effect only under `native`; a native artifact then runs with the host's rights, in a worker process per run (`--plugin-isolation process`, the default) or inside the host process (`--plugin-isolation in-process`).
 - `--plugin-origins none|<https origins>` (default: a manifest from any `https:` origin, with its files and redirects on that origin).
 - `--plugin-root any|none|<dir>` (default `any`) for manifests given as local paths.
+- `--media-origins none|<https origins>` (default `none`, on `serve`, `export` and `conform`) for media URLs in `assets` and `resources`: under `none` every URL is refused (`MEDIA_REFUSED`) before anything is contacted; under a list a URL, and every redirect it follows, must be on a listed origin, checked before it is contacted.
+- `--media-private-addresses refuse|allow` (default `refuse`): under `refuse` the host connects for media to no address that is not global unicast (loopback, private, shared, link-local, which includes cloud metadata endpoints, unique-local, multicast, broadcast and documentation ranges, and IPv4-mapped forms of these), checked on the addresses each connection uses. Through `HTTPS_PROXY` the host connects to the proxy and the rule does not apply to the origin's address.
 - `--plugin-resource-root none|any|<dir>` (default `none`) for the files a request supplies for a plugin's resource slots: under `none` no request fills a slot; under a directory every supplied file, links resolved, must lie under it. With `any`, a sender can hand a wasm plugin of its own choice the bytes of any file the host can read, and the plugin's data carries them back; it is for an operator who trusts its senders with every path.
 
-With the defaults, a request sender can make the host fetch an `https:` URL and learn whether it answered, and learn the SHA-256 of a local file of at most 1 MiB by naming it as a manifest. A host that serves senders it does not trust sets `--plugins off`, or `--plugin-origins` and `--plugin-root`.
+With media origins listed, a request sender can make the host fetch any path on a listed origin and learn whether it answers, and its stream facts. With the defaults, a request sender can make the host fetch an `https:` URL and learn whether it answered, and learn the SHA-256 of a local file of at most 1 MiB by naming it as a manifest. A host that serves senders it does not trust sets `--plugins off`, or `--plugin-origins` and `--plugin-root`.
 
 A wasm plugin cannot open a file, a connection or read a clock. It sees the run's frames or audio, its `params`, the resources its manifest pins and the files the request supplies for its slots within `--plugin-resource-root`; its memory and tables stay under their limits, what it emits is refused at the data limits of its outputs, and each call ends at its deadline. It can use the CPU for as long as its calls may run and return any data the limits allow, so its output is as trustworthy as the plugin.
 
@@ -43,14 +45,14 @@ The host runs one request at a time by default (`--max-running 1`) and keeps ser
 
 - Requests from senders who must not see each other's data go to separate hosts: one host per tenant.
 - Outside input goes to a disposable process: `alpha2-host serve --max-running 1 --max-requests 1`, so each request gets a fresh one. For PDF pages and for FFmpeg's decoders this is the only containment there is.
-- The Node and Python clients keep hosts for many requests and pass only the plugin flags. A service that wants a process per request or per tenant makes a client per tenant and closes it (`close()`) after each job, or runs `serve` itself.
+- The Node and Python clients keep hosts for many requests and pass only the plugin and media flags. A service that wants a process per request or per tenant makes a client per tenant and closes it (`close()`) after each job, or runs `serve` itself.
 
 ### Run it contained
 
 Decoders, document parsers, font shaping and the GPU driver run in the host process with its rights. For input it does not trust:
 
 - Run the host as a user of its own, or in a container, with the inputs read-only and one writable directory for outputs (plus the render cache directory and `ALPHA2_PLUGIN_CACHE` where they are used, and the temporary directory). Keep both caches where only that user can write: whoever can write there can plant entries the host reads.
-- Give it no network unless it fetches plugins, and then only the origins `--plugin-origins` lists.
+- Give it no network unless it fetches plugins or reads remote media, and then only the origins `--plugin-origins` and `--media-origins` list.
 - Set a memory limit on the process (a cgroup on Linux, a job object on Windows). The host reads it: it sizes its budgets from the memory it may use, stops an export that runs out, and drains when its footprint passes `--max-memory-share`. An address-space limit (`ulimit -v`) turns exhaustion into an abort instead, which is still an abort.
 - Keep a deadline of your own for every request and cancel it then (`cancel`, or a client's `signal` or `cancel`). The host has no wall-clock limit per request: it answers a request whose thread stays in one step for three stall limits (120 seconds by default) and retires, but a step that keeps making progress runs as long as it takes.
 - The GPU path needs the device in the container: on Linux the DRM render node (`/dev/dri/renderD*`) for Mesa's Vulkan and GL drivers, or the NVIDIA container runtime's device and driver libraries; hardware decoding and encoding use the same devices. Without a GPU, `ALPHA2_RENDERER=cpu` (`--renderer cpu` for `export`) renders on the CPU and opens no graphics driver.
@@ -58,7 +60,7 @@ Decoders, document parsers, font shaping and the GPU driver run in the host proc
 
 ### Media decoders
 
-A source opens only with the containers alpha2 reads and decodes only with a fixed list of FFmpeg decoders (`capabilities` reports it as `decode.sourceDecoders`; see [`docs/native.md`](native.md#which-decoders-a-source-may-use)); a video of another codec conforms as `unsupported` and an audio track of another codec is left out. FFmpeg opens files only through its `file` protocol and the listed demuxers, none of which opens another file. `alpha2-host --allow-every-decoder` lifts the decoder list for the whole process; no request can. FFmpeg's parsers still run by codec id inside the demuxer, whatever the list says, and every decoder runs in C on the file's bytes.
+A source opens only with the containers alpha2 reads and decodes only with a fixed list of FFmpeg decoders (`capabilities` reports it as `decode.sourceDecoders`; see [`docs/native.md`](native.md#which-decoders-a-source-may-use)); a video of another codec conforms as `unsupported` and an audio track of another codec is left out. FFmpeg opens files only through its `file` protocol and the listed demuxers, none of which opens another file; a remote source reaches FFmpeg only through the host's own range reader, and every other open FFmpeg would make from it is refused. `alpha2-host --allow-every-decoder` lifts the decoder list for the whole process; no request can. FFmpeg's parsers still run by codec id inside the demuxer, whatever the list says, and every decoder runs in C on the file's bytes.
 
 ### What is bounded
 

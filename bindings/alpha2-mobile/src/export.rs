@@ -583,7 +583,7 @@ pub(crate) fn files_of(
     ProviderFiles {
         originals: assets
             .iter()
-            .map(|(id, path)| (id.clone(), PathBuf::from(path)))
+            .map(|(id, path)| (id.clone(), PathBuf::from(path).into()))
             .collect(),
         frames: frames
             .iter()
@@ -601,7 +601,7 @@ pub(crate) fn files_of(
             .map(|(id, files)| {
                 let files = files
                     .iter()
-                    .map(|(locator, path)| (locator.clone(), PathBuf::from(path)))
+                    .map(|(locator, path)| (locator.clone(), PathBuf::from(path).into()))
                     .collect();
                 (id.clone(), files)
             })

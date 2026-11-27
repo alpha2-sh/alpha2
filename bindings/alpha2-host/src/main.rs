@@ -66,8 +66,11 @@ mod heartbeat;
 mod host;
 mod lifecycle;
 mod media;
+mod media_fetch;
+mod media_policy;
 mod memory;
 mod metrics;
+mod origin;
 mod packet_copy;
 mod paths;
 mod plugin_fetch;
@@ -76,6 +79,7 @@ mod protocol;
 mod providers;
 mod recovery;
 mod registrations;
+mod remote_media;
 mod render_cache;
 mod renderer_backend;
 mod request_inputs;
@@ -284,7 +288,10 @@ fn exit_unflushed(code: u8) -> ! {
 fn run(host: &mut Option<Host>) -> Result<(), HostError> {
     #[cfg(windows)]
     configure_dx12_compiler();
-    let mut args = decoder_policy(utf8_arguments(env::args_os().skip(1))?).into_iter();
+    let mut arguments = decoder_policy(utf8_arguments(env::args_os().skip(1))?);
+    crate::media_policy::take_flags(&mut arguments)
+        .map_err(|error| HostError::invalid_input(format!("{error}\n{}", usage())))?;
+    let mut args = arguments.into_iter();
     match args.next().as_deref() {
         Some("serve") => {
             let options = ServeOptions::from_args(args)
@@ -1883,6 +1890,7 @@ impl RequestWork {
                     })
                     .map(|mut result| {
                         result["plugins"] = extract.plugins.capabilities_json();
+                        result["remoteMedia"] = crate::media_policy::current().capabilities_json();
                         result
                     }),
                 None => Err(missing()),
@@ -2433,6 +2441,15 @@ fn gpu_call(error: &(dyn std::error::Error + 'static)) -> Option<GpuCall> {
 /// failure-class evidence ([`failure::evidence_tag`]) for a fault with no code of its own.
 fn error_message(error: impl std::error::Error + 'static) -> String {
     use alpha2_media::GpuFault;
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    while let Some(current) = cause {
+        if let Some(alpha2_media::DecodeError::Source(failure)) =
+            current.downcast_ref::<alpha2_media::DecodeError>()
+        {
+            return protocol::source_failure(failure);
+        }
+        cause = current.source();
+    }
     match gpu_call(&error) {
         Some(GpuCall::Fault(GpuFault::Timeout)) => {
             return format!("{}{}", protocol::gpu_timeout_tag(), error);

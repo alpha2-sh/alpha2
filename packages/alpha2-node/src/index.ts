@@ -150,6 +150,63 @@ export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
    * wasm plugins only, from a local manifest or one on any `https:` origin.
    */
   readonly plugins?: PluginHostPolicy;
+  /**
+   * Where this client's hosts may read `https:` media URLs from, passed to each as `serve` flags.
+   * Unset passes no flag: no URL is read.
+   */
+  readonly remoteMedia?: RemoteMediaPolicy;
+}
+
+/** The remote media policy of a client's hosts, as the host protocol's Remote media describes. */
+export interface RemoteMediaPolicy {
+  /**
+   * `"none"` (the host's default) reads no media URL; a list of `https://host[:port]` origins
+   * allows media URLs, and redirects, only there.
+   */
+  readonly origins?: "none" | readonly string[];
+  /**
+   * `refuse` (the host's default) connects to no address that is not global unicast (loopback,
+   * private, link-local and the like); `allow` connects to any.
+   */
+  readonly privateAddresses?: "refuse" | "allow";
+}
+
+function remoteMediaFlags(policy: RemoteMediaPolicy | undefined): string[] {
+  if (policy === undefined) return [];
+  const invalid = (message: string) =>
+    new Alpha2HostError("INVALID_INPUT", `remoteMedia.${message}`);
+  if (typeof policy !== "object" || policy === null)
+    throw invalid("must be an object");
+  const flags: string[] = [];
+  const { origins, privateAddresses } = policy;
+  if (origins !== undefined) {
+    const list = originList(origins);
+    if (list === undefined)
+      throw invalid(
+        'origins must be "none" or a non-empty list of https:// origins',
+      );
+    flags.push("--media-origins", list);
+  }
+  if (privateAddresses !== undefined) {
+    if (privateAddresses !== "refuse" && privateAddresses !== "allow")
+      throw invalid("privateAddresses must be refuse or allow");
+    flags.push("--media-private-addresses", privateAddresses);
+  }
+  return flags;
+}
+
+function originList(origins: unknown): string | undefined {
+  if (origins === "none") return "none";
+  return Array.isArray(origins) &&
+    origins.length > 0 &&
+    origins.every(
+      (origin) =>
+        typeof origin === "string" &&
+        origin.startsWith("https://") &&
+        !origin.includes(","),
+    )
+    ? origins.join(",")
+    : undefined;
 }
 
 /** The plugin policy of a client's hosts, as the host protocol's Plugins section describes. */
@@ -203,19 +260,7 @@ function pluginFlags(
     flags.push("--plugins", mode);
   }
   if (origins !== undefined) {
-    const list =
-      origins === "none"
-        ? "none"
-        : Array.isArray(origins) &&
-            origins.length > 0 &&
-            origins.every(
-              (origin) =>
-                typeof origin === "string" &&
-                origin.startsWith("https://") &&
-                !origin.includes(","),
-            )
-          ? origins.join(",")
-          : undefined;
+    const list = originList(origins);
     if (list === undefined)
       throw invalid(
         'origins must be "none" or a non-empty list of https:// origins',
@@ -788,8 +833,10 @@ export interface ProxyFile {
 export interface ExportProjectRequest {
   readonly project: Project;
   /**
-   * A file path per source id. Missing, offline or mismatched media is refused with an
-   * {@link Alpha2ConformError} before rendering.
+   * A file path or an `https:` URL per source id. Missing, offline or mismatched media is refused
+   * with an {@link Alpha2ConformError} before rendering. A URL (and an `http:` one, which the host
+   * refuses) is sent unchanged; the host reads it only from origins its `remoteMedia.origins`
+   * lists. A relative path is resolved against the working directory.
    */
   readonly assets: Readonly<Record<string, string>>;
   /** Proxies per source id, in order of preference. */
@@ -798,8 +845,9 @@ export interface ExportProjectRequest {
   readonly frames?: Readonly<Record<string, readonly (string | null)[]>>;
   /**
    * External images referenced by SVG or Lottie sources, per source id and then per locator as
-   * written (`{ label: { "art/badge.png": "/media/badge.png" } }`). Unlisted locators report
-   * `missing_image`. Entries for other sources are `INVALID_INPUT`.
+   * written (`{ label: { "art/badge.png": "/media/badge.png" } }`), each a path or an `https:` URL
+   * as in `assets`. Unlisted locators report `missing_image`. Entries for other sources are
+   * `INVALID_INPUT`.
    */
   readonly resources?: Readonly<
     Record<string, Readonly<Record<string, string>>>
@@ -1168,6 +1216,15 @@ export interface HostCapabilities {
     readonly slots: boolean;
     readonly isolation: "process" | "in-process";
   };
+  /**
+   * What the host's remote media policy allows (the client's `remoteMedia` option): whether it
+   * reads `https:` media URLs from listed origins (`--media-origins`) and whether it connects to
+   * addresses that are not global unicast (`--media-private-addresses`).
+   */
+  readonly remoteMedia: {
+    readonly origins: "none" | "listed";
+    readonly privateAddresses: "refuse" | "allow";
+  };
   readonly [diagnostic: string]: unknown;
 }
 
@@ -1508,10 +1565,10 @@ export class Alpha2NodeClient {
     }
     checkVideoDecode("videoDecode", options.videoDecode);
     checkRenderer("renderer", options.renderer);
-    const serveFlags = pluginFlags(
-      options.plugins,
-      options.cwd ?? process.cwd(),
-    );
+    const serveFlags = [
+      ...pluginFlags(options.plugins, options.cwd ?? process.cwd()),
+      ...remoteMediaFlags(options.remoteMedia),
+    ];
     this.#pool = new HostPool(
       resolveHostBinary(options),
       concurrency,
@@ -1623,7 +1680,7 @@ export class Alpha2NodeClient {
         "conform",
         {
           project: request.project,
-          assets: pathRecord(request.assets),
+          assets: mediaRecord(request.assets),
           proxies: proxiesPayload(request.proxies),
           frames: framesPayload(request.frames),
           purpose: request.purpose ?? "export_original",
@@ -2263,13 +2320,13 @@ function validateRenderInputs(
 function renderInputsPayload(request: RenderInputs): Record<string, unknown> {
   return {
     project: request.project,
-    assets: pathRecord(request.assets),
+    assets: mediaRecord(request.assets),
     proxies: proxiesPayload(request.proxies),
     frames: framesPayload(request.frames),
     resources: Object.fromEntries(
       Object.entries(request.resources ?? {}).map(([id, files]) => [
         id,
-        pathRecord(files),
+        mediaRecord(files),
       ]),
     ),
     media: request.media ?? "original",
@@ -2294,6 +2351,19 @@ function absolutePath(path: string): string {
   if (isAbsolute(path)) return path;
   const cwd = process.cwd();
   return cwd.endsWith("/") ? cwd + path : `${cwd}/${path}`;
+}
+
+const MEDIA_URL = /^https?:\/\//i;
+
+function mediaRecord(
+  record: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(record ?? {}).map(([id, location]) => [
+      id,
+      MEDIA_URL.test(location) ? location : absolutePath(location),
+    ]),
+  );
 }
 
 function pathRecord(

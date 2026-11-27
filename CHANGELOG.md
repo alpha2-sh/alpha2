@@ -83,6 +83,41 @@ All notable changes to this project are documented in this file.
   (`ExtractProgress`, now with `stage`, `covered` and `span`). In Rust, `PassProgress` has `span`
   and `covered` and is `#[non_exhaustive]`, and `ExtractSession::stage` and `progress_json` are
   new.
+- `alpha2-host serve`, `export` and `conform` take `--media-origins none|<https origins>` (default
+  `none`) and `--media-private-addresses refuse|allow` (default `refuse`), the origins remote media
+  may be read from and whether an address that is not global unicast may be connected to; no
+  request can widen them. `capabilities` reports them as `remoteMedia`. New protocol codes
+  `MEDIA_REFUSED`, `MEDIA_TLS_FAILED`, `MEDIA_UNREACHABLE`, `MEDIA_BUSY` (with `retryAfterMs`),
+  `MEDIA_RANGE_UNSUPPORTED`, `MEDIA_REJECTED` and `MEDIA_CHANGED`, each with `details.source`,
+  `details.url` (without user info, query or fragment) and `details.status` when the server
+  answered.
+- `alpha2-host` reads an `https:` URL in a request's `assets` or `resources` by byte range from an
+  origin `--media-origins` lists, without downloading the file first: signed object-store URLs
+  work as they are. The server must answer ranges with a numeric total and name a strong `ETag` or
+  a `Last-Modified`, which every later range sends back, so a file that changes during a request
+  fails it (`MEDIA_CHANGED`) instead of mixing versions. Redirects are followed only to listed
+  origins, a `404` or `410` at the first request conforms `offline`, transient failures are tried
+  again, and a read with no byte for 30 seconds fails (`MEDIA_UNREACHABLE`); such a wait is never
+  taken for a stalled decoder. New request fields `memory.remoteCacheBytes` (the per-request block
+  cache, 64 MiB by default) and `remoteContentHash: "skip" | "verify"` (whether a remote original
+  whose project records a hash is read whole and hashed; `--remote-content-hash` on the command
+  line), and `performance` counters `remoteBytes`, `remoteRequests`, `remoteRetries` and
+  `remoteReadWaitMs`. The render cache keys a remote source by origin, path, validator and
+  length, so a new signature of the same object is a hit. A `conform` reading a remote source can
+  be cancelled.
+- `@alpha2-sh/node` takes `remoteMedia: { origins, privateAddresses }` and the Python client
+  `remote_media={"origins": [...], "private_addresses": ...}`, passed as `--media-origins` and
+  `--media-private-addresses` to every host they start. `python -m alpha2 mcp` refuses a media URL
+  a tool argument or a spec names as outside its roots, before any host call.
+- **Breaking:** `alpha2-host` reads a value of a request's `assets` or `resources` that starts with
+  `https://` as a URL, and refuses one that starts with `http://` (`INVALID_REQUEST`, "only https:
+  media URLs are read"). A URL there is absolute, at most 8192 bytes, with an ASCII host and no user
+  info; its fragment is dropped. A URL in `proxies`, `frames`, `effectAssets`, `fonts`, an output or
+  `renderCache.directory` is `INVALID_REQUEST`. Under `--media-origins none` every media URL is
+  refused with `MEDIA_REFUSED` before anything is contacted.
+- **Breaking:** `@alpha2-sh/node` and the Python client send a value of `assets` or `resources`
+  that starts with `https://` or `http://` (any case) unchanged, where they made it a path under
+  the working directory; every other value is still resolved against it.
 
 ### Fixed
 

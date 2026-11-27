@@ -3,7 +3,6 @@ use alpha2_media::SourceId;
 use alpha2_native::{DecodeDiagnostic, DecodeDiagnosticCounts, DecodePolicy};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
@@ -143,11 +142,11 @@ macro_rules! configure {
         pub fn $name(
             mut decoder: $ty,
             source: &SourceId,
-            path: &Path,
+            path: &alpha2_host_core::remote::SourceLocation,
             decoding: &Arc<ExportDecoding>,
         ) -> $ty {
             decoder.set_decode_policy(decoding.policy);
-            let path = path.display().to_string();
+            let path = path.shown();
             let source = source.as_str().to_owned();
             let decoding = Arc::clone(decoding);
             decoder.set_decode_reporter(move |diagnostic| {

@@ -303,10 +303,18 @@ pub fn classify_failure(
         | "PLUGIN_LOAD_FAILED"
         | "PLUGIN_TRAPPED"
         | "PLUGIN_RESOURCE_INVALID"
+        | "MEDIA_REFUSED"
+        | "MEDIA_TLS_FAILED"
+        | "MEDIA_RANGE_UNSUPPORTED"
+        | "MEDIA_REJECTED"
+        | "MEDIA_CHANGED"
         // Another export is writing the same output; retrying meets it again until that one ends.
         | "OUTPUT_IN_USE" => return class("INVALID_INPUT", "unknown"),
         // A slow client, or a plugin's server, may answer in time on another attempt.
-        "EXTRACTOR_TIMEOUT" | "PLUGIN_FETCH_FAILED" => return class("UNKNOWN", "unknown"),
+        "EXTRACTOR_TIMEOUT" | "PLUGIN_FETCH_FAILED" | "MEDIA_UNREACHABLE" => {
+            return class("UNKNOWN", "unknown");
+        }
+        "MEDIA_BUSY" => return class("RESOURCE_BUSY", "unknown"),
         // A defect (a caught panic or an internal error), which a fresh host may not meet again.
         "INTERNAL" => return class("DEFECT", "unknown"),
         "GPU_INIT_FAILED" if native == Some(NO_HARDWARE_ADAPTER) => {

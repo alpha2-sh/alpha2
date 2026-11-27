@@ -263,6 +263,11 @@ with alpha2.HostClient() as client:
   (where supplied files may lie: `"none"` by default, `"any"` or a directory). Only under
   `"mode": "native"` does a request's `"allow_native": True` let a native artifact run, with the
   host's rights.
+- An `https:` URL in `assets` or `resources` is read by range by the host, which must be allowed to:
+  `HostClient(remote_media={"origins": ["https://media.example"]})` passes `--media-origins` to
+  every host it starts (`"none"` by default), and `"private_addresses": "allow"` lets it reach a
+  loopback or private address. Such values, and `http:` ones the host refuses, are sent unchanged;
+  every other value is a path resolved against the working directory.
 
 ## Apply data with edit operations
 

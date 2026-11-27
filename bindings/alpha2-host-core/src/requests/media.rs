@@ -98,13 +98,16 @@ pub struct ConformRequest {
     pub project: ProjectJson,
     /// Originals by source ID.
     #[serde(default)]
-    pub assets: HashMap<String, PathBuf>,
+    pub assets: HashMap<String, super::MediaLocation>,
     /// Proxies by source ID.
     #[serde(default)]
     pub proxies: HashMap<String, Vec<ProxyRequest>>,
     /// Image sequence frames by source ID, in project order; `null` where the sequence has a gap.
     #[serde(default)]
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
+    /// Whether a remote original whose project records a content hash is read whole and hashed.
+    #[serde(rename = "remoteContentHash", default)]
+    pub remote_content_hash: super::RemoteContentHash,
     /// What the media is selected for; the export's originals when absent.
     #[serde(default = "export_original")]
     pub purpose: MediaPurpose,

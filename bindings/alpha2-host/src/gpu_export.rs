@@ -4,7 +4,6 @@
 //! [`alpha2_native::HardwareEncodeSession`], so a new backend plugs in below this file.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::config::{ResolvedAudioRate, configured_encode_channel_depth};
@@ -280,7 +279,7 @@ impl Host {
         &self,
         project: &alpha2_model::Project,
         snapshot: &EngineProject,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         range: TimeRange,
         rate: FrameRate,
         has_audio: bool,

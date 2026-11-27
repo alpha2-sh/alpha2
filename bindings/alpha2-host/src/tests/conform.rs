@@ -30,7 +30,7 @@ fn media_is_resolved_hashed_and_selected_before_anything_renders() {
         .expect("video stream");
     assert_eq!((video.width, video.height), (96, 64));
     assert_eq!(fingerprint.duration_ticks, Some(120_000));
-    assert_eq!(resolved.paths.get("video"), Some(&clip));
+    assert_eq!(resolved.paths.get("video"), Some(&clip.clone().into()));
 
     let unhashed = resolve(
         &conform_project(&json!({})),
@@ -82,7 +82,7 @@ fn media_is_resolved_hashed_and_selected_before_anything_renders() {
             id: "video#proxy0".into()
         }
     );
-    assert_eq!(preview.paths.get("video"), Some(&clip));
+    assert_eq!(preview.paths.get("video"), Some(&clip.clone().into()));
     let original = resolve(
         &recorded,
         &[("video", gone.clone())],

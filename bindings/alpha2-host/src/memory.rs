@@ -135,6 +135,7 @@ pub struct MemoryPolicy {
     pub provider_sources: Budget,
     /// By estimate ([`crate::config::decoder_session_bytes`]).
     pub decoder_sessions: Budget,
+    pub remote_cache: Budget,
     pub scale: f64,
     pub machine: MachineMemory,
 }
@@ -178,6 +179,15 @@ impl MemoryPolicy {
                 return Err(format!("memory.{field} must be a positive byte count"));
             }
         }
+        let least = alpha2_host_core::remote::MIN_CACHE_BYTES;
+        if request
+            .remote_cache_bytes
+            .is_some_and(|bytes| bytes < least)
+        {
+            return Err(format!(
+                "memory.remoteCacheBytes must be at least {least} bytes"
+            ));
+        }
         let scale = request.scale.unwrap_or(1.0);
         if !(scale > 0.0 && scale <= 1.0) {
             return Err("memory.scale must be above 0 and at most 1".to_owned());
@@ -212,6 +222,11 @@ impl MemoryPolicy {
                 request.decoder_session_bytes,
                 "ALPHA2_DECODER_SESSION_BYTES",
                 DEFAULT_DECODER_SESSION_BYTES,
+            ),
+            remote_cache: Budget::resolve(
+                request.remote_cache_bytes,
+                "ALPHA2_REMOTE_CACHE_BYTES",
+                alpha2_host_core::remote::DEFAULT_CACHE_BYTES,
             ),
             scale,
             machine: MachineMemory {
@@ -260,10 +275,10 @@ impl MemoryPolicy {
             return self;
         }
         let factor = half as f64 / defaults as f64;
-        for budget in self.budgets_mut() {
+        for (budget, floor) in self.budgets_mut().into_iter().zip(Self::MACHINE_FLOORS) {
             if budget.source == BudgetSource::Default {
                 budget.bytes = ((budget.bytes as f64 * factor).floor() as u64)
-                    .max(MACHINE_BUDGET_FLOOR)
+                    .max(floor)
                     .min(budget.bytes);
                 budget.source = BudgetSource::Machine;
             }
@@ -271,7 +286,17 @@ impl MemoryPolicy {
         self
     }
 
-    fn budgets_mut(&mut self) -> [&mut Budget; 6] {
+    const MACHINE_FLOORS: [u64; 7] = [
+        MACHINE_BUDGET_FLOOR,
+        MACHINE_BUDGET_FLOOR,
+        MACHINE_BUDGET_FLOOR,
+        MACHINE_BUDGET_FLOOR,
+        MACHINE_BUDGET_FLOOR,
+        MACHINE_BUDGET_FLOOR,
+        alpha2_host_core::remote::MIN_CACHE_BYTES,
+    ];
+
+    fn budgets_mut(&mut self) -> [&mut Budget; 7] {
         [
             &mut self.in_flight,
             &mut self.decode_queue,
@@ -279,7 +304,15 @@ impl MemoryPolicy {
             &mut self.audio_window,
             &mut self.provider_sources,
             &mut self.decoder_sessions,
+            &mut self.remote_cache,
         ]
+    }
+
+    /// The block cache of a request's remote sources, never below the least one reads with.
+    pub fn remote_cache_bytes(&self) -> u64 {
+        self.remote_cache
+            .bytes
+            .max(alpha2_host_core::remote::MIN_CACHE_BYTES)
     }
 
     #[allow(
@@ -305,6 +338,7 @@ impl MemoryPolicy {
             "audioWindowBytes": self.audio_window.to_json(),
             "providerSourceBytes": self.provider_sources.to_json(),
             "decoderSessionBytes": self.decoder_sessions.to_json(),
+            "remoteCacheBytes": self.remote_cache.to_json(),
             "scale": self.scale,
             "machine": {
                 "effective": self.machine.effective,
@@ -756,6 +790,29 @@ mod tests {
     }
 
     #[test]
+    fn a_remote_cache_is_at_least_its_least_block_budget() {
+        let least = alpha2_host_core::remote::MIN_CACHE_BYTES;
+        let refused = MemoryPolicy::resolve(MemoryRequest {
+            remote_cache_bytes: Some(least - 1),
+            ..MemoryRequest::default()
+        })
+        .expect_err("below the least");
+        assert!(refused.contains("remoteCacheBytes"), "{refused}");
+        let policy = MemoryPolicy::resolve(MemoryRequest {
+            remote_cache_bytes: Some(least),
+            scale: Some(0.5),
+            ..MemoryRequest::default()
+        })
+        .expect("the least");
+        assert_eq!(
+            policy.remote_cache_bytes(),
+            least,
+            "scale never takes it below"
+        );
+        assert_eq!(policy.to_json()["remoteCacheBytes"]["source"], "request");
+    }
+
+    #[test]
     fn a_requested_budget_wins_and_says_so() {
         let policy = MemoryPolicy::resolve(MemoryRequest {
             in_flight_bytes: Some(64 << 20),
@@ -902,13 +959,14 @@ mod tests {
             policy.audio_window,
             policy.provider_sources,
             policy.decoder_sessions,
+            policy.remote_cache,
         ];
         let total = budgets.iter().map(|budget| budget.bytes).sum::<u64>();
         assert!(total <= 1 << 29, "{total}");
-        assert!(total > (1 << 29) - 6, "{total}");
-        for budget in budgets {
+        assert!(total > (1 << 29) - 7, "{total}");
+        for (budget, floor) in budgets.into_iter().zip(MemoryPolicy::MACHINE_FLOORS) {
             assert_eq!(budget.source, BudgetSource::Machine);
-            assert!(budget.bytes >= MACHINE_BUDGET_FLOOR);
+            assert!(budget.bytes >= floor);
             assert!(budget.bytes < budget.unscaled);
         }
         #[allow(clippy::cast_precision_loss)] // Budgets far below 2^52 bytes.

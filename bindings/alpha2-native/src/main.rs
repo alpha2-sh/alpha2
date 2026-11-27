@@ -67,7 +67,8 @@ struct Decoding {
 impl Decoding {
     /// Opens `path`'s video under this policy, counting what it reports.
     fn video(&self, path: &str) -> Result<NativeDecoder, String> {
-        let mut decoder = NativeDecoder::open(path).map_err(|error| format!("{error:?}"))?;
+        let mut decoder = NativeDecoder::open(std::path::Path::new(path))
+            .map_err(|error| format!("{error:?}"))?;
         decoder.set_decode_policy(self.policy);
         let counts = std::sync::Arc::clone(&self.counts);
         decoder.set_decode_reporter(move |diagnostic| {
@@ -80,8 +81,8 @@ impl Decoding {
 
     /// Opens `path`'s audio at `rate` under this policy, counting what it reports.
     fn audio(&self, path: &str, rate: u32) -> Result<NativeAudioDecoder, String> {
-        let mut decoder =
-            NativeAudioDecoder::open(path, rate).map_err(|error| format!("{error:?}"))?;
+        let mut decoder = NativeAudioDecoder::open(std::path::Path::new(path), rate)
+            .map_err(|error| format!("{error:?}"))?;
         decoder.set_decode_policy(self.policy);
         let counts = std::sync::Arc::clone(&self.counts);
         decoder.set_decode_reporter(move |diagnostic| {
@@ -169,13 +170,14 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
                 .map_err(|_| "frame limit must be a positive integer".to_owned())?
                 .unwrap_or(120);
             ensure_no_more(args)?;
-            let result =
-                probe_vulkan_decode(path, frame_limit).map_err(|error| format!("{error:?}"))?;
+            let result = probe_vulkan_decode(std::path::Path::new(&path), frame_limit)
+                .map_err(|error| format!("{error:?}"))?;
             out!("{result:#?}")?;
         }
         "probe" => {
             ensure_no_more(args)?;
-            let result = probe(path).map_err(|error| format!("{error:?}"))?;
+            let result =
+                probe(std::path::Path::new(&path)).map_err(|error| format!("{error:?}"))?;
             out!("format: {}", result.format)?;
             out!(
                 "duration_ticks: {}",
@@ -375,7 +377,7 @@ fn waveform_json(
 ) -> Result<String, String> {
     use std::fmt::Write as _;
 
-    let probed = probe(path).map_err(|error| format!("{error:?}"))?;
+    let probed = probe(std::path::Path::new(path)).map_err(|error| format!("{error:?}"))?;
     let stream = probed
         .streams
         .iter()
@@ -715,7 +717,7 @@ fn transcode(
             _ => return Err(usage()),
         }
     }
-    let probed = probe(path).map_err(|error| format!("{error:?}"))?;
+    let probed = probe(std::path::Path::new(path)).map_err(|error| format!("{error:?}"))?;
     let stream = probed
         .selected_video_stream()
         .ok_or_else(|| "source has no video stream".to_owned())?
@@ -906,7 +908,7 @@ fn thumbnail(
         _ => return Err(usage()),
     };
     ensure_no_more(args)?;
-    let probed = probe(path).map_err(|error| format!("{error:?}"))?;
+    let probed = probe(std::path::Path::new(path)).map_err(|error| format!("{error:?}"))?;
     let mut decoder = decoding.video(path)?;
     let cancel = CancelToken::default();
     let span = if at.is_none() {

@@ -62,7 +62,7 @@ fn in_process(table: &Value, case: &Value) -> Value {
     let mut extractor = alpha2_engine::extract::fixtures::Digest::new(descriptor.input);
     let renderer = alpha2_render::CpuRenderer::new(1);
     let path = assets(case)["v"].as_str().expect("path").to_owned();
-    let decoder = alpha2_native::NativeDecoder::open(path).expect("decoder");
+    let decoder = alpha2_native::NativeDecoder::open(PathBuf::from(path)).expect("decoder");
     let reader = alpha2_host_core::extract::VideoReader::new(
         decoder,
         SourceId::new("v").expect("id"),

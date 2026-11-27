@@ -295,7 +295,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
         host.input_policy = policy;
         let result = host.export(
             &project.to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             0,

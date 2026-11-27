@@ -7,3 +7,5 @@ disallowed-methods = [
 ]
 
 doc-valid-idents = ["OpenEXR", "ACEScg", ".."]
+
+ignore-interior-mutability = ["alpha2_host_core::remote::SourceLocation"]

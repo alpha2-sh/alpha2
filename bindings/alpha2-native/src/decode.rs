@@ -1,9 +1,9 @@
 //! Container probing and the native audio/video decoders.
 
+use alpha2_host_core::remote::SourceLocation;
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::io::Read;
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::recovery::{
@@ -23,7 +23,9 @@ use crate::convert::{
     feature = "hwdecode"
 ))]
 use crate::video_frame::{HardwareDecoderSpec, HardwareOpenError};
-use alpha2_ffmpeg_bridge::{DecodedFrame, DemuxInput, OpenInputError};
+use alpha2_ffmpeg_bridge::{
+    CustomInput, DecodedFrame, DemuxInput, InputLocation, InputReader, OpenInputError,
+};
 use alpha2_media::{
     AudioBlock, CancelToken, ColorMetadata, DecodeError, DecodeEvent, DecodeRequest, DecodeResult,
     DecodedVideoFrame, Decoder, MAX_AUDIO_CHANNELS, Orientation, SampleAspectRatio, SourceAlpha,
@@ -109,9 +111,10 @@ impl ProbeResult {
 ///
 /// # Errors
 /// Returns a platform-neutral adapter error for invalid paths or demux failures.
-pub fn probe(path: impl AsRef<Path>) -> Result<ProbeResult, DecodeError> {
-    let input = open_input(path.as_ref())?;
-    probe_context(&input, path.as_ref())
+pub fn probe(source: impl Into<SourceLocation>) -> Result<ProbeResult, DecodeError> {
+    let source = source.into();
+    let input = open_input(&source)?;
+    probe_context(&input, &source)
 }
 
 /// Visits each packet time (seconds) of `AVStream` index `stream` in file order until `visit`
@@ -120,18 +123,21 @@ pub fn probe(path: impl AsRef<Path>) -> Result<ProbeResult, DecodeError> {
 /// # Errors
 /// Returns why the file cannot be opened or read.
 pub fn visit_packet_times(
-    path: impl AsRef<Path>,
+    source: impl Into<SourceLocation>,
     stream: usize,
     mut visit: impl FnMut(f64) -> bool,
 ) -> Result<(), DecodeError> {
-    let mut input = open_input(path.as_ref())?;
+    let mut input = open_input(&source.into())?;
     let time_base = input
         .streams()
         .get(stream)
         .map(|found| found.time_base)
         .ok_or_else(|| DecodeError::Unsupported(format!("the file has no stream {stream}")))?;
     input.discard_all_but(stream);
-    while let Some(packet) = input.read_packet().map_err(adapter_error)? {
+    while let Some(packet) = input
+        .read_packet()
+        .map_err(|error| demux_error(&input, error))?
+    {
         if usize::try_from(packet.stream_index).ok() != Some(stream) {
             continue;
         }
@@ -316,7 +322,7 @@ enum AudioContinuity {
 /// stream's; the source timeline places it by timestamp and `alpha2_audio::Resampler` (shared with
 /// the browser host) brings it to the project rate.
 pub struct NativeAudioDecoder {
-    pub(crate) path: PathBuf,
+    pub(crate) source: SourceLocation,
     pub(crate) input: DemuxInput,
     input_position: InputPosition,
     pub(crate) streams: Vec<StreamInfo>,
@@ -426,8 +432,11 @@ impl NativeAudioDecoder {
     /// # Errors
     /// Returns a platform-neutral error for invalid rates, missing streams, unsupported layouts,
     /// codec failures, or malformed decoded audio.
-    pub fn open(path: impl AsRef<Path>, project_sample_rate: u32) -> Result<Self, DecodeError> {
-        Self::open_stream(path, project_sample_rate, None)
+    pub fn open(
+        source: impl Into<SourceLocation>,
+        project_sample_rate: u32,
+    ) -> Result<Self, DecodeError> {
+        Self::open_stream(source, project_sample_rate, None)
     }
 
     /// Decodes audio stream `stream`, counted over the file's audio streams in demuxer order
@@ -436,16 +445,16 @@ impl NativeAudioDecoder {
     /// # Errors
     /// As [`Self::open`], and `Unsupported` when the file has no such audio stream.
     pub fn open_stream(
-        path: impl AsRef<Path>,
+        source: impl Into<SourceLocation>,
         project_sample_rate: u32,
         stream: Option<u32>,
     ) -> Result<Self, DecodeError> {
         if project_sample_rate == 0 {
             return Err(DecodeError::OutOfRange);
         }
-        let path = path.as_ref().to_owned();
-        let mut input = open_input(&path)?;
-        let probe = probe_context(&input, &path)?;
+        let source = source.into();
+        let mut input = open_input(&source)?;
+        let probe = probe_context(&input, &source)?;
         let selected = audio_stream_index(&probe, stream)?;
         let stream = probe
             .stream(selected)
@@ -512,7 +521,7 @@ impl NativeAudioDecoder {
         let channel_count = speakers.channels();
         let output_layout = ffmpeg_layout(&speakers)?;
         Ok(Self {
-            path,
+            source,
             input,
             input_position: InputPosition::Opened,
             container_duration: probe.duration,
@@ -610,7 +619,7 @@ impl NativeAudioDecoder {
         if self.input_position == InputPosition::Opened {
             self.decoder.flush_buffers();
         } else {
-            let mut input = open_input(&self.path)?;
+            let mut input = open_input(&self.source)?;
             self.decoder = open_audio_decoder(&mut input, self.audio_index)?;
             self.input = input;
             self.input_position = InputPosition::Opened;
@@ -909,7 +918,7 @@ impl NativeAudioDecoder {
                     continue;
                 }
                 Err(error) => {
-                    let error = demux_failure(error, cancel)?;
+                    let error = demux_failure(&self.input, error, cancel)?;
                     self.recovery.error(error, "audio demux", None)?;
                     self.repair_audio = AudioContinuity::Damaged;
                     continue;
@@ -990,7 +999,7 @@ impl Decoder for NativeAudioDecoder {
                     timestamp,
                     i32::try_from(ffi::AVSEEK_FLAG_BACKWARD).expect("seek flag fits i32"),
                 )
-                .map_err(|error| seek_failure(error, cancel))?;
+                .map_err(|error| seek_failure(&self.input, error, cancel))?;
         }
         self.decoder.flush_buffers();
         self.restart(Some(target));
@@ -1277,20 +1286,24 @@ impl NativeDecoder {
     ///
     /// # Errors
     /// Returns an error when no decodable video stream exists.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, DecodeError> {
-        Self::open_with_threads(path, codec_thread_budget())
+    pub fn open(source: impl Into<SourceLocation>) -> Result<Self, DecodeError> {
+        Self::open_with_threads(source, codec_thread_budget())
     }
 
     /// Opens the selected stream with an explicit `FFmpeg` worker allocation.
     ///
     /// # Errors
     /// Returns an error when no decodable video stream exists.
-    pub fn open_with_threads(path: impl AsRef<Path>, threads: i64) -> Result<Self, DecodeError> {
+    pub fn open_with_threads(
+        source: impl Into<SourceLocation>,
+        threads: i64,
+    ) -> Result<Self, DecodeError> {
         if !(1..=64).contains(&threads) {
             return Err(DecodeError::OutOfRange);
         }
-        let mut input = open_input(path.as_ref())?;
-        let probed = probe_context(&input, path.as_ref())?;
+        let source = source.into();
+        let mut input = open_input(&source)?;
+        let probed = probe_context(&input, &source)?;
         let video_index = probed.selected_video.ok_or_else(|| {
             DecodeError::Unsupported("resource has no decodable video stream".into())
         })?;
@@ -1358,7 +1371,7 @@ impl NativeDecoder {
     ))]
     #[allow(clippy::too_many_lines)]
     pub(crate) fn open_hardware(
-        path: impl AsRef<Path>,
+        source: impl Into<SourceLocation>,
         threads: i64,
         device: AVHWDeviceContext,
         spec: &HardwareDecoderSpec<'_>,
@@ -1368,8 +1381,9 @@ impl NativeDecoder {
         };
 
         let unavailable = |error| HardwareOpenError::new(SourceUnavailable, error);
-        let mut input = open_input(path.as_ref()).map_err(unavailable)?;
-        let probed = probe_context(&input, path.as_ref()).map_err(unavailable)?;
+        let source = source.into();
+        let mut input = open_input(&source).map_err(unavailable)?;
+        let probed = probe_context(&input, &source).map_err(unavailable)?;
         let video_index = probed.selected_video.ok_or_else(|| {
             HardwareOpenError::new(
                 SourceUnavailable,
@@ -1711,7 +1725,7 @@ impl NativeDecoder {
             i32::try_from(ffi::AVSEEK_FLAG_BACKWARD).expect("seek flag fits i32"),
         );
         self.stages.seek = self.stages.seek.saturating_add(seek_started.elapsed());
-        sought.map_err(|error| seek_failure(error, cancel))?;
+        sought.map_err(|error| seek_failure(&self.input, error, cancel))?;
         self.flush_video();
         Ok(())
     }
@@ -1852,7 +1866,7 @@ impl NativeDecoder {
                     continue;
                 }
                 Err(error) => {
-                    let error = demux_failure(error, cancel)?;
+                    let error = demux_failure(&self.input, error, cancel)?;
                     self.recovery.error(error, "video demux", None)?;
                     continue;
                 }
@@ -2317,40 +2331,90 @@ fn decoder_whitelist() -> Option<&'static CStr> {
     })
 }
 
-/// Opens a source with [`SOURCE_CONTAINERS`], only the `file` protocol, so nothing reaches past a
-/// local path, and probing with [`SOURCE_DECODERS`] only.
-pub(crate) fn open_input(path: &Path) -> Result<DemuxInput, DecodeError> {
+/// Opens a source with [`SOURCE_CONTAINERS`]: a file through the `file` protocol only, so nothing
+/// reaches past a local path, or a remote object through its own reader, which may open nothing
+/// else; probing opens [`SOURCE_DECODERS`] only.
+pub(crate) fn open_input(source: &SourceLocation) -> Result<DemuxInput, DecodeError> {
     #[cfg(test)]
     INPUTS_OPENED.with(|opened| opened.set(opened.get() + 1));
-    refuse_oversized_still(path)?;
-    alpha2_ffmpeg_bridge::open_input(path, SOURCE_CONTAINERS, decoder_whitelist()).map_err(
-        |error| match error {
-            OpenInputError::Path(error) => DecodeError::Unsupported(format!("media path {error}")),
-            OpenInputError::Refused(format) => DecodeError::Unsupported(format!(
-                "the file is {format} input, which is not a container alpha2 reads"
-            )),
-            OpenInputError::Ffmpeg(error) => adapter_error(error),
-        },
-    )
+    refuse_oversized_still(source)?;
+    let opened = match source {
+        SourceLocation::File(path) => alpha2_ffmpeg_bridge::open_input(
+            InputLocation::File(path),
+            SOURCE_CONTAINERS,
+            decoder_whitelist(),
+        ),
+        SourceLocation::Remote(object) => {
+            let open =
+                || -> std::io::Result<Box<dyn InputReader>> { Ok(Box::new(object.reader())) };
+            let shown = object.shown_url();
+            let custom = CustomInput {
+                name: shown.rsplit('/').next().unwrap_or(shown),
+                length: object.len(),
+                open: &open,
+            };
+            alpha2_ffmpeg_bridge::open_input(
+                InputLocation::Custom(&custom),
+                SOURCE_CONTAINERS,
+                decoder_whitelist(),
+            )
+        }
+    };
+    opened.map_err(|error| match error {
+        OpenInputError::Path(error) => DecodeError::Unsupported(format!("media path {error}")),
+        OpenInputError::Refused(format) => DecodeError::Unsupported(format!(
+            "the file is {format} input, which is not a container alpha2 reads"
+        )),
+        OpenInputError::Read(error) => read_failure(&error),
+        OpenInputError::Ffmpeg(error) => adapter_error(error),
+    })
+}
+
+/// A source reader's failure as the decode error it is.
+fn read_failure(error: &std::io::Error) -> DecodeError {
+    alpha2_host_core::remote::decode_error(error)
+        .unwrap_or_else(|| DecodeError::Adapter(format!("the source could not be read: {error}")))
+}
+
+/// A demux or seek failure on `input`: its reader's failure when it had one, else `FFmpeg`'s.
+pub(crate) fn demux_error(input: &DemuxInput, error: RsmpegError) -> DecodeError {
+    input
+        .take_read_error()
+        .map_or_else(|| adapter_error(error), |failure| read_failure(&failure))
+}
+
+/// The source's bytes from the first, at most `limit`.
+fn source_head(source: &SourceLocation, limit: u64) -> Option<Vec<u8>> {
+    let mut head = Vec::new();
+    match source {
+        SourceLocation::File(path) => {
+            std::fs::File::open(path)
+                .ok()?
+                .take(limit)
+                .read_to_end(&mut head)
+                .ok()?;
+        }
+        SourceLocation::Remote(object) => {
+            object.reader().take(limit).read_to_end(&mut head).ok()?;
+        }
+    }
+    Some(head)
 }
 
 /// Refuses a PNG, JPEG or WebP whose header states a picture larger than alpha2 renders, since
 /// `FFmpeg` learns a still's size only by decoding it. Anything else is left to `FFmpeg`.
-fn refuse_oversized_still(path: &Path) -> Result<(), DecodeError> {
+fn refuse_oversized_still(source: &SourceLocation) -> Result<(), DecodeError> {
     // Holds the size field of the three formats, after any Exif and colour profile segments.
     const HEAD_BYTES: u64 = 1 << 20;
-    let Ok(file) = std::fs::File::open(path) else {
+    let Some(signature) = source_head(source, 12) else {
         return Ok(());
     };
-    let mut head = Vec::new();
-    let mut file = file.take(12);
-    if file.read_to_end(&mut head).is_err() || still_format(&head).is_none() {
+    if still_format(&signature).is_none() {
         return Ok(());
     }
-    file.set_limit(HEAD_BYTES - 12);
-    if file.read_to_end(&mut head).is_err() {
+    let Some(head) = source_head(source, HEAD_BYTES) else {
         return Ok(());
-    }
+    };
     match probe_still(&head) {
         Err(error @ DecodeError::Unsupported(_)) => Err(error),
         _ => Ok(()),
@@ -2371,18 +2435,25 @@ pub(crate) fn interrupt_on_cancel(input: &DemuxInput, cancel: &CancelToken) {
     input.interrupt_when(move || cancel.is_cancelled());
 }
 
-/// A demux or seek failure, as a cancel when the cancel stopped it.
-fn demux_failure(error: RsmpegError, cancel: &CancelToken) -> Result<RsmpegError, DecodeError> {
+/// A demux or seek failure on `input`, as a cancel when the cancel stopped it and as its reader's
+/// failure when the reader failed: neither is damage a decode policy may skip.
+fn demux_failure(
+    input: &DemuxInput,
+    error: RsmpegError,
+    cancel: &CancelToken,
+) -> Result<RsmpegError, DecodeError> {
     if cancel.is_cancelled() {
-        Err(DecodeError::Cancelled)
-    } else {
-        Ok(error)
+        return Err(DecodeError::Cancelled);
+    }
+    match input.take_read_error() {
+        Some(failure) => Err(read_failure(&failure)),
+        None => Ok(error),
     }
 }
 
-/// A seek failure, as a cancel when the cancel stopped it.
-fn seek_failure(error: RsmpegError, cancel: &CancelToken) -> DecodeError {
-    demux_failure(error, cancel).map_or_else(|cancelled| cancelled, adapter_error)
+/// A seek failure on `input`, as [`demux_failure`] reads it.
+fn seek_failure(input: &DemuxInput, error: RsmpegError, cancel: &CancelToken) -> DecodeError {
+    demux_failure(input, error, cancel).map_or_else(|failure| failure, adapter_error)
 }
 
 /// Single-picture demuxers whose decoder, not the container, carries orientation (`FFmpeg` puts a
@@ -2395,8 +2466,8 @@ fn is_still_image_format(input: &DemuxInput) -> bool {
 
 /// The orientation a still picture's decoder attaches, read by decoding it once at reduced size
 /// when possible. `None` when there is none or the picture does not decode.
-fn still_image_orientation(path: &Path, index: usize) -> Option<Orientation> {
-    let mut input = open_input(path).ok()?;
+fn still_image_orientation(source: &SourceLocation, index: usize) -> Option<Orientation> {
+    let mut input = open_input(source).ok()?;
     let (codec, mut decoder) = {
         let stream = input.streams().get(index)?;
         let parameters = stream.codecpar();
@@ -2449,12 +2520,12 @@ const PARSED_END_READ: u64 = 250_000;
 /// That estimate (MPEG-TS, MPEG-PS) reads unparsed packets, so one PES carrying several AAC frames
 /// ends at the first frame, up to 0.19 s short. This rereads the tail through the parsers on a
 /// separate input, leaving `input`'s position untouched.
-fn parsed_end(input: &DemuxInput, path: &Path) -> Option<i64> {
+fn parsed_end(input: &DemuxInput, source: &SourceLocation) -> Option<i64> {
     if input.duration_estimation_method != ffi::AVFMT_DURATION_FROM_PTS {
         return None;
     }
-    let size = std::fs::metadata(path).ok()?.len();
-    let mut tail = open_input(path).ok()?;
+    let size = source.byte_length().ok()?;
+    let mut tail = open_input(source).ok()?;
     let streams = tail
         .streams()
         .iter()
@@ -2526,7 +2597,10 @@ fn decoder_allowed(input: &DemuxInput, index: usize) -> bool {
 }
 
 /// The [`ProbeResult`] of an opened input, with `FFmpeg`'s best video and audio streams selected.
-pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResult, DecodeError> {
+pub(crate) fn probe_context(
+    input: &DemuxInput,
+    source: &SourceLocation,
+) -> Result<ProbeResult, DecodeError> {
     let selected_video = input
         .best_stream(ffi::AVMEDIA_TYPE_VIDEO)
         .map_err(adapter_error)?;
@@ -2576,7 +2650,7 @@ pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResu
                         (kind == StreamKind::Video
                             && Some(index) == selected_video
                             && is_still_image_format(input))
-                        .then(|| still_image_orientation(path, index))
+                        .then(|| still_image_orientation(source, index))
                         .flatten()
                     })
                     .unwrap_or_else(|| Orientation::rotated(stream_rotation(stream.metadata()))),
@@ -2603,7 +2677,7 @@ pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResu
         1,
         i32::try_from(ffi::AV_TIME_BASE).expect("time base fits i32"),
     );
-    let duration = parsed_end(input, path)
+    let duration = parsed_end(input, source)
         .filter(|_| input.start_time != ffi::AV_NOPTS_VALUE)
         .map(|end| end.saturating_sub(input.start_time))
         .map_or(input.duration, |parsed| parsed.max(input.duration));

@@ -2985,3 +2985,132 @@ fn a_terminated_host_whose_output_nobody_reads_exits_at_its_deadline() {
     drop(stdin);
     assert_eq!(status.and_then(|status| status.code()), Some(143));
 }
+
+fn conform_media_line(asset: &str) -> Result<Value, HostError> {
+    let line = json!({
+        "protocolVersion": 2,
+        "operation": "conform",
+        "requestId": "remote",
+        "project": {},
+        "assets": { "video": asset },
+    })
+    .to_string();
+    match parse_request(&line)? {
+        Request::Conform(request) => {
+            crate::host::conform_media(request, VideoDecodePolicy::Software)
+        }
+        _ => unreachable!("a conform line parses as a conform"),
+    }
+}
+
+#[test]
+fn no_request_can_widen_the_media_origins() {
+    use crate::media_policy::{MediaOrigins, MediaPolicy, PrivateAddresses};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let port = listener.local_addr().expect("address").port();
+    let url = format!("https://127.0.0.1:{port}/take.mp4?signature=secret");
+    let shown = format!("https://127.0.0.1:{port}/take.mp4");
+
+    let error = conform_media_line(&url).expect_err("no origin is listed by default");
+    assert_eq!(error.code, "MEDIA_REFUSED", "{}", error.message);
+    let details = error.details.clone().expect("details");
+    assert_eq!(details["source"], "video");
+    assert_eq!(details["url"], shown.as_str());
+    assert_eq!(details["policy"], "origins");
+    assert!(!error.message.contains("secret"), "{}", error.message);
+
+    let _policy = crate::media_policy::set_for_test(MediaPolicy {
+        origins: MediaOrigins::List(vec![
+            crate::origin::Origin::of_url("https://media.example").expect("origin"),
+        ]),
+        private_addresses: PrivateAddresses::Allow,
+    });
+    let error = conform_media_line(&url).expect_err("an unlisted origin is refused");
+    assert_eq!(error.code, "MEDIA_REFUSED", "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("is not an origin this host was started with"),
+        "{}",
+        error.message
+    );
+
+    for field in ["mediaOrigins", "remoteMedia", "mediaPrivateAddresses"] {
+        let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+        request[field] = json!(["https://127.0.0.1"]);
+        let Err(error) = parse_request(&request.to_string()) else {
+            panic!("{field} must be refused");
+        };
+        assert_eq!(error.code, "INVALID_REQUEST", "{field}: {}", error.message);
+    }
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "nothing was contacted"
+    );
+}
+
+#[test]
+fn an_http_media_url_is_an_invalid_request() {
+    let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+    request["assets"] = json!({ "video": "HTTP://media.example/take.mp4?signature=secret" });
+    let Err(error) = parse_request(&request.to_string()) else {
+        panic!("an http: asset must be refused");
+    };
+    assert_eq!(error.code, "INVALID_REQUEST");
+    assert!(
+        error.message.contains("only https: media URLs are read"),
+        "{}",
+        error.message
+    );
+    assert!(!error.message.contains("secret"), "{}", error.message);
+    let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+    request["resources"] = json!({ "logo": { "a.png": "http://media.example/a.png" } });
+    assert_eq!(
+        parse_request(&request.to_string())
+            .err()
+            .map(|error| error.code),
+        Some("INVALID_REQUEST")
+    );
+    for (value, url) in [
+        ("https://media.example/take.mp4#t=1", true),
+        ("take:1.mov", false),
+        ("/srv/https:/take.mov", false),
+    ] {
+        let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+        request["assets"] = json!({ "video": value });
+        let Ok(Request::Export(export)) = parse_request(&request.to_string()) else {
+            panic!("{value} is a media location");
+        };
+        let location = &export.assets["video"];
+        assert_eq!(location.url().is_some(), url, "{value}");
+        if url {
+            assert_eq!(location.url(), Some("https://media.example/take.mp4"));
+        }
+    }
+}
+
+#[test]
+fn a_url_in_frames_fonts_or_proxies_is_an_invalid_request() {
+    let url = "https://media.example/a.png";
+    for (field, value) in [
+        ("frames", json!({ "seq": [url] })),
+        ("fonts", json!([url])),
+        ("proxies", json!({ "video": [{ "path": url }] })),
+        ("effectAssets", json!({ "grade": url })),
+        ("output", json!("https://media.example/out.mp4")),
+        ("renderCache", json!({ "directory": url })),
+    ] {
+        let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+        request[field] = value;
+        let Err(error) = parse_request(&request.to_string()) else {
+            panic!("a URL in {field} must be refused");
+        };
+        assert_eq!(error.code, "INVALID_REQUEST", "{field}: {}", error.message);
+        assert!(
+            error.message.contains("takes a path, not a URL"),
+            "{field}: {}",
+            error.message
+        );
+    }
+}

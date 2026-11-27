@@ -1562,6 +1562,62 @@ serve((request) => respond(request, { ok: true, result: { status: "ready", capab
   assert.deepEqual(await startsIn(starts), []);
 });
 
+test("the remoteMedia option becomes the serve flags of every host, and a malformed one starts none", async () => {
+  const root = await scratch("alpha2-node-media-flags-");
+  const starts = join(root, "starts");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+appendFileSync(${JSON.stringify(starts)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+serve((request) => respond(request, { ok: true, result: { status: "ready", capabilities: {}, effectCatalog: {} } }));
+`,
+  );
+  const flagsOf = async (remoteMedia) => {
+    await rm(starts, { force: true });
+    const client = new Alpha2NodeClient({ hostPath, remoteMedia, cwd: root });
+    try {
+      await client.getCapabilities();
+    } finally {
+      await client.close();
+    }
+    return (await startsIn(starts)).map((line) => JSON.parse(line));
+  };
+  assert.deepEqual(await flagsOf(undefined), [[]]);
+  assert.deepEqual(
+    await flagsOf({
+      origins: ["https://media.example", "https://cdn.example:8443"],
+      privateAddresses: "allow",
+    }),
+    [
+      [
+        "--media-origins",
+        "https://media.example,https://cdn.example:8443",
+        "--media-private-addresses",
+        "allow",
+      ],
+    ],
+  );
+  assert.deepEqual(await flagsOf({ origins: "none" }), [
+    ["--media-origins", "none"],
+  ]);
+  await rm(starts, { force: true });
+  for (const remoteMedia of [
+    { origins: [] },
+    { origins: ["http://media.example"] },
+    { origins: "https://media.example" },
+    { privateAddresses: "some" },
+    "listed",
+  ])
+    assert.throws(
+      () => new Alpha2NodeClient({ hostPath, remoteMedia }),
+      (error) =>
+        error.code === "INVALID_INPUT" && /^remoteMedia/.test(error.message),
+      JSON.stringify(remoteMedia),
+    );
+  assert.deepEqual(await startsIn(starts), []);
+});
+
 /** Logs `<operation> <decode mode>`; fails the first capabilities probe if `failFirst`. */
 const PROBED_HOST = (
   log,

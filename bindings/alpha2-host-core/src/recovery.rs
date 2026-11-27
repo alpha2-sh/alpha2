@@ -445,6 +445,17 @@ const DECODE_WORK_STEPS: usize = 65_536;
 thread_local! {
     static DECODE_PROGRESS_WATCH: std::cell::RefCell<Option<Box<dyn Fn()>>> =
         const { std::cell::RefCell::new(None) };
+    static INPUT_WAIT: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+}
+
+/// Tells this thread's work budgets that a read waited `waited` for its input (a remote source's
+/// bytes). The wait has its own bound, so a budget does not count it.
+pub fn report_input_wait(waited: Duration) {
+    INPUT_WAIT.with(|total| total.set(total.get().saturating_add(waited)));
+}
+
+fn input_wait() -> Duration {
+    INPUT_WAIT.with(std::cell::Cell::get)
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -528,6 +539,7 @@ impl Drop for DecodeProgressWatch {
 pub struct WorkBudget {
     /// On the awake clock, so system sleep does not count.
     started: alpha2_os::AwakeInstant,
+    input_wait_at_start: Duration,
     /// Where [`VIRTUAL_CLOCK`] stood at `started`, when it is set.
     #[cfg(any(test, feature = "test-hooks"))]
     started_virtual: Option<Duration>,
@@ -545,6 +557,7 @@ impl WorkBudget {
     pub fn new() -> Self {
         Self {
             started: alpha2_os::AwakeInstant::now(),
+            input_wait_at_start: input_wait(),
             #[cfg(any(test, feature = "test-hooks"))]
             started_virtual: VIRTUAL_CLOCK.with(std::cell::Cell::get),
             steps: 0,
@@ -559,7 +572,9 @@ impl WorkBudget {
         ) {
             return now.saturating_sub(started);
         }
-        self.started.elapsed()
+        self.started
+            .elapsed()
+            .saturating_sub(input_wait().saturating_sub(self.input_wait_at_start))
     }
     /// One loop step of the operation.
     ///
@@ -588,6 +603,7 @@ impl WorkBudget {
     /// again from now. The step count does not, so a stream that never gives a frame still ends.
     pub fn advanced(&mut self) {
         self.started = alpha2_os::AwakeInstant::now();
+        self.input_wait_at_start = input_wait();
         #[cfg(any(test, feature = "test-hooks"))]
         {
             self.started_virtual = VIRTUAL_CLOCK.with(std::cell::Cell::get);
@@ -597,6 +613,7 @@ impl WorkBudget {
     /// The operation produced a frame: its limits start again from now.
     pub fn progressed(&mut self) {
         self.started = alpha2_os::AwakeInstant::now();
+        self.input_wait_at_start = input_wait();
         #[cfg(any(test, feature = "test-hooks"))]
         {
             self.started_virtual = VIRTUAL_CLOCK.with(std::cell::Cell::get);
@@ -635,6 +652,23 @@ pub fn submit_packet(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reported_input_wait_is_not_counted_against_a_work_budget() {
+        const LIMIT: Duration = Duration::from_millis(50);
+        WORK_LIMIT.with(|limit| limit.set(LIMIT));
+        let cancel = CancelToken::default();
+        let mut budget = WorkBudget::new();
+        std::thread::sleep(LIMIT * 2);
+        report_input_wait(LIMIT * 2);
+        assert!(budget.step(&cancel).is_ok(), "a wait for input is not work");
+        std::thread::sleep(LIMIT * 2);
+        assert!(
+            budget.step(&cancel).is_err(),
+            "time past the wait still counts"
+        );
+        WORK_LIMIT.with(|limit| limit.set(DECODE_WORK_LIMIT));
+    }
 
     #[test]
     fn a_policy_is_named_as_the_host_names_it() {

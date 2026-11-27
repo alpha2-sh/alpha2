@@ -21,7 +21,7 @@ fn a_reversed_clip_exports_its_frames_in_reverse_order() {
         let mut host = create_host(VideoDecodePolicy::Software).expect("host");
         host.export(
             &project.to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             0,
@@ -163,7 +163,7 @@ fn reversed_and_looped_sound_exports_as_mapped() {
         let mut host = create_host(VideoDecodePolicy::Software).expect("host");
         host.export(
             &project.to_string(),
-            &HashMap::from([("swell".to_owned(), tone_path.clone())]),
+            &crate::tests::sources([("swell".to_owned(), tone_path.clone())]),
             &HashMap::new(),
             Vec::new(),
             0,
@@ -229,7 +229,7 @@ fn a_fast_reversed_clip_exports_from_the_media_its_needs_name() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     host.export(
         &project.to_string(),
-        &HashMap::from([("swell".to_owned(), tone_path)]),
+        &crate::tests::sources([("swell".to_owned(), tone_path)]),
         &HashMap::new(),
         Vec::new(),
         0,
@@ -705,7 +705,8 @@ fn a_declared_color_wins_on_the_native_frame_paths() {
         media_time: MediaTime::ZERO,
     };
     let assets = HashMap::from([(source.as_str().to_owned(), corpus("hdr-pq-untagged.mp4"))]);
-    let mut state = ExportDecodeState::new(&project, &assets).expect("decode state");
+    let mut state =
+        ExportDecodeState::new(&project, &crate::tests::locations(&assets)).expect("decode state");
     let decoded = state
         .decode_need(&need, &CancelToken::default())
         .expect("decodes")
@@ -720,7 +721,7 @@ fn a_declared_color_wins_on_the_native_frame_paths() {
         size,
         crate::frames::next_cache_scope(),
         &project,
-        &assets,
+        &crate::tests::locations(&assets),
         std::sync::Arc::default(),
     )
     .expect("frames");
