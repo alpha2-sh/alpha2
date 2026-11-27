@@ -106,7 +106,13 @@ export interface WasmTextBinding {
 
 /** A text layout and raster style for {@link WasmTextRasterizer}. */
 export interface WasmTextRequest {
-  readonly text: string;
+  /** The text; give it or `runs`, not both. */
+  readonly text?: string;
+  /**
+   * The text as runs, joined in order, each drawn with its own values where set and the
+   * request's elsewhere, as CSS inline boxes: a larger run makes its line taller and re-wraps.
+   */
+  readonly runs?: readonly WasmTextRun[];
   readonly contentVersion: bigint;
   /** Logical font size in pixels, up to 2048. */
   readonly fontSize: number;
@@ -132,7 +138,7 @@ export interface WasmTextRequest {
    * draws outlines in the fill, `replace` draws one U+FFFD per emoji grapheme.
    */
   readonly emojiPolicy?: "color" | "monochrome" | "replace";
-  /** Outline bands, innermost first: at most 4, with widths summing to at most 64 pixels. */
+  /** Outline bands, innermost first: at most 8, with widths summing to at most 64 pixels. */
   readonly strokes?: readonly {
     readonly color: WasmTextColor;
     readonly width: number;
@@ -147,10 +153,43 @@ export interface WasmTextRequest {
    * draw a shadow between them and the glyphs.
    */
   readonly splitBackground?: boolean;
+  /**
+   * Cuts lines as CSS `line-clamp`: at most `maxLines`, as many as fit in `maxHeight` pixels
+   * (absent or non-positive for none), at least one. A cut line ends with `ellipsis` (absent for
+   * U+2026, `null` for nothing).
+   */
+  readonly clamp?: {
+    readonly maxLines?: number;
+    readonly maxHeight?: number;
+    readonly ellipsis?: string | null;
+  };
   /** One animation state applied to every cluster. Tracking never re-wraps lines. */
   readonly clusterState?: WasmClusterState;
   /** One animation state per cluster, in logical order. */
   readonly clusterStates?: readonly WasmClusterState[];
+}
+
+/**
+ * A run of a {@link WasmTextRequest}. Sizes and spacing are pixels. Family, weight, style, size
+ * and spacing shape the run apart; fill, strokes, background and decorations only paint it. A
+ * face without italics is sheared when `fontStyle` asks for one. Decorations take the run's first
+ * face's metrics; the background is the run's em box on each line.
+ */
+export interface WasmTextRun {
+  readonly text: string;
+  readonly fontFamily?: string;
+  readonly fontWeight?: number;
+  readonly fontStyle?: "normal" | "italic" | "oblique";
+  readonly fontSize?: number;
+  readonly letterSpacing?: number;
+  readonly fill?: WasmTextColor | WasmTextGradient;
+  readonly strokes?: readonly {
+    readonly color: WasmTextColor;
+    readonly width: number;
+  }[];
+  readonly backgroundColor?: WasmTextColor;
+  readonly underline?: boolean;
+  readonly lineThrough?: boolean;
 }
 
 /**

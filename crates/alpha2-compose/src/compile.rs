@@ -3433,7 +3433,7 @@ fn still_source(source: &MediaSource) -> bool {
                 .as_ref()
                 .is_some_and(|generator| match generator {
                     Generator::Fill { .. } => true,
-                    Generator::Text { style, .. } => style.animators.is_empty(),
+                    Generator::Text { text, style } => style.animators.is_empty() && !text.varies(),
                     other => !serde_json::to_string(other)
                         .is_ok_and(|text| text.contains("\"keyframes\"")),
                 })
@@ -4252,6 +4252,9 @@ pub(crate) fn issue_text(issue: &alpha2_model::GeneratorIssue) -> String {
         alpha2_model::GeneratorIssue::Layout(issue) => format!("{} {}", issue.at, issue.problem),
         alpha2_model::GeneratorIssue::Shape(issue) => format!("{} {}", issue.at, issue.problem),
         alpha2_model::GeneratorIssue::Invalid => "a field is out of range".to_owned(),
+        alpha2_model::GeneratorIssue::TextRun { run } => {
+            format!("text run {run} has a style out of range")
+        }
     }
 }
 

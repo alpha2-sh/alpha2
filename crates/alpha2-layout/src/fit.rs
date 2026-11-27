@@ -93,7 +93,7 @@ pub(crate) fn boxed_lines(
     max_lines: Option<u32>,
     clamp: bool,
 ) -> BoxedLines {
-    let limit = shaped.line_limit(max_lines, max_height);
+    let limit = shaped.line_limit(max_width, max_lines, max_height);
     let cut = shaped.lines_within(max_width, limit);
     let drawn = if clamp {
         cut

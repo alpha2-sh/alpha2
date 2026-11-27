@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "id": "rich",
+  "name": "Rich text",
+  "settings": {
+    "width": 320,
+    "height": 180,
+    "frame_rate": {
+      "num": 30,
+      "den": 1
+    },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "title",
+      "kind": "generated",
+      "locator": "",
+      "generator": {
+        "type": "text",
+        "text": [
+          {
+            "text": "HI ",
+            "style": {
+              "font_style": "italic",
+              "font_family": "Alpha2 Fixture Styles"
+            }
+          },
+          {
+            "text": "grow",
+            "style": {
+              "font_scale": {
+                "mode": "keyframes",
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 1,
+                    "interpolation": {
+                      "type": "linear"
+                    }
+                  },
+                  {
+                    "time": 60000,
+                    "value": 2,
+                    "interpolation": {
+                      "type": "hold"
+                    }
+                  }
+                ]
+              },
+              "fill": {
+                "red": 1,
+                "green": 0.8,
+                "blue": 0.1,
+                "alpha": 1
+              }
+            }
+          },
+          {
+            "text": " 안녕",
+            "style": {
+              "font_style": "italic",
+              "background_color": {
+                "red": 0.1,
+                "green": 0.2,
+                "blue": 0.8,
+                "alpha": 0.8
+              }
+            }
+          }
+        ],
+        "style": {
+          "font_size": 0.15,
+          "max_width": 0.9,
+          "position": {
+            "x": 0.5,
+            "y": 0.3
+          },
+          "anchor": {
+            "x": 0.5,
+            "y": 0.5
+          },
+          "shadows": [
+            {
+              "color": {
+                "red": 0,
+                "green": 0,
+                "blue": 0,
+                "alpha": 0.8
+              },
+              "offset": {
+                "x": 0.05,
+                "y": 0.05
+              },
+              "blur": 0.2
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "t1",
+        "name": "Titles",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c1",
+            "source_id": "title",
+            "timeline_range": {
+              "start": 0,
+              "end": 120000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 120000
+            }
+          }
+        ],
+        "transitions": []
+      },
+      {
+        "id": "subs",
+        "name": "Subs",
+        "kind": "caption",
+        "captions": {
+          "style": {
+            "font_size": 0.08,
+            "position": {
+              "x": 0.5,
+              "y": 0.9
+            },
+            "anchor": {
+              "x": 0.5,
+              "y": 1
+            }
+          },
+          "cues": [
+            {
+              "timeline_range": {
+                "start": 0,
+                "end": 120000
+              },
+              "text": [
+                {
+                  "text": "under",
+                  "style": {
+                    "underline": true
+                  }
+                },
+                {
+                  "text": " "
+                },
+                {
+                  "text": "through",
+                  "style": {
+                    "line_through": true,
+                    "strokes": [
+                      {
+                        "color": {
+                          "red": 0,
+                          "green": 0,
+                          "blue": 0,
+                          "alpha": 1
+                        },
+                        "width": 0.08
+                      }
+                    ]
+                  }
+                },
+                {
+                  "text": " BIG",
+                  "style": {
+                    "font_scale": {
+                      "mode": "constant",
+                      "value": 1.5
+                    },
+                    "font_weight": 700
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

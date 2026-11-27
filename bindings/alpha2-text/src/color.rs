@@ -74,7 +74,13 @@ struct ColorLine {
 impl Painting {
     /// Records the COLR painting of `glyph`, using `foreground` (straight RGBA) for the text
     /// color. `None` when there is no painting or it draws nothing.
-    pub(super) fn of(face: &ttf_parser::Face<'_>, glyph: u16, foreground: [u8; 4]) -> Option<Self> {
+    /// The painting is sheared by `x += shear * y` in font units.
+    pub(super) fn of(
+        face: &ttf_parser::Face<'_>,
+        glyph: u16,
+        foreground: [u8; 4],
+        shear: f32,
+    ) -> Option<Self> {
         if !face.is_color_glyph(GlyphId(glyph)) {
             return None;
         }
@@ -85,7 +91,10 @@ impl Painting {
                 commands: Vec::new(),
                 bounds: None,
             },
-            transform: Transform::default(),
+            transform: Transform {
+                c: shear,
+                ..Transform::default()
+            },
             transforms: Vec::new(),
             pending: None,
             layers: 0,

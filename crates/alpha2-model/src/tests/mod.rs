@@ -19,6 +19,7 @@ mod scaling;
 mod shapes;
 mod shared_corpora;
 mod text_fit;
+mod text_runs;
 mod visuals;
 
 fn id<T>(make: impl FnOnce(String) -> Result<T, alpha2_media::IdError>, value: &str) -> T {

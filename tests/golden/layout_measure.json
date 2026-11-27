@@ -1329,6 +1329,49 @@
       "name": "fit-follows-an-animated-font-size",
       "time": 90000,
       "width": 1280
+    },
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"baselines\":null,\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"fontSize\":null,\"lineCount\":null,\"overflow\":false,\"truncated\":false},{\"at\":\"root.children[0]\",\"baselines\":{\"first\":0.03600000590085983,\"last\":0.28560003638267517},\"border\":{\"bottom\":0.307407408952713,\"left\":0.0,\"right\":0.140625,\"top\":0.0},\"content\":{\"bottom\":0.307407408952713,\"left\":0.0,\"right\":0.140625,\"top\":0.0},\"fontSize\":0.03999999910593033,\"lineCount\":4,\"overflow\":false,\"truncated\":false}]}",
+      "generator": {
+        "root": {
+          "align_items": "start",
+          "children": [
+            {
+              "font_size": {
+                "mode": "constant",
+                "value": 0.04
+              },
+              "text": {
+                "mode": "constant",
+                "value": [
+                  {
+                    "text": "plain then "
+                  },
+                  {
+                    "style": {
+                      "font_scale": {
+                        "mode": "constant",
+                        "value": 1.8
+                      },
+                      "line_through": true
+                    },
+                    "text": "large words wrap"
+                  }
+                ]
+              },
+              "width": {
+                "mode": "constant",
+                "value": 0.25
+              }
+            }
+          ]
+        },
+        "type": "layout"
+      },
+      "height": 1080,
+      "name": "rich-runs-wrap",
+      "time": 0,
+      "width": 1920
     }
   ],
   "font": "tests/fonts/Alpha2Fixture.ttf"

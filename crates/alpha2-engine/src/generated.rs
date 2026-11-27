@@ -8,9 +8,9 @@ use alpha2_render::{
 // Every stop a valid project holds reaches the pass.
 const _: () = assert!(alpha2_model::MAX_GRADIENT_STOPS <= MAX_GENERATOR_STOPS);
 
-/// Parameters one generator sets at most: its paint's seven plus a color per
-/// stop.
-const MAX_GENERATOR_PARAMS: usize = 7 + MAX_GENERATOR_STOPS;
+/// Parameters one generator sets at most: its paint's kind, points, spread, count and offset
+/// vectors plus a color per stop.
+const MAX_GENERATOR_PARAMS: usize = 5 + alpha2_render::OFFSET_VECTORS + MAX_GENERATOR_STOPS;
 
 /// The generator pass's parameters for `generator`. Every name is static, so
 /// the list holding them is all this allocates.
@@ -89,14 +89,9 @@ fn with_paint(
     }
     #[allow(clippy::cast_precision_loss)]
     let count = stops.len().min(MAX_GENERATOR_STOPS) as f32;
+    let mut params = params.with(names.count, ParamValue::Float(count));
+    for (name, four) in names.offsets.into_iter().zip(offsets.as_chunks::<4>().0) {
+        params.insert(name, ParamValue::Vec4(*four));
+    }
     params
-        .with(names.count, ParamValue::Float(count))
-        .with(
-            names.offsets0,
-            ParamValue::Vec4([offsets[0], offsets[1], offsets[2], offsets[3]]),
-        )
-        .with(
-            names.offsets1,
-            ParamValue::Vec4([offsets[4], offsets[5], offsets[6], offsets[7]]),
-        )
 }

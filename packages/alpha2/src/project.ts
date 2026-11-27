@@ -105,6 +105,9 @@ import {
   MAX_RUN_CLASSES,
   MAX_TEXT_ANIMATORS,
   MAX_TEXT_RUNS,
+  MAX_TEXT_FONT_SELECTIONS,
+  MIN_FONT_SCALE,
+  MAX_FONT_SCALE,
   MAX_LOOP_PASSES,
   MAX_ANIMATOR_OFFSET,
   MAX_ASPECT_RATIO,
@@ -498,6 +501,10 @@ function catalogOf(
         problems.push(shapeProblem(`source ${sourceId}`, issue));
       } else if (layout) {
         problems.push(layoutProblem(`source ${sourceId}`, layout));
+      } else if (generatorRunIssue(source.generator) !== undefined) {
+        problems.push(
+          `source ${sourceId} has text run ${generatorRunIssue(source.generator)} with a style out of range`,
+        );
       } else if (
         !validGenerator(source.generator) ||
         text(source.locator).length > 0 ||
@@ -3260,9 +3267,17 @@ function captionsProblem(
         : typeof cue.speaker === "string" && Object.hasOwn(styles, cue.speaker)
           ? cue.speaker
           : undefined;
-    if (patchName === undefined) continue;
-    const merged = patchedStyle(captions.style ?? {}, styles[patchName]);
-    if (!validTextStyle(merged, MAX_CAPTION_FONT_SIZE)) {
+    const merged =
+      patchName === undefined
+        ? isRecord(captions.style)
+          ? captions.style
+          : {}
+        : patchedStyle(captions.style ?? {}, styles[patchName]);
+    if (
+      (patchName !== undefined &&
+        !validTextStyle(merged, MAX_CAPTION_FONT_SIZE)) ||
+      invalidRunStyle(cue.text, fontSelection(merged)) !== undefined
+    ) {
       return `cue ${index} of track ${trackId} has a style out of range once its patch is applied`;
     }
   }
@@ -3362,6 +3377,80 @@ function validTextContent(text: unknown, encoder: TextEncoder): boolean {
     }
   }
   return bytes > 0 && bytes <= MAX_TEXT_CONTENT_BYTES;
+}
+
+interface FontSelection {
+  readonly family: string | undefined;
+  readonly weight: number;
+  readonly style: string;
+}
+
+function fontSelection(style: Record<string, unknown>): FontSelection {
+  return {
+    family:
+      typeof style.font_family === "string" ? style.font_family : undefined,
+    weight: typeof style.font_weight === "number" ? style.font_weight : 400,
+    style: typeof style.font_style === "string" ? style.font_style : "normal",
+  };
+}
+
+/** Mirrors `TextContent::invalid_run_style`. */
+function invalidRunStyle(
+  text: unknown,
+  base: FontSelection,
+): number | undefined {
+  if (!Array.isArray(text)) return undefined;
+  const selections = new Set<string>();
+  for (const [index, run] of (text as readonly unknown[]).entries()) {
+    const style = isRecord(run) && isRecord(run.style) ? run.style : undefined;
+    if (isRecord(run) && run.style !== undefined && !validRunStyle(run.style))
+      return index;
+    const family =
+      style !== undefined && Object.hasOwn(style, "font_family")
+        ? style.font_family
+        : base.family;
+    const selection = JSON.stringify([
+      typeof family === "string"
+        ? family.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+        : null,
+      style?.font_weight ?? base.weight,
+      style?.font_style ?? base.style,
+    ]);
+    if (!selections.has(selection)) {
+      if (selections.size === MAX_TEXT_FONT_SELECTIONS) return index;
+      selections.add(selection);
+    }
+  }
+  return undefined;
+}
+
+/** Mirrors `TextRunStyle::is_valid`. */
+function validRunStyle(style: unknown): boolean {
+  if (!isRecord(style)) return false;
+  const family = style.font_family;
+  const scale = style.font_scale;
+  return (
+    (family == null ||
+      (typeof family === "string" &&
+        family.length > 0 &&
+        new TextEncoder().encode(family).length <= MAX_FONT_FAMILY_BYTES)) &&
+    (style.font_weight === undefined || validFontWeight(style.font_weight)) &&
+    (scale === undefined ||
+      (isRecord(scale) &&
+        scale.mode !== "data" &&
+        validScalarAnimation(
+          scale,
+          Math.fround(MIN_FONT_SCALE),
+          Math.fround(MAX_FONT_SCALE),
+        ))) &&
+    (style.letter_spacing === undefined ||
+      (finiteNumber(style.letter_spacing) &&
+        style.letter_spacing >= MIN_LETTER_SPACING &&
+        style.letter_spacing <= MAX_LETTER_SPACING)) &&
+    (style.fill === undefined || validTextFill(style.fill)) &&
+    (style.strokes === undefined || validTextStrokes(style.strokes)) &&
+    (style.background_color === undefined || validRgba(style.background_color))
+  );
 }
 
 /** Mirrors `valid_class_name`. */
@@ -3614,6 +3703,18 @@ function positive(value: unknown): boolean {
   return typeof value === "number" && value > 0;
 }
 
+/** Mirrors the text run check of `Generator::validate`. */
+function generatorRunIssue(generator: unknown): number | undefined {
+  if (
+    !isRecord(generator) ||
+    generator.type !== "text" ||
+    !validGenerator(generator)
+  )
+    return undefined;
+  const style = isRecord(generator.style) ? generator.style : {};
+  return invalidRunStyle(generator.text, fontSelection(style));
+}
+
 function validGenerator(generator: unknown): boolean {
   if (!isRecord(generator)) return false;
   if (generator.type === "fill") return validPaint(generator.paint);
@@ -3688,6 +3789,7 @@ const LAYOUT_PROBLEM = {
   lengthKeyframesDiffer: "has size keyframes that differ in kind",
   paintKeyframesDiffer: "has paint keyframes that differ in kind or stops",
   textKeyframesInterpolate: "has text keyframes that do not hold",
+  textRunNotStatic: "has a run with a class, a time or a keyframed font scale",
 } as const;
 
 // Problems in a shape node's items (`shape` set) are reported as shape problems, like the engine.
@@ -3811,6 +3913,8 @@ function layoutIssue(root: unknown, canvas?: Canvas): LayoutIssue | undefined {
   return layoutNodeIssue(root, "root", 1, counts, {
     shorterSide,
     parent: undefined,
+    family: undefined,
+    weight: 400,
   });
 }
 
@@ -3824,7 +3928,12 @@ function layoutNodeIssue(
     isolated: number;
     shapes: { count: number };
   },
-  context: { shorterSide: number | undefined; parent: string | undefined },
+  context: {
+    shorterSide: number | undefined;
+    parent: string | undefined;
+    family: string | undefined;
+    weight: number;
+  },
 ): LayoutIssue | undefined {
   const issue = (problem: string): LayoutIssue => ({ at, problem });
   const node = isRecord(value) ? value : {};
@@ -3889,8 +3998,16 @@ function layoutNodeIssue(
     layoutGridIssue(node, at) ??
     layoutStyleIssue(node, at, context.shorterSide);
   if (fields) return fields;
+  const family =
+    typeof node.font_family === "string" ? node.font_family : context.family;
+  const weight =
+    typeof node.font_weight === "number" ? node.font_weight : context.weight;
   if (text) {
-    const textIssue = layoutTextIssue(node.text, `${at}.text`);
+    const textIssue = layoutTextIssue(node.text, `${at}.text`, {
+      family,
+      weight,
+      style: "normal",
+    });
     if (textIssue) return textIssue;
   }
   if (shape) {
@@ -3909,7 +4026,7 @@ function layoutNodeIssue(
       `${at}.children[${index}]`,
       depth + 1,
       counts,
-      { shorterSide: context.shorterSide, parent: display },
+      { shorterSide: context.shorterSide, parent: display, family, weight },
     );
     if (childIssue) return childIssue;
   }
@@ -4298,6 +4415,7 @@ function layoutStyleIssue(
 function layoutTextIssue(
   content: unknown,
   at: string,
+  base: FontSelection,
 ): LayoutIssue | undefined {
   const keyframes = layoutAnimatedIssue(content, at, () => true);
   if (keyframes) return keyframes;
@@ -4313,13 +4431,41 @@ function layoutTextIssue(
   ) {
     return { at, problem: LAYOUT_PROBLEM.textKeyframesInterpolate };
   }
-  return layoutAnimatedIssue(
-    content,
-    at,
-    (value) =>
-      typeof value === "string" &&
-      new TextEncoder().encode(value).length <= MAX_TEXT_CONTENT_BYTES,
-  );
+  const values = animationValues<unknown>(content) ?? [];
+  const notStatic = (value: unknown) =>
+    Array.isArray(value) &&
+    value.some(
+      (run: unknown) =>
+        isRecord(run) &&
+        ((Array.isArray(run.class) && run.class.length > 0) ||
+          run.time != null ||
+          (isRecord(run.style) &&
+            isRecord(run.style.font_scale) &&
+            run.style.font_scale.mode !== "constant")),
+    );
+  if (values.some(notStatic)) {
+    return { at, problem: LAYOUT_PROBLEM.textRunNotStatic };
+  }
+  const encoder = new TextEncoder();
+  return layoutAnimatedIssue(content, at, (value) => {
+    if (typeof value === "string")
+      return encoder.encode(value).length <= MAX_TEXT_CONTENT_BYTES;
+    if (!Array.isArray(value)) return false;
+    let bytes = 0;
+    for (const run of value as readonly unknown[]) {
+      if (
+        !isRecord(run) ||
+        typeof run.text !== "string" ||
+        run.text.length === 0
+      )
+        return false;
+      bytes += encoder.encode(run.text).length;
+    }
+    return (
+      bytes <= MAX_TEXT_CONTENT_BYTES &&
+      invalidRunStyle(value, base) === undefined
+    );
+  });
 }
 
 /** Mirrors `validate_shape_items`: the first problem of a content tree in document order. */
@@ -5096,6 +5242,10 @@ function compositionProblems(
         } else if (layout) {
           problems.push(
             layoutProblem(`node ${nodeId} of composition ${id}`, layout),
+          );
+        } else if (generatorRunIssue(op.generator) !== undefined) {
+          problems.push(
+            `composition ${id} node ${nodeId} has text run ${generatorRunIssue(op.generator)} with a style out of range`,
           );
         } else if (!validGenerator(op.generator)) {
           invalid();

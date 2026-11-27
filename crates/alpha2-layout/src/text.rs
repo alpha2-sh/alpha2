@@ -1,11 +1,16 @@
 //! Text in a text style: its text host request, its identity, and where it lies on a picture.
 
+use std::borrow::Cow;
+
 use alpha2_media::EmojiPolicy;
-use alpha2_model::{Paint, Rgba, Spread, TextAlign, TextShadow, TextStroke, TextStyle};
+use alpha2_model::{
+    FontStyle, Paint, Rgba, Spread, TextAlign, TextContent, TextShadow, TextStroke, TextStyle,
+};
 use alpha2_text::{
     ShapedText, TextFill, TextGradient, TextGradientKind, TextGradientStop, TextRasterError,
     TextRasterRequest, TextRasterizer, TextSpread,
 };
+use alpha2_time::MediaTime;
 
 use crate::{Baselines, CanvasRect, PictureSize};
 
@@ -41,6 +46,114 @@ pub struct TextBounds {
     pub truncated: bool,
     /// Whether the drawn text still splits a word or is taller than `max_height`.
     pub overflow: bool,
+}
+
+/// A text at a time since its holder started (a caption cue's start, a text generator's picture
+/// time), which samples its runs' keyframed `font_scale`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextAt<'a> {
+    /// The text, a string or runs.
+    pub content: Cow<'a, TextContent>,
+    /// When.
+    pub time: MediaTime,
+}
+
+impl<'a> TextAt<'a> {
+    /// `content` at `time`.
+    #[must_use]
+    pub const fn new(content: &'a TextContent, time: MediaTime) -> Self {
+        Self {
+            content: Cow::Borrowed(content),
+            time,
+        }
+    }
+
+    /// Each run's `font_scale` at the time, 1 for a run without one.
+    #[must_use]
+    pub fn scales(&self) -> Vec<f32> {
+        self.content
+            .runs()
+            .iter()
+            .map(|run| {
+                run.style
+                    .as_ref()
+                    .and_then(|style| style.font_scale.as_ref())
+                    .map_or(1.0, |scale| {
+                        alpha2_eval::sample_scalar(
+                            scale,
+                            self.time,
+                            &alpha2_eval::SampleContext::NONE,
+                        )
+                        .clamp(
+                            *alpha2_model::FONT_SCALE_RANGE.start(),
+                            *alpha2_model::FONT_SCALE_RANGE.end(),
+                        )
+                    })
+            })
+            .collect()
+    }
+}
+
+impl From<&str> for TextAt<'static> {
+    fn from(text: &str) -> Self {
+        Self {
+            content: Cow::Owned(TextContent::from(text)),
+            time: MediaTime::ZERO,
+        }
+    }
+}
+
+/// The text host spans of `text` in `style` at `font_size` pixels: one per run, each run's style
+/// applied over `style` and its size `font_size` times its sampled `font_scale`; none when no run
+/// has a style and `style` is upright and undecorated, so such a request is a plain one.
+#[must_use]
+pub fn text_spans(
+    text: &TextAt<'_>,
+    style: &TextStyle,
+    font_size: f32,
+) -> Vec<alpha2_text::TextSpan> {
+    let content = &*text.content;
+    let base_plain = style.font_style.is_normal() && !style.underline && !style.line_through;
+    if base_plain && !content.has_run_styles() {
+        return Vec::new();
+    }
+    let span = |bytes: std::ops::Range<usize>,
+                run: Option<&alpha2_model::TextRunStyle>,
+                scale: f32| {
+        let merged = run.map_or_else(|| Cow::Borrowed(style), |run| Cow::Owned(run.apply(style)));
+        let size = (font_size * scale).clamp(f32::MIN_POSITIVE, MAX_FONT_PIXELS);
+        alpha2_text::TextSpan {
+            bytes,
+            font_family: merged.font_family.clone(),
+            font_weight: merged.font_weight,
+            font_style: match merged.font_style {
+                FontStyle::Normal => alpha2_text::FontStyle::Normal,
+                FontStyle::Italic => alpha2_text::FontStyle::Italic,
+                FontStyle::Oblique => alpha2_text::FontStyle::Oblique,
+            },
+            font_size: size,
+            letter_spacing: merged.letter_spacing * size,
+            fill: text_fill(&merged.fill),
+            strokes: stroke_pixels(&merged.strokes, size),
+            background_color: run.and_then(|run| run.background_color).map(rgba8),
+            underline: merged.underline,
+            line_through: merged.line_through,
+        }
+    };
+    if content.runs().is_empty() {
+        return vec![span(0..content.len(), None, 1.0)];
+    }
+    let mut start = 0;
+    content
+        .runs()
+        .iter()
+        .zip(text.scales())
+        .map(|(run, scale)| {
+            let bytes = start..start + run.text.len();
+            start = bytes.end;
+            span(bytes, run.style.as_ref(), scale)
+        })
+        .collect()
 }
 
 /// A layout text's raster request, shadows and animators hashed as a text store key
@@ -126,6 +239,7 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         letter_spacing,
         font_weight,
         clamp,
+        spans,
     } = request;
     feed(text.as_bytes());
     feed(&[0xff]);
@@ -169,6 +283,55 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         feed(&clamp.max_height.to_bits().to_le_bytes());
         feed(clamp.ellipsis.as_deref().unwrap_or_default().as_bytes());
         feed(&[0xff, u8::from(clamp.ellipsis.is_some())]);
+    }
+    feed_spans(feed, spans);
+}
+
+fn feed_spans(feed: &mut impl FnMut(&[u8]), spans: &[alpha2_text::TextSpan]) {
+    if spans.is_empty() {
+        return;
+    }
+    feed(&[0xf8]);
+    feed(&spans.len().to_le_bytes());
+    for span in spans {
+        let alpha2_text::TextSpan {
+            bytes,
+            font_family,
+            font_weight,
+            font_style,
+            font_size,
+            letter_spacing,
+            fill,
+            strokes,
+            background_color,
+            underline,
+            line_through,
+        } = span;
+        feed(&bytes.start.to_le_bytes());
+        feed(&bytes.end.to_le_bytes());
+        feed(font_family.as_deref().unwrap_or_default().as_bytes());
+        feed(&[0xff, u8::from(font_family.is_some())]);
+        feed(&font_weight.to_le_bytes());
+        feed(&[*font_style as u8]);
+        feed(&font_size.to_bits().to_le_bytes());
+        feed(&letter_spacing.to_bits().to_le_bytes());
+        match fill {
+            TextFill::Solid(color) => feed(color),
+            TextFill::Gradient(gradient) => feed_text_gradient(feed, gradient),
+        }
+        feed_count(feed, strokes.len());
+        for stroke in strokes {
+            feed(&stroke.color);
+            feed(&stroke.width.to_bits().to_le_bytes());
+        }
+        match background_color {
+            Some(color) => {
+                feed(&[1]);
+                feed(color);
+            }
+            None => feed(&[0]),
+        }
+        feed(&[u8::from(*underline), u8::from(*line_through)]);
     }
 }
 
@@ -228,10 +391,11 @@ fn feed_look(feed: &mut impl FnMut(&[u8]), strokes: &[TextStroke], shadows: &[Te
     }
 }
 
-/// A text's identity at a render size: the text, its style and the size, hashed with FNV-1a.
-/// Never zero.
+/// A text's identity at a render size: the text, its runs' styles and sampled scales, its style
+/// and the size, hashed with FNV-1a. A text without run styles keys as its plain string. Never
+/// zero.
 #[must_use]
-pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
+pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 {
     // No `..`: a new field must decide whether it is part of the key.
     let TextStyle {
         font_family,
@@ -240,6 +404,9 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         line_height,
         letter_spacing,
         font_weight,
+        font_style,
+        underline,
+        line_through,
         align,
         max_width,
         max_height,
@@ -259,7 +426,7 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
             hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
         }
     };
-    feed(text.as_bytes());
+    feed(text.content.text().as_bytes());
     feed(&[0xff]);
     // Family names cannot hold 0xff (they are UTF-8), so the text and family stay apart.
     feed(font_family.as_deref().unwrap_or_default().as_bytes());
@@ -308,6 +475,15 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         feed(clamp.block_ellipsis.text().unwrap_or_default().as_bytes());
         feed(&[0xff, u8::from(clamp.block_ellipsis.text().is_some())]);
     }
+    if !font_style.is_normal() {
+        feed(&[0xf3, *font_style as u8]);
+    }
+    if *underline || *line_through {
+        feed(&[0xf4, u8::from(*underline), u8::from(*line_through)]);
+    }
+    if text.content.has_run_styles() {
+        feed_spans(&mut feed, &text_spans(text, style, 1.0));
+    }
     feed(&size.width().to_le_bytes());
     feed(&size.height().to_le_bytes());
     hash.max(1)
@@ -324,7 +500,7 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
 #[allow(clippy::cast_precision_loss)]
 pub fn measure_text(
     rasterizer: &TextRasterizer,
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
 ) -> Result<TextBounds, TextRasterError> {
@@ -404,7 +580,7 @@ fn style_lines(
 /// # Errors
 /// Returns the first refusal of `shape`.
 pub fn fit_text<S: std::ops::Deref<Target = ShapedText>>(
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
     mut shape: impl FnMut(&TextRasterRequest) -> Result<S, TextRasterError>,
@@ -433,7 +609,7 @@ pub fn rgba8(color: Rgba) -> [u8; 4] {
 /// `key`. Sizes are scaled from canvas fractions to pixels and clamped to what the host draws.
 #[must_use]
 pub fn text_request(
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
     key: u64,
@@ -445,14 +621,15 @@ pub fn text_request(
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn text_request_at(
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
     key: u64,
     font_size: f32,
 ) -> TextRasterRequest {
+    let spans = text_spans(text, style, font_size);
     TextRasterRequest {
-        text: text.to_owned(),
+        text: text.content.text().into_owned(),
         font_size,
         max_width: (style.max_width * size.width() as f32).max(1.0),
         line_height: style.line_height,
@@ -465,7 +642,9 @@ pub fn text_request_at(
         emoji_policy: EmojiPolicy::Color,
         content_version: key,
         strokes: stroke_pixels(&style.strokes, font_size),
-        split_background: !style.shadows.is_empty() && style.background.is_some(),
+        split_background: !style.shadows.is_empty()
+            && (style.background.is_some()
+                || spans.iter().any(|span| span.background_color.is_some())),
         background: style
             .background
             .map(|background| alpha2_text::TextBackground {
@@ -479,6 +658,7 @@ pub fn text_request_at(
             .line_clamp
             .as_ref()
             .map(|clamp| crate::fit::text_clamp(clamp, box_height(style, size))),
+        spans,
     }
 }
 
@@ -652,7 +832,7 @@ pub fn animated_text_key(
     size: PictureSize,
     time: alpha2_time::MediaTime,
 ) -> u64 {
-    let key = text_key(&content.text(), style, size);
+    let key = text_key(&TextAt::new(content, time), style, size);
     if style.animators.is_empty() {
         return key;
     }
@@ -689,7 +869,7 @@ pub fn animated_text_key(
 /// `font_size` pixels ([`fit_text`]), with content version `key`.
 #[must_use]
 pub fn text_draw(
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
     key: u64,

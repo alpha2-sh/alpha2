@@ -948,27 +948,19 @@ fn reference_cycle_member<'a>(
     None
 }
 
+fn node_owner(composition: &Composition, node: &CompositionNode) -> crate::ShapeOwner {
+    crate::ShapeOwner::Node {
+        composition: composition.id.clone(),
+        node: node.id.clone(),
+    }
+}
+
 fn shape_error(
     composition: &Composition,
     node: &CompositionNode,
     issue: crate::ShapeIssue,
 ) -> crate::ModelError {
     crate::ModelError::InvalidShape {
-        owner: crate::ShapeOwner::Node {
-            composition: composition.id.clone(),
-            node: node.id.clone(),
-        },
-        at: issue.at,
-        problem: issue.problem,
-    }
-}
-
-fn layout_error(
-    composition: &Composition,
-    node: &CompositionNode,
-    issue: crate::LayoutIssue,
-) -> crate::ModelError {
-    crate::ModelError::InvalidLayout {
         owner: crate::ShapeOwner::Node {
             composition: composition.id.clone(),
             node: node.id.clone(),
@@ -1084,11 +1076,12 @@ fn validate_node(
         }
         NodeOp::Generator { generator } => match generator.validate_on(canvas.0, canvas.1) {
             Ok(()) => true,
-            Err(crate::GeneratorIssue::Shape(issue)) => return Err(shape_error(issue)),
-            Err(crate::GeneratorIssue::Layout(issue)) => {
-                return Err(layout_error(composition, node, issue));
+            Err(issue) => {
+                match crate::project::generator_error(node_owner(composition, node), issue) {
+                    Some(error) => return Err(error),
+                    None => false,
+                }
             }
-            Err(crate::GeneratorIssue::Invalid) => false,
         },
         NodeOp::Effect { effect, inputs, .. } => {
             effect.is_valid()

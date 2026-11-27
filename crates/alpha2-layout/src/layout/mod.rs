@@ -118,8 +118,21 @@ pub(crate) fn text_request(
     clamp: Option<TextClamp>,
     content_version: u64,
 ) -> TextRasterRequest {
+    let base = alpha2_model::TextStyle {
+        font_family: text.font_family.clone(),
+        fill: text.fill.clone(),
+        letter_spacing: text.letter_spacing,
+        font_weight: text.font_weight,
+        strokes: text.strokes.clone(),
+        ..alpha2_model::TextStyle::default()
+    };
+    let spans = crate::text_spans(
+        &crate::TextAt::new(&text.content, alpha2_time::MediaTime::ZERO),
+        &base,
+        font_size,
+    );
     TextRasterRequest {
-        text: text.content.clone(),
+        text: text.content.text().into_owned(),
         font_size,
         max_width,
         line_height: text.line_height,
@@ -138,6 +151,7 @@ pub(crate) fn text_request(
         letter_spacing: text.letter_spacing * font_size,
         font_weight: text.font_weight,
         clamp,
+        spans,
     }
 }
 

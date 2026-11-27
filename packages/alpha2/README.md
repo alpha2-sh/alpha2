@@ -151,13 +151,13 @@ const { project, assets, loudness, warnings } = compileCompose(compose, spec, { 
 | `alpha2/extract`, `alpha2/plugins` | `runExtractor`: extractors of your own over a source or the timeline, decoded in the browser; `loadPlugin`: [extractor plugins](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md) run sandboxed; `parsePluginManifest` and the `MAX_PLUGIN_*` limits. |
 | `alpha2/extractor` | The extractor contract every surface shares (`Extractor`, `ExtractorDescriptor`, `ExtractRun`, `ExtractResult`), types only, without a media library. |
 | `alpha2/compose`, `alpha2/compose-wasm` | Compose specs and templates (`loadCompose`, `composeRequirements`, `compileCompose`, `bindTemplate`, `templateDataSchema`, `lintTemplate`, `builtinTemplates`), and the wasm module they load. See [Compose](#compose). |
-| `alpha2/captions` | SRT and WebVTT import into caption tracks. |
+| `alpha2/captions` | SRT and WebVTT import into caption tracks; `<b>`, `<i>` and `<u>` become bold, italic and underlined runs. |
 | `alpha2/geometry` | Shape geometry for editors, from the engine's own code: item bounds, hit tests, nearest points, path lengths, trims, resampling, convert to path, motion paths. |
 | `alpha2/layout` | Layout generators: `measureLayout` (where every box lies and what overflows, laid out with the engine's fonts, pixels those of the project canvas) and a builder from CSS-like props, flexbox and grid. See [docs/layout.md](https://github.com/alpha2-sh/alpha2/blob/main/docs/layout.md). |
 | `alpha2/effects` | Effect definitions and the built-in catalog's types; `RuntimeEffectRegistry`, a typed wrapper for registering WGSL effects and effect resources at run time. |
 | `alpha2/extensions`, `alpha2/extensions-wasm`, `alpha2/extensions-pdf-wasm` | SVG, animated image, Lottie, OpenEXR, image sequence, LaTeX and PDF sources, from their own WebAssembly modules (`loadExtensions`). After an abort a module restarts asynchronously; `ready()` resolves once it takes calls again. |
 | `alpha2/wasm-module` | `WasmModule`, which loads a wasm-bindgen module once per realm and restarts it asynchronously. |
-| `alpha2/text` | Text rasterizers: `WasmTextRasterizer` (the engine's, the same pixels as a native export) and `OffscreenTextRasterizer` (the browser's). |
+| `alpha2/text` | Text rasterizers: `WasmTextRasterizer` (the engine's, the same pixels as a native export, including styled runs) and `OffscreenTextRasterizer` (the browser's). |
 | `alpha2/assets` | Media identity, proxies and conform reports. |
 | `alpha2/frame-supply` | `FrameSupply`: decodes and uploads the frames a time needs. |
 | `alpha2/media` | Decoder contracts, `WebCodecsVideoDecoder`, `DecoderRefillCoordinator`. |

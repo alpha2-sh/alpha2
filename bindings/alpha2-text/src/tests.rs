@@ -159,8 +159,32 @@ fn fixture_requests_match_the_pinned_rasters() {
             let channels = value.as_array().expect("color");
             std::array::from_fn(|index| channels[index].as_u64().expect("u8") as u8)
         };
+        let strokes = |value: &serde_json::Value| -> Vec<TextStroke> {
+            value
+                .as_array()
+                .expect("strokes")
+                .iter()
+                .map(|stroke| TextStroke {
+                    color: rgba(&stroke["color"]),
+                    width: stroke["width"].as_f64().expect("width") as f32,
+                })
+                .collect()
+        };
         let pinned = TextRasterRequest {
-            text: request["text"].as_str().expect("text").into(),
+            text: request["text"].as_str().map_or_else(
+                || {
+                    request["runs"]
+                        .as_array()
+                        .expect("text or runs")
+                        .iter()
+                        .map(|run| {
+                            run.as_str()
+                                .unwrap_or_else(|| run["text"].as_str().expect("text"))
+                        })
+                        .collect()
+                },
+                Into::into,
+            ),
             font_size: number("fontSize", 0.0),
             max_width: number("maxWidth", 0.0),
             line_height: number("lineHeight", 1.2),
@@ -196,7 +220,50 @@ fn fixture_requests_match_the_pinned_rasters() {
             letter_spacing: request["letterSpacing"].as_f64().unwrap_or(0.0) as f32,
             font_weight: 400,
             clamp: None,
+            spans: Vec::new(),
         };
+        let mut start = 0;
+        let mut spans = Vec::new();
+        for run in request["runs"].as_array().into_iter().flatten() {
+            let text = run
+                .as_str()
+                .unwrap_or_else(|| run["text"].as_str().expect("text"));
+            let bytes = start..start + text.len();
+            start = bytes.end;
+            if run.is_string() {
+                continue;
+            }
+            let size = run["fontSize"]
+                .as_f64()
+                .map_or(pinned.font_size, |size| size as f32);
+            spans.push(TextSpan {
+                bytes,
+                font_family: run["fontFamily"]
+                    .as_str()
+                    .map(Into::into)
+                    .or_else(|| pinned.font_family.clone()),
+                font_weight: run["fontWeight"]
+                    .as_u64()
+                    .map_or(pinned.font_weight, |weight| weight as u16),
+                font_style: match run["fontStyle"].as_str() {
+                    Some("italic") => FontStyle::Italic,
+                    Some("oblique") => FontStyle::Oblique,
+                    _ => FontStyle::Normal,
+                },
+                font_size: size,
+                letter_spacing: run["letterSpacing"]
+                    .as_f64()
+                    .map_or(pinned.letter_spacing, |spacing| spacing as f32),
+                fill: run.get("fill").map_or_else(|| pinned.fill.clone(), fill),
+                strokes: run
+                    .get("strokes")
+                    .map_or_else(|| pinned.strokes.clone(), strokes),
+                background_color: run.get("backgroundColor").map(rgba),
+                underline: run["underline"].as_bool().unwrap_or(false),
+                line_through: run["lineThrough"].as_bool().unwrap_or(false),
+            });
+        }
+        let pinned = TextRasterRequest { spans, ..pinned };
         let result = match request.get("clusterState") {
             Some(state) => {
                 let clusters = rasterizer.layout(&pinned).expect("lays out").clusters.len();
@@ -264,6 +331,8 @@ fn lines_break_at_opportunities_and_inside_only_what_is_wider() {
                 spacing: 0.0,
                 hangs: character == ' ',
                 break_before: index > 0 && characters[index - 1] == ' ',
+                size: 10.0,
+                look: 0,
             })
             .collect::<Vec<_>>()
     };
@@ -294,6 +363,7 @@ fn metrics_pixels_cache_and_invalidation_are_stable() {
         letter_spacing: 0.0,
         font_weight: 400,
         clamp: None,
+        spans: Vec::new(),
     };
     let first = rasterizer.rasterize(&request).expect("rasterized");
     assert!(first.descriptor.is_valid());
@@ -415,16 +485,19 @@ fn a_requested_family_draws_first_and_the_stack_fills_in() {
         },
     ])
     .expect("fonts");
-    assert_eq!(rasterizer.font_order(None, 400), [0, 1]);
+    assert_eq!(rasterizer.font_order(None, FontStyle::Normal, 400), [0, 1]);
     assert_eq!(
-        rasterizer.font_order(Some(&other.to_lowercase()), 400),
+        rasterizer.font_order(Some(&other.to_lowercase()), FontStyle::Normal, 400),
         [1, 0]
     );
     assert_eq!(
-        rasterizer.font_order(Some(&family.to_uppercase()), 400),
+        rasterizer.font_order(Some(&family.to_uppercase()), FontStyle::Normal, 400),
         [0, 1]
     );
-    assert_eq!(rasterizer.font_order(Some("Missing"), 400), [0, 1]);
+    assert_eq!(
+        rasterizer.font_order(Some("Missing"), FontStyle::Normal, 400),
+        [0, 1]
+    );
     assert_eq!(
         runs(&rasterizer, "A\u{10ffff}", &[1, 0]),
         [(1, "A\u{10ffff}".into())],
@@ -528,7 +601,10 @@ fn a_family_is_found_by_its_localized_name() {
         font_family(&rasterizer.fonts[1].source.bytes, 0),
         Some(other)
     );
-    assert_eq!(rasterizer.font_order(Some(KOREAN_FAMILY), 400), [1, 0]);
+    assert_eq!(
+        rasterizer.font_order(Some(KOREAN_FAMILY), FontStyle::Normal, 400),
+        [1, 0]
+    );
     assert_eq!(rasterizer.unmatched_families(), Vec::<String>::new());
 }
 
@@ -539,9 +615,16 @@ fn a_family_is_found_whatever_its_normalization_or_case() {
     let (rasterizer, other) = localized_stack();
     let decomposed = KOREAN_FAMILY.nfd().collect::<String>();
     assert_ne!(decomposed, KOREAN_FAMILY);
-    assert_eq!(rasterizer.font_order(Some(&decomposed), 400), [1, 0]);
     assert_eq!(
-        rasterizer.font_order(Some(&format!("  {}  ", other.to_uppercase())), 400),
+        rasterizer.font_order(Some(&decomposed), FontStyle::Normal, 400),
+        [1, 0]
+    );
+    assert_eq!(
+        rasterizer.font_order(
+            Some(&format!("  {}  ", other.to_uppercase())),
+            FontStyle::Normal,
+            400
+        ),
         [1, 0]
     );
     assert_eq!(fold_family("\u{C5}LPHA"), fold_family("A\u{30A}lpha"));
@@ -551,16 +634,25 @@ fn a_family_is_found_whatever_its_normalization_or_case() {
 #[test]
 fn an_unmatched_family_is_reported() {
     let (rasterizer, _) = localized_stack();
-    assert_eq!(rasterizer.font_order(Some("Missing Sans"), 400), [0, 1]);
-    assert_eq!(rasterizer.font_order(Some("Missing Sans"), 700), [0, 1]);
-    assert_eq!(rasterizer.font_order(Some("Absent"), 400), [0, 1]);
-    rasterizer.font_order(Some(KOREAN_FAMILY), 400);
+    assert_eq!(
+        rasterizer.font_order(Some("Missing Sans"), FontStyle::Normal, 400),
+        [0, 1]
+    );
+    assert_eq!(
+        rasterizer.font_order(Some("Missing Sans"), FontStyle::Normal, 700),
+        [0, 1]
+    );
+    assert_eq!(
+        rasterizer.font_order(Some("Absent"), FontStyle::Normal, 400),
+        [0, 1]
+    );
+    rasterizer.font_order(Some(KOREAN_FAMILY), FontStyle::Normal, 400);
     assert_eq!(
         rasterizer.unmatched_families(),
         ["Absent".to_owned(), "Missing Sans".to_owned()]
     );
     let empty = TextRasterizer::empty();
-    empty.font_order(Some("Missing Sans"), 400);
+    empty.font_order(Some("Missing Sans"), FontStyle::Normal, 400);
     assert_eq!(empty.unmatched_families(), Vec::<String>::new());
 }
 
@@ -579,7 +671,11 @@ fn runs_under(
         &faces,
         text,
         &ParagraphBidiInfo::new(text, None),
-        order,
+        &[ShapeSegment {
+            range: 0..text.len(),
+            look: 0,
+        }],
+        &[order.to_vec()],
         policy,
     )
     .into_iter()
@@ -646,6 +742,7 @@ fn caption(text: &str, outline: Option<TextStroke>, version: u64) -> TextRasterR
         letter_spacing: 0.0,
         font_weight: 400,
         clamp: None,
+        spans: Vec::new(),
     }
 }
 
@@ -716,10 +813,16 @@ fn a_glyph_a_font_substitutes_but_does_not_have_draws_as_notdef() {
             &faces,
             "A",
             &ParagraphBidiInfo::new("A", None),
-            54.0,
-            &[0],
+            &runs::Shaping::new(
+                vec![runs::Look::of_request(&request("A", 54.0))],
+                vec![vec![0]],
+                Vec::new(),
+            ),
+            &[ShapeSegment {
+                range: 0..1,
+                look: 0,
+            }],
             EmojiPolicy::Color,
-            0.0,
         )
         .iter()
         .map(|glyph| glyph.glyph_index)
@@ -952,6 +1055,7 @@ fn plain(
             letter_spacing: 0.0,
             font_weight: 400,
             clamp: None,
+            spans: Vec::new(),
         })
         .unwrap_or_else(|error| panic!("{text:?}: {error}"))
 }
@@ -1237,6 +1341,7 @@ fn request(text: &str, size: f32) -> TextRasterRequest {
         letter_spacing: 0.0,
         font_weight: 400,
         clamp: None,
+        spans: Vec::new(),
     }
 }
 
@@ -1508,7 +1613,7 @@ fn requests_outside_the_limits_are_refused() {
         ("strokes 40 + 25", |r| {
             r.strokes = vec![outline(40.0), outline(25.0)];
         }),
-        ("five strokes", |r| r.strokes = vec![outline(1.0); 5]),
+        ("nine strokes", |r| r.strokes = vec![outline(1.0); 9]),
         ("a gradient with one stop", |r| {
             r.fill = TextFill::Gradient(linear_gradient(vec![stop(0.0, [1.0; 4])]));
         }),
@@ -1707,7 +1812,7 @@ fn background_box_by_box(
     pixels: usize,
     width: u32,
     margin: [u32; 2],
-    line_boxes: &[(f32, f32, f32)],
+    line_boxes: &[(f32, f32, f32, f32)],
 ) -> Vec<u8> {
     let background = request.background.expect("a background");
     let [margin_x, margin_y] = margin.map(|margin| margin as f32);
@@ -1718,12 +1823,12 @@ fn background_box_by_box(
         let y = (index / width as usize) as f32;
         let covered = line_boxes
             .iter()
-            .map(|&(left, line_width, top)| {
+            .map(|&(left, line_width, top, height)| {
                 let (left, right, top, bottom) = (
                     margin_x + left - padding,
                     margin_x + left + line_width + padding,
                     margin_y + top - padding,
-                    margin_y + top + request.font_size + padding,
+                    margin_y + top + height + padding,
                 );
                 let across = (right.min(x + 1.0) - left.max(x)).clamp(0.0, 1.0);
                 let down = (bottom.min(y + 1.0) - top.max(y)).clamp(0.0, 1.0);
@@ -1768,7 +1873,7 @@ fn the_background_is_every_line_box_byte_for_byte() {
             .filter(|(_, (_, width))| *width > 0.0)
             .map(|(line, &(left, width))| {
                 #[allow(clippy::cast_precision_loss)]
-                (left, width, line as f32 * advance)
+                (left, width, line as f32 * advance, request.font_size)
             })
             .collect::<Vec<_>>();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1785,6 +1890,7 @@ fn the_background_is_every_line_box_byte_for_byte() {
                 width,
                 [margin, margin],
                 &line_boxes,
+                &[],
                 &[],
                 &RequestLook::of(&request, [90.0, advance * 5.0]),
             )
@@ -2196,6 +2302,8 @@ fn min_content_is_the_widest_run_between_opportunities() {
                 spacing: 0.0,
                 hangs: character == ' ',
                 break_before: index > 0 && characters[index - 1] == ' ',
+                size: 10.0,
+                look: 0,
             })
             .collect::<Vec<_>>()
     };
@@ -2203,7 +2311,6 @@ fn min_content_is_the_widest_run_between_opportunities() {
         paragraphs: paragraphs.iter().map(|text| clusters(text)).collect(),
         font_size: 10.0,
         line_height: 1.2,
-        line_advance: 12.0,
     };
     let text = shaped(&["I WW  "]);
     assert_eq!(text.min_content_width(), 50.0);
@@ -2319,10 +2426,19 @@ fn glyph_count(rasterizer: &TextRasterizer, text: &str, letter_spacing: f32) -> 
         &faces,
         text,
         &bidi,
-        40.0,
-        &[0],
+        &runs::Shaping::new(
+            vec![runs::Look::of_request(&TextRasterRequest {
+                letter_spacing,
+                ..request(text, 40.0)
+            })],
+            vec![vec![0]],
+            Vec::new(),
+        ),
+        &[ShapeSegment {
+            range: 0..text.len(),
+            look: 0,
+        }],
         EmojiPolicy::Color,
-        letter_spacing,
     )
     .len()
 }

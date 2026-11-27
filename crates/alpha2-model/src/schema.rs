@@ -261,6 +261,12 @@ pub fn project_limits_json() -> Value {
         ),
         ("MAX_TEXT_SHADOW_BLUR", json!(crate::MAX_TEXT_SHADOW_BLUR)),
         ("MAX_TEXT_RUNS", json!(crate::MAX_TEXT_RUNS)),
+        (
+            "MAX_TEXT_FONT_SELECTIONS",
+            json!(crate::MAX_TEXT_FONT_SELECTIONS),
+        ),
+        ("MIN_FONT_SCALE", json!(crate::FONT_SCALE_RANGE.start())),
+        ("MAX_FONT_SCALE", json!(crate::FONT_SCALE_RANGE.end())),
         ("MAX_CAPTION_STYLES", json!(crate::MAX_CAPTION_STYLES)),
         (
             "MAX_CAPTION_NAME_BYTES",

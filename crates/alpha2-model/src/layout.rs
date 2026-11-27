@@ -99,11 +99,12 @@ pub struct LayoutNode {
     #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_LAYOUT_NODES }>")]
     #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_LAYOUT_NODES)))]
     pub children: Vec<LayoutNode>,
-    /// The box's text, wrapped at its content width in the inherited style; `\n` starts a line.
-    /// At most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty. Keyframes all `hold`.
-    /// Not with `children` or `shape`.
+    /// The box's text, a string or runs, wrapped at its content width in the inherited style;
+    /// `\n` starts a line. At most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty.
+    /// Keyframes all `hold`. A run takes a `style` with a constant `font_scale` only: no
+    /// `class`, `time` or keyframes. Not with `children` or `shape`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<Animated<String>>,
+    pub text: Option<Animated<crate::TextContent>>,
     /// Shapes drawn on a picture the size of the box's content box. Not with `children` or
     /// `text`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -561,6 +562,8 @@ pub enum LayoutProblem {
     PaintKeyframesDiffer,
     /// A text keyframe whose interpolation is not `hold`.
     TextKeyframesInterpolate,
+    /// A text run with a class, a time or a keyframed font scale.
+    TextRunNotStatic,
 }
 
 impl fmt::Display for LayoutProblem {
@@ -619,6 +622,7 @@ impl fmt::Display for LayoutProblem {
             Self::LengthKeyframesDiffer => "has size keyframes that differ in kind",
             Self::PaintKeyframesDiffer => "has paint keyframes that differ in kind or stops",
             Self::TextKeyframesInterpolate => "has text keyframes that do not hold",
+            Self::TextRunNotStatic => "has a run with a class, a time or a keyframed font scale",
             Self::GridFieldOnFlex(_)
             | Self::FlexFieldOnGrid(_)
             | Self::FlexItemFieldInGrid(_)
@@ -663,6 +667,12 @@ impl From<ValueIssue> for LayoutIssue {
 pub enum GeneratorIssue {
     /// A fill's or a text's field is out of range.
     Invalid,
+    /// A text generator's run `run` has a style out of range, or draws past
+    /// [`crate::MAX_TEXT_FONT_SELECTIONS`] font selections.
+    TextRun {
+        /// The run's position among the text's runs.
+        run: usize,
+    },
     /// A problem in a shapes generator's content tree, or in a layout's shape node (its path
     /// from the layout's root).
     Shape(ShapeIssue),
@@ -694,11 +704,13 @@ struct Counts {
 type LayoutChecked = Result<(), GeneratorIssue>;
 
 /// What a node is checked against: the picture's shorter side in canvas pixels, when known,
-/// and its parent's `display`.
+/// its parent's `display`, and the family and weight it inherits.
 #[derive(Copy, Clone)]
-struct Context {
+struct Context<'a> {
     shorter_side: Option<f32>,
     parent: Option<Display>,
+    family: Option<&'a str>,
+    weight: u16,
 }
 
 /// Checks a layout tree: limits, structure, value ranges, and keyframe kind agreement. Shape
@@ -717,15 +729,17 @@ pub(crate) fn validate_layout(root: &LayoutNode, canvas: Option<(u32, u32)>) -> 
     let context = Context {
         shorter_side,
         parent: None,
+        family: None,
+        weight: crate::TextStyle::default().font_weight,
     };
     validate_node(root, "root", 1, context, &mut counts)
 }
 
-fn validate_node(
-    node: &LayoutNode,
+fn validate_node<'a>(
+    node: &'a LayoutNode,
     at: &str,
     depth: usize,
-    context: Context,
+    context: Context<'a>,
     counts: &mut Counts,
 ) -> LayoutChecked {
     let issue = |problem| Err(LayoutIssue::new(at, problem).into());
@@ -788,8 +802,15 @@ fn validate_node(
     validate_fields(node, at)?;
     validate_grid(node, at)?;
     validate_style(node, at, context.shorter_side)?;
+    let family = node.font_family.as_deref().or(context.family);
+    let weight = node.font_weight.unwrap_or(context.weight);
     if let Some(text) = &node.text {
-        validate_text(text, &format!("{at}.text"))?;
+        let base = crate::text_animation::FontSelection {
+            family,
+            weight,
+            style: crate::FontStyle::Normal,
+        };
+        validate_text(text, &format!("{at}.text"), base)?;
     }
     if let Some(shape) = &node.shape {
         crate::shapes::validate_items(
@@ -803,6 +824,8 @@ fn validate_node(
     let inner = Context {
         shorter_side: context.shorter_side,
         parent: Some(display),
+        family,
+        weight,
     };
     for (index, child) in node.children.iter().enumerate() {
         validate_node(
@@ -1097,7 +1120,11 @@ fn length(
     Ok(())
 }
 
-fn validate_text(content: &Animated<String>, at: &str) -> LayoutChecked {
+fn validate_text(
+    content: &Animated<crate::TextContent>,
+    at: &str,
+    base: crate::text_animation::FontSelection<'_>,
+) -> LayoutChecked {
     animated(content, at, |_| true)?;
     if let Animated::Keyframes { keyframes } = content
         && keyframes
@@ -1106,8 +1133,25 @@ fn validate_text(content: &Animated<String>, at: &str) -> LayoutChecked {
     {
         return Err(LayoutIssue::new(at, LayoutProblem::TextKeyframesInterpolate).into());
     }
+    let not_static = |content: &crate::TextContent| {
+        content.runs().iter().any(|run| {
+            !run.class.is_empty()
+                || run.time.is_some()
+                || run.style.as_ref().is_some_and(|style| !style.is_static())
+        })
+    };
+    let runs_static = match content {
+        Animated::Constant { value } => !not_static(value),
+        Animated::Keyframes { keyframes } => !keyframes.iter().any(|key| not_static(&key.value)),
+        Animated::Data(_) => true,
+    };
+    if !runs_static {
+        return Err(LayoutIssue::new(at, LayoutProblem::TextRunNotStatic).into());
+    }
     animated(content, at, |content| {
         content.len() <= MAX_TEXT_CONTENT_BYTES
+            && content.runs().iter().all(|run| !run.text.is_empty())
+            && content.invalid_run_style(base).is_none()
     })?;
     Ok(())
 }

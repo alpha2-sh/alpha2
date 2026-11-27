@@ -15,6 +15,7 @@ fn row(count: usize) -> TextLayout {
             x: index as f32 * 10.0,
             advance: 10.0,
             baseline: 16.0,
+            font_size: 20.0,
             ellipsis: false,
         })
         .collect();
@@ -164,6 +165,7 @@ fn timed_runs() -> Vec<TextRun> {
             start: MediaTime(start),
             end: MediaTime(end),
         }),
+        style: None,
     };
     vec![
         run("abc ", 0, 1_000, &["first"]),
@@ -367,6 +369,7 @@ fn cut_row(count: usize) -> TextLayout {
         x: at as f32 * 10.0,
         advance: 10.0,
         baseline: 16.0,
+        font_size: 20.0,
         ellipsis: true,
     });
     layout.lines[0].clusters.end += 1;

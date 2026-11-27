@@ -101,6 +101,15 @@ pub struct TextStylePatch {
     /// See [`TextStyle::font_weight`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_weight: Option<u16>,
+    /// See [`TextStyle::font_style`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_style: Option<crate::FontStyle>,
+    /// See [`TextStyle::underline`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    /// See [`TextStyle::line_through`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_through: Option<bool>,
     /// See [`TextStyle::align`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align: Option<TextAlign>,
@@ -187,6 +196,15 @@ impl TextStylePatch {
         if let Some(weight) = self.font_weight {
             style.font_weight = weight;
         }
+        if let Some(font_style) = self.font_style {
+            style.font_style = font_style;
+        }
+        if let Some(underline) = self.underline {
+            style.underline = underline;
+        }
+        if let Some(line_through) = self.line_through {
+            style.line_through = line_through;
+        }
         if let Some(align) = self.align {
             style.align = align;
         }
@@ -235,7 +253,7 @@ pub(crate) enum CaptionIssue {
     Invalid,
     /// Cue `cue` names a style the track does not have.
     UnknownStyle { cue: usize, name: String },
-    /// Cue `cue`'s style, its patch applied, is out of range.
+    /// Cue `cue`'s style, its patch applied, or a run's style over it is out of range.
     CueStyle { cue: usize },
 }
 
@@ -291,7 +309,12 @@ impl Captions {
                     name: style.clone(),
                 });
             }
-            if self.cue_patch(cue).is_some() && !self.cue_style(cue).is_valid(MAX_CAPTION_FONT_SIZE)
+            let style = self.cue_style(cue);
+            if (self.cue_patch(cue).is_some() && !style.is_valid(MAX_CAPTION_FONT_SIZE))
+                || cue
+                    .text
+                    .invalid_run_style(crate::text_animation::FontSelection::of(&style))
+                    .is_some()
             {
                 return Err(CaptionIssue::CueStyle { cue: index });
             }
@@ -315,10 +338,10 @@ fn run_times_lie_in(cue: &CaptionCue) -> bool {
 /// A field that is absent (no change), `null` (clear) or a value, read as `Option<Option<T>>`
 /// with `null` kept apart from absent.
 #[allow(clippy::option_option, clippy::ref_option)]
-mod double_option {
+pub(crate) mod double_option {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub(super) fn serialize<T: Serialize, S: Serializer>(
+    pub(crate) fn serialize<T: Serialize, S: Serializer>(
         value: &Option<Option<T>>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
@@ -328,7 +351,7 @@ mod double_option {
         }
     }
 
-    pub(super) fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
+    pub(crate) fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<Option<T>>, D::Error> {
         Option::<T>::deserialize(deserializer).map(Some)
@@ -461,6 +484,7 @@ pub fn group_words(words: &[crate::DataWord], max_chars: u32) -> Vec<CaptionCue>
                             start: alpha2_time::MediaTime(from - start),
                             end: alpha2_time::MediaTime(to - start),
                         }),
+                        style: None,
                     }
                 })
                 .collect();

@@ -113,8 +113,8 @@ pub use error::{
 };
 pub use gaussian_blur::blur_sigma_pixels;
 pub use generator::{
-    FILL_PAINT_PARAMS, GENERATOR_EFFECT_ID, MAX_GENERATOR_STOPS, PAINT_KINDS, PAINT_SPREADS,
-    PaintParams, generator_definition,
+    FILL_PAINT_PARAMS, GENERATOR_EFFECT_ID, MAX_GENERATOR_STOPS, OFFSET_VECTORS, PAINT_KINDS,
+    PAINT_SPREADS, PaintParams, generator_definition,
 };
 pub use gpu_errors::GpuErrorReports;
 pub use graph::{

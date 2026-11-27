@@ -30,6 +30,7 @@ fn request(text: &str, max_width: f32, clamp: Option<TextClamp>) -> TextRasterRe
         letter_spacing: 0.0,
         font_weight: 400,
         clamp,
+        spans: Vec::new(),
     }
 }
 

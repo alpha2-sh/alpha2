@@ -22,11 +22,18 @@ pub const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
 pub const FONT_WEIGHT_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 
 /// Most strokes around one text.
-pub const MAX_TEXT_STROKES: usize = 4;
+pub const MAX_TEXT_STROKES: usize = 8;
 
 /// Widest a text's strokes reach together (the sum of their widths), as a fraction of the
 /// font size.
 pub const MAX_TEXT_STROKE_EXTENT: f32 = 0.5;
+
+/// Most distinct `(family, weight, style)` selections one text draws in, counted after each
+/// run's style is applied.
+pub const MAX_TEXT_FONT_SELECTIONS: usize = 16;
+
+/// The range a run's `font_scale` takes, as multiples of the text's font size.
+pub const FONT_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=10.0;
 
 /// Most shadows under one text.
 pub const MAX_TEXT_SHADOWS: usize = 4;
@@ -92,6 +99,18 @@ pub struct TextStyle {
     /// synthetically emboldened.
     #[serde(default = "default_font_weight")]
     pub font_weight: u16,
+    /// The face style matched before weight, as CSS Fonts 4 matches `font-style`. A face that is
+    /// neither italic nor oblique is sheared by 14 degrees when one is asked; bitmap glyphs stay
+    /// upright. Default `normal`.
+    #[serde(default, skip_serializing_if = "FontStyle::is_normal")]
+    pub font_style: FontStyle,
+    /// A line under the glyphs, as CSS `text-decoration-line: underline`, placed by the font.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+    /// A line through the glyphs, as CSS `text-decoration-line: line-through`, placed by the
+    /// font.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub line_through: bool,
     /// How lines align within the text.
     #[serde(default)]
     pub align: TextAlign,
@@ -151,6 +170,9 @@ impl Default for TextStyle {
             line_height: default_line_height(),
             letter_spacing: 0.0,
             font_weight: default_font_weight(),
+            font_style: FontStyle::Normal,
+            underline: false,
+            line_through: false,
             align: TextAlign::default(),
             max_width: default_max_width(),
             max_height: None,
@@ -284,6 +306,30 @@ impl BlockEllipsis {
             }
             Self::NoEllipsis | Self::Ellipsis => true,
         }
+    }
+}
+
+/// Which faces of a family text prefers, as CSS `font-style`.
+#[derive(
+    Copy, Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FontStyle {
+    /// Upright faces, then oblique, then italic.
+    #[default]
+    Normal,
+    /// Italic faces, then oblique, then upright ones sheared.
+    Italic,
+    /// Oblique faces, then italic, then upright ones sheared.
+    Oblique,
+}
+
+impl FontStyle {
+    /// Whether this is `normal`.
+    #[must_use]
+    pub const fn is_normal(&self) -> bool {
+        matches!(self, Self::Normal)
     }
 }
 

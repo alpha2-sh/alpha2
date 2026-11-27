@@ -146,6 +146,9 @@ export const MAX_FOLLOW_DEPTH = 8;
 /** Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`. */
 export const MAX_FONT_FAMILY_BYTES = 256;
 
+/** Mirrors `alpha2_model::MAX_FONT_SCALE`. */
+export const MAX_FONT_SCALE = 10;
+
 /** Mirrors `alpha2_model::MAX_FONT_WEIGHT`. */
 export const MAX_FONT_WEIGHT = 1000;
 
@@ -156,7 +159,7 @@ export const MAX_FRAME_INLINED_NODES = 65536;
 export const MAX_GAIN = 16;
 
 /** Mirrors `alpha2_model::MAX_GRADIENT_STOPS`. */
-export const MAX_GRADIENT_STOPS = 8;
+export const MAX_GRADIENT_STOPS = 16;
 
 /** Mirrors `alpha2_model::MAX_GRID_TRACKS`. */
 export const MAX_GRID_TRACKS = 64;
@@ -281,6 +284,9 @@ export const MAX_TEXT_ANIMATORS = 8;
 /** Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`. */
 export const MAX_TEXT_CONTENT_BYTES = 4096;
 
+/** Mirrors `alpha2_model::MAX_TEXT_FONT_SELECTIONS`. */
+export const MAX_TEXT_FONT_SELECTIONS = 16;
+
 /** Mirrors `alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE`. */
 export const MAX_TEXT_GENERATOR_FONT_SIZE = 1;
 
@@ -303,7 +309,7 @@ export const MAX_TEXT_SHADOW_BLUR = 1;
 export const MAX_TEXT_SHADOW_OFFSET = 1;
 
 /** Mirrors `alpha2_model::MAX_TEXT_STROKES`. */
-export const MAX_TEXT_STROKES = 4;
+export const MAX_TEXT_STROKES = 8;
 
 /** Mirrors `alpha2_model::MAX_TEXT_STROKE_EXTENT`. */
 export const MAX_TEXT_STROKE_EXTENT = 0.5;
@@ -322,6 +328,9 @@ export const MIN_EQ_FREQUENCY_HZ = 10;
 
 /** Mirrors `alpha2_model::MIN_EQ_Q`. */
 export const MIN_EQ_Q = 0.05;
+
+/** Mirrors `alpha2_model::MIN_FONT_SCALE`. */
+export const MIN_FONT_SCALE = 0.1;
 
 /** Mirrors `alpha2_model::MIN_FONT_WEIGHT`. */
 export const MIN_FONT_WEIGHT = 1;
@@ -471,6 +480,13 @@ export const FLEX_DIRECTION_VALUES: readonly FlexDirection[] = [
 
 /** Every {@link FlexWrap}, in the model's order. */
 export const FLEX_WRAP_VALUES: readonly FlexWrap[] = ["nowrap", "wrap"];
+
+/** Every {@link FontStyle}, in the model's order. */
+export const FONT_STYLE_VALUES: readonly FontStyle[] = [
+  "normal",
+  "italic",
+  "oblique",
+];
 
 /** Every {@link GridAutoFlow}, in the model's order. */
 export const GRID_AUTO_FLOW_VALUES: readonly GridAutoFlow[] = [
@@ -1911,6 +1927,11 @@ export interface FontSizeFit {
 }
 
 /**
+ * Which faces of a family text prefers, as CSS `font-style`.
+ */
+export type FontStyle = "normal" | "italic" | "oblique";
+
+/**
  * A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).
  */
 export interface FrameRate {
@@ -2418,11 +2439,12 @@ export interface LayoutNode {
    */
   readonly strokes?: readonly TextStroke[] | null;
   /**
-   * The box's text, wrapped at its content width in the inherited style; `\n` starts a line.
-   * At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty. Keyframes all `hold`.
-   * Not with `children` or `shape`.
+   * The box's text, a string or runs, wrapped at its content width in the inherited style;
+   * `\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty.
+   * Keyframes all `hold`. A run takes a `style` with a constant `font_scale` only: no
+   * `class`, `time` or keyframes. Not with `children` or `shape`.
    */
-  readonly text?: Keyframed<string> | null;
+  readonly text?: Keyframed<TextContent> | null;
   /**
    * How lines align within the content width. Inherited; the root's is `start`.
    */
@@ -3960,7 +3982,7 @@ export interface TextBackground {
 export type TextContent = string | readonly TextRun[];
 
 /**
- * A piece of a text that animators' Class and Timing selectors can pick.
+ * A piece of a text with its own style, that animators' Class and Timing selectors can pick.
  */
 export interface TextRun {
   /**
@@ -3968,6 +3990,10 @@ export interface TextRun {
    * most `MAX_RUN_CLASSES`.
    */
   readonly class?: readonly string[];
+  /**
+   * Changes to the holder's style for this run's characters.
+   */
+  readonly style?: TextRunStyle | null;
   /**
    * Non-empty; `\n` starts a line. A grapheme cluster spanning two runs belongs to the run
    * holding its first byte.
@@ -3978,6 +4004,59 @@ export interface TextRun {
    * generator's picture time zero).
    */
   readonly time?: RunTime | null;
+}
+
+/**
+ * A run's changes to its holder's text style, as an inline box's own CSS properties. Each
+ * field set replaces the holder's value for the run's characters; a field left out keeps it.
+ * A change of family, weight, style, size or letter spacing shapes the run apart and can move
+ * line breaks; fill, strokes, background and decorations only paint.
+ */
+export interface TextRunStyle {
+  /**
+   * A box behind the run on each line, its advances wide and its em box tall, as CSS
+   * `background-color` paints an inline box.
+   */
+  readonly background_color?: Rgba | null;
+  /**
+   * What paints the run's glyphs; gradient positions are in the text's layout box, as the
+   * text's fill.
+   */
+  readonly fill?: Paint | null;
+  /**
+   * The family, as a text style's `font_family`; `null` draws from the fallback order alone.
+   */
+  readonly font_family?: string | null;
+  /**
+   * The run's size as a multiple of the text's font size, in `[0.1, 10]`, as CSS
+   * `font-size: <n>em`. Lines are laid out again when it changes; keyframes are in the
+   * holder's time.
+   */
+  readonly font_scale?: Animated<number> | null;
+  /**
+   * The face style, as a text style's `font_style`.
+   */
+  readonly font_style?: FontStyle | null;
+  /**
+   * The weight in `[1, 1000]`, as a text style's `font_weight`.
+   */
+  readonly font_weight?: number | null;
+  /**
+   * Space after each character, as a fraction of the run's size, in `[-0.5, 1]`.
+   */
+  readonly letter_spacing?: number | null;
+  /**
+   * See `TextStyle::line_through`.
+   */
+  readonly line_through?: boolean | null;
+  /**
+   * The run's bands, as a text style's `strokes`, widths in fractions of the run's size.
+   */
+  readonly strokes?: readonly TextStroke[] | null;
+  /**
+   * See `TextStyle::underline`.
+   */
+  readonly underline?: boolean | null;
 }
 
 /**
@@ -4172,6 +4251,12 @@ export interface TextStyle {
    */
   readonly font_size_fit?: FontSizeFit | null;
   /**
+   * The face style matched before weight, as CSS Fonts 4 matches `font-style`. A face that is
+   * neither italic nor oblique is sheared by 14 degrees when one is asked; bitmap glyphs stay
+   * upright. Default `normal`.
+   */
+  readonly font_style?: FontStyle;
+  /**
    * The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
    * `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
    * synthetically emboldened.
@@ -4198,6 +4283,11 @@ export interface TextStyle {
    * @defaultValue `1.2`
    */
   readonly line_height?: number;
+  /**
+   * A line through the glyphs, as CSS `text-decoration-line: line-through`, placed by the
+   * font.
+   */
+  readonly line_through?: boolean;
   /**
    * Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
    * `font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS
@@ -4227,6 +4317,10 @@ export interface TextStyle {
    * `MAX_TEXT_STROKES`, widths summing to at most `MAX_TEXT_STROKE_EXTENT`.
    */
   readonly strokes?: readonly TextStroke[];
+  /**
+   * A line under the glyphs, as CSS `text-decoration-line: underline`, placed by the font.
+   */
+  readonly underline?: boolean;
 }
 
 /**
@@ -4267,6 +4361,10 @@ export interface TextStylePatch {
    */
   readonly font_size_fit?: FontSizeFit | null;
   /**
+   * See `TextStyle::font_style`.
+   */
+  readonly font_style?: FontStyle | null;
+  /**
    * See `TextStyle::font_weight`.
    */
   readonly font_weight?: number | null;
@@ -4282,6 +4380,10 @@ export interface TextStylePatch {
    * See `TextStyle::line_height`.
    */
   readonly line_height?: number | null;
+  /**
+   * See `TextStyle::line_through`.
+   */
+  readonly line_through?: boolean | null;
   /**
    * See `TextStyle::max_height`; `null` removes the base's.
    */
@@ -4302,6 +4404,10 @@ export interface TextStylePatch {
    * See `TextStyle::strokes`.
    */
   readonly strokes?: readonly TextStroke[] | null;
+  /**
+   * See `TextStyle::underline`.
+   */
+  readonly underline?: boolean | null;
 }
 
 /**

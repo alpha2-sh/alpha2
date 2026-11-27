@@ -70,6 +70,7 @@ fn shaped(rasterizer: &TextRasterizer, content: &str, pixels: f32) -> ShapedText
             letter_spacing: 0.0,
             font_weight: 400,
             clamp: None,
+            spans: Vec::new(),
         })
         .expect("shapes")
 }
@@ -859,4 +860,40 @@ fn a_full_width_text_box_on_the_widest_picture_rasterizes() {
     let (_, requests) = layout_texts(&evaluated, &resolved(&rasterizer, &root, picture), picture);
     assert_eq!(requests[0].1.request.max_width, 16_384.0);
     assert!(rasterizer.rasterize(&requests[0].1.request).is_ok());
+}
+
+#[test]
+fn a_layout_text_run_breaks_inside_the_span() {
+    let rasterizer = fixture();
+    let words = "alpha beta gamma delta";
+    let one_run = |style: serde_json::Value| {
+        node(json!({
+            "align_items": "start",
+            "children": [{
+                "width": length(0.3),
+                "text": constant(json!([{ "text": "go " }, { "text": words, "style": style }])),
+                "font_size": constant(json!(0.04)),
+            }],
+        }))
+    };
+    let lines = |root: &LayoutNode| {
+        measure_layout(
+            &rasterizer,
+            root,
+            MediaTime::ZERO,
+            size(1000, 1000),
+            (1000, 1000),
+        )
+        .expect("measures")
+        .nodes[1]
+            .line_count
+    };
+    let plain = one_run(json!({ "font_weight": 400 }));
+    let large = one_run(json!({ "font_scale": constant(json!(2.0)) }));
+    assert_eq!(lines(&plain), Some(2));
+    let wrapped = lines(&large).expect("a text node");
+    assert!(
+        wrapped >= 4,
+        "the large span wraps between its own words: {wrapped}"
+    );
 }

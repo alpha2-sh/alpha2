@@ -266,7 +266,7 @@ impl TextTextures {
                 entry.last_used = self.frame;
                 continue;
             }
-            let content = text.content.text();
+            let content = alpha2_layout::TextAt::new(text.content, text.time);
             let frame_number = self.frame;
             let fitted = alpha2_layout::fit_text(&content, text.style, picture, |request| {
                 self.shape(request, frame_number)
@@ -552,7 +552,7 @@ impl TextTextures {
     /// Returns [`TextError::Raster`] as [`Self::prepare`] would for the text.
     pub fn measure(
         &self,
-        text: &str,
+        text: &alpha2_layout::TextAt<'_>,
         style: &TextStyle,
         size: RenderSize,
     ) -> Result<TextBounds, TextError> {

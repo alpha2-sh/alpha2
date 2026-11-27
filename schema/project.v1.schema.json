@@ -2527,6 +2527,26 @@
       ],
       "type": "object"
     },
+    "FontStyle": {
+      "description": "Which faces of a family text prefers, as CSS `font-style`.",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Upright faces, then oblique, then italic.",
+          "type": "string"
+        },
+        {
+          "const": "italic",
+          "description": "Italic faces, then oblique, then upright ones sheared.",
+          "type": "string"
+        },
+        {
+          "const": "oblique",
+          "description": "Oblique faces, then italic, then upright ones sheared.",
+          "type": "string"
+        }
+      ]
+    },
     "FrameRate": {
       "additionalProperties": false,
       "description": "A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).",
@@ -3069,6 +3089,30 @@
       ],
       "type": "object"
     },
+    "Keyframe_TextContent": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
+        },
+        "value": {
+          "$ref": "#/$defs/TextContent",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
     "Keyframe_Vec2": {
       "additionalProperties": false,
       "description": "One timestamped control value.",
@@ -3109,30 +3153,6 @@
           "description": "Value at `time`.",
           "format": "float",
           "type": "number"
-        }
-      },
-      "required": [
-        "time",
-        "value",
-        "interpolation"
-      ],
-      "type": "object"
-    },
-    "Keyframe_string": {
-      "additionalProperties": false,
-      "description": "One timestamped control value.",
-      "properties": {
-        "interpolation": {
-          "$ref": "#/$defs/Interpolation",
-          "description": "Interpolation from this keyframe to its successor."
-        },
-        "time": {
-          "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
-        },
-        "value": {
-          "description": "Value at `time`.",
-          "type": "string"
         }
       },
       "required": [
@@ -3471,7 +3491,7 @@
         }
       ]
     },
-    "Keyframed_string": {
+    "Keyframed_TextContent": {
       "description": "A value that is constant or controlled by sorted keyframes.",
       "oneOf": [
         {
@@ -3483,8 +3503,8 @@
               "type": "string"
             },
             "value": {
-              "description": "Value used at every timestamp.",
-              "type": "string"
+              "$ref": "#/$defs/TextContent",
+              "description": "Value used at every timestamp."
             }
           },
           "required": [
@@ -3500,7 +3520,7 @@
             "keyframes": {
               "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
               "items": {
-                "$ref": "#/$defs/Keyframe_string"
+                "$ref": "#/$defs/Keyframe_TextContent"
               },
               "maxItems": 100000,
               "type": "array"
@@ -4168,7 +4188,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": [
             "array",
             "null"
@@ -4177,13 +4197,13 @@
         "text": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Keyframed_string"
+              "$ref": "#/$defs/Keyframed_TextContent"
             },
             {
               "type": "null"
             }
           ],
-          "description": "The box's text, wrapped at its content width in the inherited style; `\\n` starts a line.\nAt most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty. Keyframes all `hold`.\nNot with `children` or `shape`."
+          "description": "The box's text, a string or runs, wrapped at its content width in the inherited style;\n`\\n` starts a line. At most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty.\nKeyframes all `hold`. A run takes a `style` with a constant `font_scale` only: no\n`class`, `time` or keyframes. Not with `children` or `shape`."
         },
         "text_align": {
           "anyOf": [
@@ -5329,7 +5349,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -5368,7 +5388,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -5403,7 +5423,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -6829,7 +6849,7 @@
     },
     "TextRun": {
       "additionalProperties": false,
-      "description": "A piece of a text that animators' Class and Timing selectors can pick.",
+      "description": "A piece of a text with its own style, that animators' Class and Timing selectors can pick.",
       "properties": {
         "class": {
           "description": "Names Class selectors match, each 1 to 64 bytes of `A-Z`, `a-z`, `0-9`, `_` and `-`; at\nmost [`MAX_RUN_CLASSES`].",
@@ -6838,6 +6858,17 @@
           },
           "maxItems": 8,
           "type": "array"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextRunStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Changes to the holder's style for this run's characters."
         },
         "text": {
           "description": "Non-empty; `\\n` starts a line. A grapheme cluster spanning two runs belongs to the run\nholding its first byte.",
@@ -6858,6 +6889,107 @@
       "required": [
         "text"
       ],
+      "type": "object"
+    },
+    "TextRunStyle": {
+      "additionalProperties": false,
+      "description": "A run's changes to its holder's text style, as an inline box's own CSS properties. Each\nfield set replaces the holder's value for the run's characters; a field left out keeps it.\nA change of family, weight, style, size or letter spacing shapes the run apart and can move\nline breaks; fill, strokes, background and decorations only paint.",
+      "properties": {
+        "background_color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rgba"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A box behind the run on each line, its advances wide and its em box tall, as CSS\n`background-color` paints an inline box."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Paint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What paints the run's glyphs; gradient positions are in the text's layout box, as the\ntext's fill."
+        },
+        "font_family": {
+          "description": "The family, as a text style's `font_family`; `null` draws from the fallback order alone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "font_scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run's size as a multiple of the text's font size, in `[0.1, 10]`, as CSS\n`font-size: <n>em`. Lines are laid out again when it changes; keyframes are in the\nholder's time."
+        },
+        "font_style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The face style, as a text style's `font_style`."
+        },
+        "font_weight": {
+          "description": "The weight in `[1, 1000]`, as a text style's `font_weight`.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "letter_spacing": {
+          "description": "Space after each character, as a fraction of the run's size, in `[-0.5, 1]`.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "line_through": {
+          "description": "See [`crate::TextStyle::line_through`].",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strokes": {
+          "description": "The run's bands, as a text style's `strokes`, widths in fractions of the run's size.",
+          "items": {
+            "$ref": "#/$defs/TextStroke"
+          },
+          "maxItems": 8,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "underline": {
+          "description": "See [`crate::TextStyle::underline`].",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "TextSelector": {
@@ -7096,6 +7228,10 @@
           ],
           "description": "The range the font size is fitted in so the text fits its box. `None` draws at the\nfont size as set."
         },
+        "font_style": {
+          "$ref": "#/$defs/FontStyle",
+          "description": "The face style matched before weight, as CSS Fonts 4 matches `font-style`. A face that is\nneither italic nor oblique is sheared by 14 degrees when one is asked; bitmap glyphs stay\nupright. Default `normal`."
+        },
         "font_weight": {
           "default": 400,
           "description": "The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches\n`font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is\nsynthetically emboldened.",
@@ -7126,6 +7262,10 @@
           "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font\nsizes above the baseline, 0.2 below) is centred in a taller line.",
           "format": "float",
           "type": "number"
+        },
+        "line_through": {
+          "description": "A line through the glyphs, as CSS `text-decoration-line: line-through`, placed by the\nfont.",
+          "type": "boolean"
         },
         "max_height": {
           "description": "Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for\n`font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS\n`max-height` lets a box with visible overflow. `None` sets no height.",
@@ -7162,8 +7302,12 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": "array"
+        },
+        "underline": {
+          "description": "A line under the glyphs, as CSS `text-decoration-line: underline`, placed by the font.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -7253,6 +7397,17 @@
           ],
           "description": "See [`TextStyle::font_size_fit`]; `null` removes the base's."
         },
+        "font_style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::font_style`]."
+        },
         "font_weight": {
           "description": "See [`TextStyle::font_weight`].",
           "format": "uint16",
@@ -7287,6 +7442,13 @@
           "format": "float",
           "type": [
             "number",
+            "null"
+          ]
+        },
+        "line_through": {
+          "description": "See [`TextStyle::line_through`].",
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -7333,9 +7495,16 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "underline": {
+          "description": "See [`TextStyle::underline`].",
+          "type": [
+            "boolean",
             "null"
           ]
         }

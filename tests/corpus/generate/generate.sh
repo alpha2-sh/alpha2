@@ -87,6 +87,7 @@ fi
 if wanted weight-fonts "$(python3 -c 'import fontTools' 2>/dev/null || echo 'fontTools')"; then
   mkdir -p "$fonts"
   python3 "$here/font-weights.py" "$fonts"
+  python3 "$here/font-styles.py" "$fonts"
 fi
 
 if wanted hostile-fonts "$(python3 -c 'import fontTools' 2>/dev/null || echo 'fontTools')"; then

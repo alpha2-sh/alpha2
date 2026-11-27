@@ -184,7 +184,7 @@ assert.deepEqual(imported, {
     [
       {
         timeline_range: { start: 120_000, end: 360_000 },
-        text: [{ text: "One", class: ["i"] }],
+        text: [{ text: "One", class: ["i"], style: { font_style: "italic" } }],
       },
     ],
     [{ timeline_range: { start: 240_000, end: 540_000 }, text: "Two" }],

@@ -31,6 +31,7 @@ mod layers;
 mod layout;
 mod missing_sources;
 mod player;
+mod rich_text;
 mod shapes;
 mod submissions;
 mod text_animators;

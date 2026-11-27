@@ -38,6 +38,26 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Breaking:** text runs carry a style (rich text). A run's `style` sets its own `font_family`,
+  `font_weight`, `font_style`, `font_scale` (its size as a multiple of the text's font size, from
+  0.1 to 10, keyframes in the holder's time), `letter_spacing`, `fill`, `strokes`,
+  `background_color`, `underline` and `line_through` over its caption cue's, text generator's or
+  layout node's style, as a CSS inline box does. Runs of another face, size or spacing are shaped
+  apart with their neighbours as context and wrap with the rest; each line is as tall as its
+  largest run (CSS 2.1 10.8), at least the text's own size, and a keyframed `font_scale` lays the
+  text out again as it changes. Text styles and caption style patches gain `font_style`
+  (`normal`, `italic`, `oblique`), `underline` and `line_through`. Faces match style before
+  weight (CSS Fonts 4); a face without italics is slanted by 14 degrees, color emoji stay upright.
+  Decorations take the font's own position and thickness. A text draws in at most 16
+  `(family, weight, style)` selections. A layout node's `text` is a string or runs, whose runs take
+  a static `style` only. Hosts and engines of 0.7.x refuse documents that use any of these.
+- **Breaking:** a text holds up to 8 strokes (was 4, still at most 0.5 font sizes together) and
+  every gradient up to 16 stops (was 8), in text, shapes, fills and layouts.
+- **Breaking:** imported WebVTT and SRT `<b>`, `<i>` and `<u>` are drawn bold, italic and
+  underlined, as WebVTT applies CSS to them; the runs keep their `b`, `i` and `u` classes.
+- **Breaking:** `WasmTextRasterizer.rasterize` takes `runs` (text with per-run family, weight,
+  style, pixel size, letter spacing, fill, strokes, background color and decorations) in place of
+  `text`, and a `clamp`; a request with both or neither of `text` and `runs` is refused.
 - **Breaking:** `alpha2-host --renderer gpu` (`ALPHA2_RENDERER=gpu`, the clients' `renderer: "gpu"`)
   no longer renders on a software adapter (lavapipe, llvmpipe, WARP, SwiftShader) unless
   `ALPHA2_GPU_ADAPTER` pins it. Without a hardware adapter the host does not start: it fails with
