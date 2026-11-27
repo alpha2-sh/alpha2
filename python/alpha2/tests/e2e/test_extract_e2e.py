@@ -156,6 +156,20 @@ def video(name: str = "h264-bt709-copy.mp4") -> dict[str, Path]:
     return {"v": ROOT / "tests" / "corpus" / name}
 
 
+def expected_progress(times: list[int], end: int) -> list[ExtractProgress]:
+    def report(stage: Any, completed: int, covered: int) -> ExtractProgress:
+        return ExtractProgress(
+            stage=stage, pass_index=0, completed=completed, total=None, covered=covered, span=end
+        )
+
+    return [
+        report("begin", 0, 0),
+        report("pass", 0, 0),
+        *(report("pass", index + 1, time) for index, time in enumerate(times)),
+        report("end", len(times), end),
+    ]
+
+
 def test_the_python_digest_fixture_records_the_bytes_the_rust_reader_pins(
     client: HostClient,
 ) -> None:
@@ -180,7 +194,7 @@ def test_the_python_digest_fixture_records_the_bytes_the_rust_reader_pins(
         ]
         assert hashes == pinned[name], name
         assert found["made_from"], name
-        assert progress
+        assert progress == expected_progress([time for time, _ in pinned[name]], 40_000), name
 
 
 def test_an_invalid_emit_is_refused(client: HostClient) -> None:
