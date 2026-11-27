@@ -872,7 +872,9 @@
         "lineHeight": 1.25,
         "maxWidth": 200,
         "runs": [
-          "Small ",
+          {
+            "text": "Small "
+          },
           {
             "fill": [
               255,
@@ -883,12 +885,16 @@
             "fontSize": 48,
             "text": "BIG"
           },
-          " and ",
+          {
+            "text": " and "
+          },
           {
             "fontSize": 12,
             "text": "tiny"
           },
-          " words wrap"
+          {
+            "text": " words wrap"
+          }
         ]
       }
     },
@@ -923,7 +929,9 @@
             "fontStyle": "italic",
             "text": "HI 안녕"
           },
-          " TILE ",
+          {
+            "text": " TILE "
+          },
           {
             "fontWeight": 700,
             "text": "HE"
@@ -967,7 +975,9 @@
             "text": "Under",
             "underline": true
           },
-          " ",
+          {
+            "text": " "
+          },
           {
             "lineThrough": true,
             "strokes": [
@@ -983,7 +993,9 @@
             ],
             "text": "through"
           },
-          " ",
+          {
+            "text": " "
+          },
           {
             "backgroundColor": [
               0,
