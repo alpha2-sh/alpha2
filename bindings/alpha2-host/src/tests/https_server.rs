@@ -174,6 +174,9 @@ fn serve(
     served: &AtomicUsize,
     stop: &AtomicBool,
 ) {
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let Ok(connection) = rustls::ServerConnection::new(Arc::clone(config)) else {
         return;
