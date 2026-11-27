@@ -1,3 +1,9 @@
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "pixel indices from layout positions"
+)]
+
 use super::*;
 
 fn font(path: &str) -> TextFont {
@@ -480,4 +486,221 @@ fn a_span_draws_a_variable_face_at_its_own_weight() {
     );
     let (faces, shaping) = rasterizer.prepare(&heavy).expect("prepares");
     assert_eq!(faces.of[shaping.orders[1][0]], (0, 900, false));
+}
+
+fn decorated(request: &TextRasterRequest, bytes: Range<usize>) -> TextSpan {
+    TextSpan {
+        underline: true,
+        line_through: true,
+        ..span(request, bytes)
+    }
+}
+
+fn styled_base(text: &str, size: f32) -> TextRasterRequest {
+    TextRasterRequest {
+        font_family: Some(STYLES.into()),
+        ..request(text, size)
+    }
+}
+
+#[test]
+fn underline_and_line_through_take_the_primary_face_metrics() {
+    let mut rasterizer = styles();
+    let base = styled_base("HI", 100.0);
+    let underlined = with(&base, vec![decorated(&base, 0..2)]);
+    let (faces, shaping) = rasterizer.prepare(&underlined).expect("prepares");
+    let layout = TextRasterizer::lay_out(&faces, &shaping, &underlined).expect("lays out");
+    let paint = layout.paint(&faces, &shaping, underlined.align);
+    let baseline = layout.baseline(0);
+    let rects = paint
+        .decorations
+        .iter()
+        .map(|decoration| decoration.rect)
+        .collect::<Vec<_>>();
+    let width = 2.0 * 60.0;
+    assert_eq!(
+        rects,
+        [
+            [0.0, baseline + 12.0, width, baseline + 17.0],
+            [0.0, baseline - 32.0, width, baseline - 27.0]
+        ],
+        "post underline -120/50 and OS/2 strikeout 320/50 at 100 px"
+    );
+    let ink = rasterizer
+        .measure(&underlined)
+        .expect("measures")
+        .ink
+        .expect("ink");
+    assert_eq!(ink[3], baseline + 17.0, "the underline is the lowest ink");
+    let drawn = rasterizer.rasterize(&underlined).expect("draws");
+    let row = (drawn.descriptor.layout_y + baseline + 14.0) as usize;
+    let at =
+        |x: usize| drawn.pixels.rgba8[(row * drawn.descriptor.texture.width as usize + x) * 4 + 3];
+    let left = drawn.descriptor.layout_x as usize;
+    assert!(
+        (left + 2..left + 118).all(|x| at(x) == 255),
+        "a solid underline row"
+    );
+    let bold = with(
+        &base,
+        vec![TextSpan {
+            font_weight: 700,
+            ..decorated(&base, 0..2)
+        }],
+    );
+    let (faces, shaping) = rasterizer.prepare(&bold).expect("prepares");
+    let layout = TextRasterizer::lay_out(&faces, &shaping, &bold).expect("lays out");
+    let rect = layout.paint(&faces, &shaping, bold.align).decorations[0].rect;
+    assert_eq!(
+        (rect[1] - baseline, rect[3] - rect[1]),
+        (13.0, 8.0),
+        "the bold face's own values"
+    );
+}
+
+fn with_underline(bytes: &[u8], position: i16, thickness: i16) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+    let record = (0..count)
+        .map(|index| 12 + 16 * index)
+        .find(|&at| &bytes[at..at + 4] == b"post")
+        .expect("a post table");
+    let offset = u32::from_be_bytes(bytes[record + 8..record + 12].try_into().expect("offset"));
+    let at = usize::try_from(offset).expect("small");
+    out[at + 8..at + 10].copy_from_slice(&position.to_be_bytes());
+    out[at + 10..at + 12].copy_from_slice(&thickness.to_be_bytes());
+    out
+}
+
+#[test]
+fn decoration_metrics_fall_back_when_out_of_range() {
+    let bytes = std::fs::read("../../tests/fonts/Alpha2FixtureStyles.ttf").expect("fixture");
+    let metrics =
+        |bytes: &[u8]| paint::decoration_metrics(&ttf_parser::Face::parse(bytes, 0).expect("face"));
+    let own = metrics(&bytes);
+    assert_eq!((own[0].top, own[0].thickness), (120.0, 50.0));
+    assert_eq!((own[1].top, own[1].thickness), (-320.0, 50.0));
+    for (position, thickness) in [(-100, 0), (-100, -20), (-100, 251), (-1001, 50), (1200, 50)] {
+        let patched = metrics(&with_underline(&bytes, position, thickness));
+        assert_eq!(
+            (patched[0].top, patched[0].thickness),
+            (100.0, 50.0),
+            "{position}/{thickness}: 0.1 em below, 0.05 em thick"
+        );
+        assert_eq!(patched[1], own[1], "the strikeout keeps its own values");
+    }
+    let edge = metrics(&with_underline(&bytes, -1000, 250));
+    assert_eq!((edge[0].top, edge[0].thickness), (1000.0, 250.0));
+}
+
+#[test]
+fn a_decoration_has_no_seam_between_still_clusters() {
+    let mut rasterizer = styles();
+    let base = styled_base("HHHHH", 37.0);
+    let underlined = with(
+        &base,
+        vec![TextSpan {
+            underline: true,
+            ..span(&base, 0..5)
+        }],
+    );
+    let (faces, shaping) = rasterizer.prepare(&underlined).expect("prepares");
+    let layout = TextRasterizer::lay_out(&faces, &shaping, &underlined).expect("lays out");
+    assert_eq!(
+        layout
+            .paint(&faces, &shaping, underlined.align)
+            .decorations
+            .len(),
+        1
+    );
+    let drawn = rasterizer.rasterize(&underlined).expect("draws");
+    let texture = &drawn.descriptor;
+    let row = (texture.layout_y + layout.baseline(0) + 37.0 * 0.145) as usize;
+    let width = texture.texture.width as usize;
+    let left = texture.layout_x as usize;
+    let advance = 37.0 * 0.6 * 5.0;
+    for x in left + 1..left + advance as usize - 1 {
+        assert_eq!(
+            drawn.pixels.rgba8[(row * width + x) * 4 + 3],
+            255,
+            "column {x}"
+        );
+    }
+    let mut moving = rasterizer.layout(&underlined).expect("lays out");
+    let states = vec![
+        ClusterState {
+            offset: [0.3, 0.0],
+            ..ClusterState::IDENTITY
+        };
+        std::mem::take(&mut moving.clusters).len()
+    ];
+    let shifted = rasterizer
+        .rasterize_animated(&with(&underlined, underlined.spans.clone()), &states)
+        .expect("draws");
+    let moved = &shifted.descriptor;
+    let (row, width, left) = (
+        (moved.layout_y + layout.baseline(0) + 37.0 * 0.145) as usize,
+        moved.texture.width as usize,
+        moved.layout_x as usize,
+    );
+    for x in left + 2..left + advance as usize - 1 {
+        assert_eq!(
+            shifted.pixels.rgba8[(row * width + x) * 4 + 3],
+            255,
+            "moved column {x}"
+        );
+    }
+}
+
+#[test]
+fn a_run_background_covers_its_em_box_per_line() {
+    let mut rasterizer = rasterizer(&["Alpha2Fixture.ttf"]);
+    let base = TextRasterRequest {
+        max_width: 130.0,
+        ..request("aa bbb ccc", 30.0)
+    };
+    let boxed = with(
+        &base,
+        vec![TextSpan {
+            background_color: Some([0, 0, 255, 255]),
+            ..span(&base, 3..10)
+        }],
+    );
+    let (faces, shaping) = rasterizer.prepare(&boxed).expect("prepares");
+    let layout = TextRasterizer::lay_out(&faces, &shaping, &boxed).expect("lays out");
+    assert_eq!(layout.lines.len(), 2);
+    let paint = layout.paint(&faces, &shaping, boxed.align);
+    assert_eq!(paint.boxes.len(), 2, "one box per line fragment");
+    let info = rasterizer.layout(&boxed).expect("lays out");
+    for (line, run) in paint.boxes.iter().enumerate() {
+        let baseline = layout.baseline(line);
+        assert_eq!((run.top, run.bottom), (baseline - 24.0, baseline + 6.0));
+        let clusters = info
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.line == u32::try_from(line).expect("small"))
+            .filter(|cluster| cluster.bytes.start >= 3 && cluster.advance > 0.0)
+            .collect::<Vec<_>>();
+        let last = clusters.last().expect("clusters");
+        assert_eq!(
+            (run.left, run.right),
+            (clusters[0].x, last.x + last.advance)
+        );
+    }
+    let drawn = rasterizer.rasterize(&boxed).expect("draws");
+    let texture = &drawn.descriptor;
+    let pixel = |x: f32, y: f32| {
+        let at = ((texture.layout_y + y) as usize * texture.texture.width as usize
+            + (texture.layout_x + x) as usize)
+            * 4;
+        drawn.pixels.rgba8[at..at + 4].to_vec()
+    };
+    let first = paint.boxes[0];
+    assert_eq!(pixel(first.left + 2.0, first.top + 1.0), [0, 0, 255, 255]);
+    assert_eq!(pixel(first.left + 2.0, first.top - 2.0), [0, 0, 0, 0]);
+    assert_eq!(
+        pixel(1.0, first.top + 1.0),
+        [0, 0, 0, 0],
+        "the unspanned word has none"
+    );
 }

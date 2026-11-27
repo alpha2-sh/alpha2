@@ -159,8 +159,32 @@ fn fixture_requests_match_the_pinned_rasters() {
             let channels = value.as_array().expect("color");
             std::array::from_fn(|index| channels[index].as_u64().expect("u8") as u8)
         };
+        let strokes = |value: &serde_json::Value| -> Vec<TextStroke> {
+            value
+                .as_array()
+                .expect("strokes")
+                .iter()
+                .map(|stroke| TextStroke {
+                    color: rgba(&stroke["color"]),
+                    width: stroke["width"].as_f64().expect("width") as f32,
+                })
+                .collect()
+        };
         let pinned = TextRasterRequest {
-            text: request["text"].as_str().expect("text").into(),
+            text: request["text"].as_str().map_or_else(
+                || {
+                    request["runs"]
+                        .as_array()
+                        .expect("text or runs")
+                        .iter()
+                        .map(|run| {
+                            run.as_str()
+                                .unwrap_or_else(|| run["text"].as_str().expect("text"))
+                        })
+                        .collect()
+                },
+                Into::into,
+            ),
             font_size: number("fontSize", 0.0),
             max_width: number("maxWidth", 0.0),
             line_height: number("lineHeight", 1.2),
@@ -198,6 +222,48 @@ fn fixture_requests_match_the_pinned_rasters() {
             clamp: None,
             spans: Vec::new(),
         };
+        let mut start = 0;
+        let mut spans = Vec::new();
+        for run in request["runs"].as_array().into_iter().flatten() {
+            let text = run
+                .as_str()
+                .unwrap_or_else(|| run["text"].as_str().expect("text"));
+            let bytes = start..start + text.len();
+            start = bytes.end;
+            if run.is_string() {
+                continue;
+            }
+            let size = run["fontSize"]
+                .as_f64()
+                .map_or(pinned.font_size, |size| size as f32);
+            spans.push(TextSpan {
+                bytes,
+                font_family: run["fontFamily"]
+                    .as_str()
+                    .map(Into::into)
+                    .or_else(|| pinned.font_family.clone()),
+                font_weight: run["fontWeight"]
+                    .as_u64()
+                    .map_or(pinned.font_weight, |weight| weight as u16),
+                font_style: match run["fontStyle"].as_str() {
+                    Some("italic") => FontStyle::Italic,
+                    Some("oblique") => FontStyle::Oblique,
+                    _ => FontStyle::Normal,
+                },
+                font_size: size,
+                letter_spacing: run["letterSpacing"]
+                    .as_f64()
+                    .map_or(pinned.letter_spacing, |spacing| spacing as f32),
+                fill: run.get("fill").map_or_else(|| pinned.fill.clone(), fill),
+                strokes: run
+                    .get("strokes")
+                    .map_or_else(|| pinned.strokes.clone(), strokes),
+                background_color: run.get("backgroundColor").map(rgba),
+                underline: run["underline"].as_bool().unwrap_or(false),
+                line_through: run["lineThrough"].as_bool().unwrap_or(false),
+            });
+        }
+        let pinned = TextRasterRequest { spans, ..pinned };
         let result = match request.get("clusterState") {
             Some(state) => {
                 let clusters = rasterizer.layout(&pinned).expect("lays out").clusters.len();
@@ -1824,6 +1890,7 @@ fn the_background_is_every_line_box_byte_for_byte() {
                 width,
                 [margin, margin],
                 &line_boxes,
+                &[],
                 &[],
                 &RequestLook::of(&request, [90.0, advance * 5.0]),
             )

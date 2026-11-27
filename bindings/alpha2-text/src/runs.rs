@@ -41,6 +41,16 @@ impl Look {
     }
 }
 
+pub(crate) fn paints_per_cluster(request: &TextRasterRequest) -> bool {
+    request.spans.iter().any(|span| {
+        span.fill != request.fill
+            || span.strokes != request.strokes
+            || span.background_color.is_some()
+            || span.underline
+            || span.line_through
+    })
+}
+
 pub(crate) fn valid_spans(request: &TextRasterRequest) -> bool {
     let text = &request.text;
     request.spans.len() <= MAX_TEXT_SPANS

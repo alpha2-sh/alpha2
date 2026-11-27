@@ -28,6 +28,7 @@ mod animated;
 mod color;
 mod font_check;
 mod gradient;
+mod paint;
 mod runs;
 mod unicode_tables;
 
@@ -69,9 +70,14 @@ fn raster_pixels(width: u32, height: u32, bytes_per_pixel: u64) -> Result<usize,
 
 /// Bytes per pixel of a raster's planes: coverage (1), RGBA8 result (4), split background (4),
 /// color glyph RGBA (4) with its stroke ink plane (1), and one band per stroke (1 each).
-fn raster_bytes_per_pixel(request: &TextRasterRequest, colors: bool) -> u64 {
-    let split = request.split_background && request.background.is_some();
-    let strokes = request.strokes.len() as u64;
+fn raster_bytes_per_pixel(request: &TextRasterRequest, strokes: usize, colors: bool) -> u64 {
+    let split = request.split_background
+        && (request.background.is_some()
+            || request
+                .spans
+                .iter()
+                .any(|span| span.background_color.is_some()));
+    let strokes = strokes as u64;
     1 + 4
         + if split { 4 } else { 0 }
         + if colors {
@@ -915,7 +921,16 @@ impl TextRasterizer {
         if let Some(cached) = self.cache.get(request.content_version) {
             return Ok(cached);
         }
-        let result = Arc::new(self.rasterize_uncached(request)?);
+        let result = if runs::paints_per_cluster(request) {
+            let states = vec![ClusterState::IDENTITY; self.layout(request)?.clusters.len()];
+            let mut tiles = std::mem::take(&mut self.tiles);
+            let result = self.rasterize_states(request, &states, &mut tiles);
+            self.tiles = tiles;
+            result?
+        } else {
+            self.rasterize_uncached(request)?
+        };
+        let result = Arc::new(result);
         self.cache.insert(request.content_version, &result);
         Ok(result)
     }
@@ -961,16 +976,16 @@ impl TextRasterizer {
         }
         let (faces, shaping) = self.prepare(request)?;
         let layout = Self::lay_out(&faces, &shaping, request)?;
-        let mut ink = None;
+        let mut inks = vec![None; shaping.looks.len()];
         layout.each_glyph(
             &faces,
             &shaping,
             request,
             &mut HashMap::new(),
-            |drawing, origin, scale, _| {
+            |drawing, origin, scale, glyph| {
                 if let Some([x_min, y_min, x_max, y_max]) = drawing.ink_bounds() {
                     include(
-                        &mut ink,
+                        &mut inks[usize::from(glyph.look)],
                         [
                             origin[0] + x_min * scale,
                             origin[1] - y_max * scale,
@@ -981,9 +996,22 @@ impl TextRasterizer {
                 }
             },
         );
-        // The outermost band reaches the disc radius plus one rim pixel past the ink.
-        let band = stroke_radius(&request.strokes).map_or(0.0, |radius| radius + 1.0);
-        ink = ink.map(|bounds| grown(bounds, band));
+        let paint = layout.paint(&faces, &shaping, request.align);
+        for decoration in &paint.decorations {
+            let look = layout.clusters[decoration.owner].look;
+            include(&mut inks[usize::from(look)], decoration.rect);
+        }
+        let mut ink = None;
+        for (look, bounds) in shaping.looks.iter().zip(inks) {
+            // The outermost band reaches the disc radius plus one rim pixel past the ink.
+            let band = stroke_radius(&look.strokes).map_or(0.0, |radius| radius + 1.0);
+            if let Some(bounds) = bounds {
+                include(&mut ink, grown(bounds, band));
+            }
+        }
+        for run in &paint.boxes {
+            include(&mut ink, [run.left, run.top, run.right, run.bottom]);
+        }
         let padding = request.background.map(|background| background.padding);
         let mut content = None;
         for (index, line) in layout.lines.iter().enumerate() {
@@ -1297,7 +1325,11 @@ impl TextRasterizer {
         let colors = placed
             .iter()
             .any(|(key, ..)| !matches!(drawings[key], Drawing::Outline(_)));
-        let pixel_count = raster_pixels(width, height, raster_bytes_per_pixel(request, colors))?;
+        let pixel_count = raster_pixels(
+            width,
+            height,
+            raster_bytes_per_pixel(request, request.strokes.len(), colors),
+        )?;
         let mut coverage = vec![0_u8; pixel_count];
         // Allocated only once a color glyph is placed.
         let mut colors: Option<Vec<u8>> = None;
@@ -1337,6 +1369,7 @@ impl TextRasterizer {
             width,
             [margin_x, margin_y],
             &line_boxes,
+            &[],
             &bands,
             &RequestLook::of(request, [layout.width, layout.height]),
         );
@@ -1740,6 +1773,39 @@ impl Layout {
                 )
             })
             .collect()
+    }
+
+    fn cluster_extents(&self, index: usize, align: TextAlign) -> HashMap<usize, (f32, f32)> {
+        let line = &self.lines[index];
+        let offset = self.line_offset(line, align);
+        let mut extents = HashMap::<usize, (f32, f32)>::new();
+        for glyph in &line.glyphs {
+            let left = glyph.x + offset;
+            let extent = extents.entry(glyph.cluster).or_insert((left, left));
+            *extent = (extent.0.min(left), extent.1.max(left + glyph.advance));
+        }
+        extents
+    }
+
+    fn paint(
+        &self,
+        faces: &Faces<'_>,
+        shaping: &runs::Shaping,
+        align: TextAlign,
+    ) -> paint::LinePaint {
+        let mut paint = paint::LinePaint::default();
+        for index in 0..self.lines.len() {
+            let extents = self.cluster_extents(index, align);
+            paint.add_line(
+                faces,
+                shaping,
+                self,
+                index,
+                |cluster| extents[&cluster],
+                |_| animated::IDENTITY_AFFINE,
+            );
+        }
+        paint
     }
 
     /// Start and End follow the paragraph's direction.
@@ -2967,6 +3033,7 @@ trait PixelLook {
     fn fade(&self, _index: usize) -> Option<u32> {
         None
     }
+    fn color_alpha(&self, index: usize) -> u32;
 }
 
 struct RequestLook<'a> {
@@ -2977,13 +3044,17 @@ struct RequestLook<'a> {
 
 impl<'a> RequestLook<'a> {
     fn of(request: &'a TextRasterRequest, layout_size: [f32; 2]) -> Self {
+        Self::painting(&request.fill, &request.strokes, layout_size)
+    }
+
+    fn painting(fill: &'a TextFill, strokes: &'a [TextStroke], layout_size: [f32; 2]) -> Self {
         Self {
-            foreground: request.fill.foreground(),
-            gradient: match &request.fill {
+            foreground: fill.foreground(),
+            gradient: match fill {
                 TextFill::Solid(_) => None,
                 TextFill::Gradient(gradient) => Some(gradient.prepared(layout_size)),
             },
-            strokes: &request.strokes,
+            strokes,
         }
     }
 }
@@ -2998,7 +3069,13 @@ impl PixelLook for RequestLook<'_> {
 
     #[inline]
     fn band(&self, stroke: usize, _: usize) -> [u8; 4] {
-        self.strokes[stroke].color
+        self.strokes
+            .get(stroke)
+            .map_or([0; 4], |stroke| stroke.color)
+    }
+
+    fn color_alpha(&self, _: usize) -> u32 {
+        u32::from(self.foreground[3])
     }
 }
 
@@ -3048,6 +3125,7 @@ fn compose(
     width: u32,
     margin: [u32; 2],
     line_boxes: &[(f32, f32, f32, f32)],
+    run_boxes: &[paint::RunBox],
     bands: &[Vec<u8>],
     look: &impl PixelLook,
 ) -> (Vec<u8>, Option<Vec<u8>>) {
@@ -3067,10 +3145,10 @@ fn compose(
             .collect::<Vec<_>>();
         (background.color, boxes)
     });
-    let split = request.split_background && background.is_some();
+    let split = request.split_background && (background.is_some() || !run_boxes.is_empty());
     let mut split_plane = split.then(|| vec![0_u8; coverage.len() * 4]);
-    let foreground = request.fill.foreground();
     let [margin_x, margin_y] = margin.map(|margin| margin as f32);
+    let mut row_runs = Vec::<&paint::RunBox>::new();
     let mut rgba8 = vec![0_u8; coverage.len() * 4];
     // Boxes are in line order, so the window `first..last` only moves down.
     let (mut first, mut last) = (0, 0);
@@ -3078,6 +3156,14 @@ fn compose(
         let mut pixel = [0_u32; 4];
         let x = (index % width as usize) as f32;
         let y = (index / width as usize) as f32;
+        if !run_boxes.is_empty() && index % width as usize == 0 {
+            row_runs.clear();
+            row_runs.extend(
+                run_boxes
+                    .iter()
+                    .filter(|run| margin_y + run.top < y + 1.0 && margin_y + run.bottom > y),
+            );
+        }
         if let Some((color, boxes)) = &background {
             if index % width as usize == 0 {
                 while first < boxes.len() && boxes[first].3 <= y {
@@ -3096,15 +3182,16 @@ fn compose(
                     across * down
                 })
                 .fold(0.0_f32, f32::max);
-            let boxed = premultiplied(*color, (covered * 255.0).round() as u8);
-            match &mut split_plane {
-                Some(plane) => {
-                    for (channel, value) in boxed.iter().enumerate() {
-                        plane[index * 4 + channel] = (*value).min(255) as u8;
-                    }
-                }
-                None => pixel = boxed,
+            pixel = premultiplied(*color, (covered * 255.0).round() as u8);
+        }
+        if let Some(run) = run_cover(&row_runs, [margin_x, margin_y], [x, y]) {
+            pixel = over(run, pixel);
+        }
+        if let Some(plane) = &mut split_plane {
+            for (channel, value) in pixel.iter().enumerate() {
+                plane[index * 4 + channel] = (*value).min(255) as u8;
             }
+            pixel = [0; 4];
         }
         // Fade a character's layers together so its strokes never show through its fill.
         let fade = look.fade(index);
@@ -3124,7 +3211,7 @@ fn compose(
         if let Some(colors) = colors {
             let color = &colors[index * 4..][..4];
             if color[3] > 0 {
-                let opacity = u32::from(foreground[3]);
+                let opacity = look.color_alpha(index);
                 pixel = over(
                     std::array::from_fn(|channel| u32::from(color[channel]) * opacity / 255),
                     pixel,
@@ -3139,6 +3226,30 @@ fn compose(
         }
     }
     (rgba8, split_plane)
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "coverage in [0, 1] to a byte"
+)]
+fn run_cover(
+    runs: &[&paint::RunBox],
+    [margin_x, margin_y]: [f32; 2],
+    [x, y]: [f32; 2],
+) -> Option<[u32; 4]> {
+    let (mut best, mut color) = (0.0_f32, [0; 4]);
+    for run in runs {
+        let across =
+            ((margin_x + run.right).min(x + 1.0) - (margin_x + run.left).max(x)).clamp(0.0, 1.0);
+        let down =
+            ((margin_y + run.bottom).min(y + 1.0) - (margin_y + run.top).max(y)).clamp(0.0, 1.0);
+        let covered = across * down;
+        if covered > 0.0 && covered >= best {
+            (best, color) = (covered, run.color);
+        }
+    }
+    (best > 0.0).then(|| premultiplied(color, (best * 255.0).round() as u8))
 }
 
 /// Dilates coverage by a disc of radius `width` (max over the disc, rim pixels weighted).

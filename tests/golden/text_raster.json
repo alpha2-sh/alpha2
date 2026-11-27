@@ -834,6 +834,167 @@
         "maxWidth": 120.0,
         "text": "שלום עולם 123"
       }
+    },
+    {
+      "contentVersion": 50,
+      "expected": {
+        "ascent": 35.625,
+        "descent": 4.9921875,
+        "firstBaseline": 44.400001525878906,
+        "height": 128,
+        "layoutHeight": 120.0,
+        "layoutWidth": 200.0,
+        "layoutX": 4.0,
+        "layoutY": 4.0,
+        "lineCount": 3,
+        "pixelsFnv1a": "53e71ab92af12a17",
+        "width": 208
+      },
+      "name": "rich-mixed-sizes",
+      "request": {
+        "align": "center",
+        "background": {
+          "color": [
+            20,
+            20,
+            20,
+            160
+          ],
+          "padding": 4
+        },
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 24,
+        "lineHeight": 1.25,
+        "maxWidth": 200,
+        "runs": [
+          "Small ",
+          {
+            "fill": [
+              255,
+              80,
+              40,
+              255
+            ],
+            "fontSize": 48,
+            "text": "BIG"
+          },
+          " and ",
+          {
+            "fontSize": 12,
+            "text": "tiny"
+          },
+          " words wrap"
+        ]
+      }
+    },
+    {
+      "contentVersion": 51,
+      "expected": {
+        "ascent": 32.0,
+        "descent": 8.0,
+        "firstBaseline": 36.0,
+        "height": 48,
+        "layoutHeight": 48.0,
+        "layoutWidth": 328.760009765625,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "97d24e5374467041",
+        "width": 329
+      },
+      "name": "rich-italic-hangul",
+      "request": {
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontFamily": "Alpha2 Fixture Styles",
+        "fontSize": 40,
+        "lineHeight": 1.2,
+        "runs": [
+          {
+            "fontStyle": "italic",
+            "text": "HI 안녕"
+          },
+          " TILE ",
+          {
+            "fontWeight": 700,
+            "text": "HE"
+          }
+        ]
+      }
+    },
+    {
+      "contentVersion": 52,
+      "expected": {
+        "ascent": 24.0,
+        "descent": 6.240234375,
+        "firstBaseline": 27.0,
+        "height": 42,
+        "layoutHeight": 36.0,
+        "layoutWidth": 318.5595703125,
+        "layoutX": 3.0,
+        "layoutY": 3.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "4f95053c533d2a7b",
+        "width": 325
+      },
+      "name": "rich-decorations",
+      "request": {
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 30,
+        "lineHeight": 1.2,
+        "runs": [
+          {
+            "fill": [
+              255,
+              200,
+              0,
+              255
+            ],
+            "text": "Under",
+            "underline": true
+          },
+          " ",
+          {
+            "lineThrough": true,
+            "strokes": [
+              {
+                "color": [
+                  0,
+                  0,
+                  0,
+                  255
+                ],
+                "width": 2
+              }
+            ],
+            "text": "through"
+          },
+          " ",
+          {
+            "backgroundColor": [
+              0,
+              0,
+              255,
+              160
+            ],
+            "text": "boxed"
+          }
+        ]
+      }
     }
   ],
   "fonts": [
@@ -856,6 +1017,18 @@
     {
       "family": "Alpha2 Fixture Color",
       "path": "tests/fonts/Alpha2FixtureColor.ttf"
+    },
+    {
+      "family": "Alpha2 Fixture Styles",
+      "path": "tests/fonts/Alpha2FixtureStyles.ttf"
+    },
+    {
+      "family": "Alpha2 Fixture Styles",
+      "path": "tests/fonts/Alpha2FixtureStylesBold.ttf"
+    },
+    {
+      "family": "Alpha2 Fixture Styles",
+      "path": "tests/fonts/Alpha2FixtureStylesItalic.ttf"
     }
   ]
 }
