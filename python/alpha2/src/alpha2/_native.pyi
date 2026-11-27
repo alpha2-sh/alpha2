@@ -115,6 +115,11 @@ class TextMeasurer:
         """Where a text generator (JSON text) lies on a canvas, as JSON text
         ``{layout, content, ink, lineCount, baselines}``. Raises ValueError for one it refuses."""
 
+    def text_layout(self, generator: str, width: int, height: int) -> str:
+        """Where each line, word and cluster of a text generator (JSON text) lies on a canvas,
+        ranges in code points, as JSON text ``{fontSize, layout, lines, words, clusters}``. Raises
+        ValueError for one it refuses."""
+
     def layout(
         self,
         generator: str,
