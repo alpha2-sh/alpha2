@@ -13,6 +13,18 @@ All notable changes to this project are documented in this file.
   leaves its buffers allocated, which with Metal made the process abort when it exited.
 - `ExtractResult.sourceDecode`: how the browser decoded each source of an extraction.
 
+### Changed
+
+- **Breaking:** an extraction's progress says which part of the run it is in and how far each pass
+  has read by time. Every report has `stage` (`begin`, `pass` or `end`) and the pass's `covered`
+  and `span` in ticks, so a pass over source frames, whose `total` is `null`, has a fraction too. A
+  report is now also sent before the extractor's `begin`, when each pass begins and before its
+  `end`; a consumer that took every report for a delivery must read `stage`. This holds for
+  `runExtractor`, the host protocol, `@alpha2-sh/node` (`ExtractProgress`) and the Python client
+  (`ExtractProgress`, now with `stage`, `covered` and `span`). In Rust, `PassProgress` has `span`
+  and `covered` and is `#[non_exhaustive]`, and `ExtractSession::stage` and `progress_json` are
+  new.
+
 ### Fixed
 
 - `runExtractor` failed with a bare WebCodecs `OperationError` on a source whose software decoder
