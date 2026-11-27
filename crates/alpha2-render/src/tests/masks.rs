@@ -327,6 +327,40 @@ fn split_mask(size: RenderSize) -> Vec<u8> {
         .collect::<Vec<_>>()
 }
 
+const EIGHT_BIT_CODE: f32 = 1.0 / 255.0;
+
+fn channels(texel: &[u8]) -> Vec<f32> {
+    match texel.len() {
+        8 => texel
+            .chunks(2)
+            .map(|half| half::f16::from_le_bytes([half[0], half[1]]).to_f32())
+            .collect(),
+        4 => texel.iter().map(|&code| f32::from(code) / 255.0).collect(),
+        other => panic!("unexpected texel size {other}"),
+    }
+}
+
+fn half_mixed(x: usize, texel: &[u8], backdrop: &[u8], picture: &[u8]) -> usize {
+    let channels = [texel, backdrop, picture].map(channels);
+    let mut separated = 0;
+    for ((&mixed, &under), &over) in channels[0].iter().zip(&channels[1]).zip(&channels[2]) {
+        let (low, high) = (under.min(over), under.max(over));
+        if high - low >= 4.0 * EIGHT_BIT_CODE {
+            separated += 1;
+            assert!(
+                low < mixed && mixed < high,
+                "half covered at {x}: {channels:?}"
+            );
+        } else {
+            assert!(
+                low - EIGHT_BIT_CODE <= mixed && mixed <= high + EIGHT_BIT_CODE,
+                "half covered at {x}: {channels:?}"
+            );
+        }
+    }
+    separated
+}
+
 #[derive(Clone, Copy)]
 enum Drawn {
     Backdrop,
@@ -359,7 +393,7 @@ fn key_mix_is_exact_at_no_and_full_coverage() {
     let size = RenderSize::new(16, 8).expect("size");
     let textures = [
         rgba_image_texture(&renderer, size, &premultiplied_noise(size, 7)),
-        rgba_image_texture(&renderer, size, &premultiplied_noise(size, 1_234)),
+        rgba_image_texture(&renderer, size, &premultiplied_noise(size, 0x00a5_5a00)),
     ];
     let views = textures
         .each_ref()
@@ -430,16 +464,18 @@ fn key_mix_is_exact_at_no_and_full_coverage() {
         masked: true,
         opacity: 1.0,
     });
+    let mut separated = 0;
     for (index, texel) in split.iter().enumerate() {
         let x = index % size.width as usize;
         match x {
             0..7 => assert_eq!(texel, &backdrop[index], "uncovered at {x}"),
-            7 | 8 => {
-                assert_ne!(texel, &backdrop[index], "half covered at {x}");
-                assert_ne!(texel, &picture[index], "half covered at {x}");
-            }
+            7 | 8 => separated += half_mixed(x, texel, &backdrop[index], &picture[index]),
             _ => assert_eq!(texel, &picture[index], "covered at {x}"),
         }
     }
+    assert!(
+        separated > 0,
+        "the half covered columns separate no channel"
+    );
     assert!(pollster::block_on(scope.pop()).is_none());
 }
