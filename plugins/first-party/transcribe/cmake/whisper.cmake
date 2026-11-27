@@ -9,22 +9,18 @@ function(alpha2_restore_release_flags)
   endforeach()
 endfunction()
 
-# whisper.cpp 1.8.3 asserts that its DTW median filter is narrower than the decoded stretch;
-# its master branch narrows the filter instead.
-function(alpha2_narrow_dtw_median_filter)
+function(alpha2_replace_in_whisper what from to)
   set(source "${PROJECT_SOURCE_DIR}/src/whisper.cpp")
   file(READ "${source}" text)
-  set(asserted "    WHISPER_ASSERT(filter_width < a->ne[2]);\n")
-  set(narrowed "    if (filter_width >= a->ne[2]) {\n        filter_width = (a->ne[2] % 2) ? (int) a->ne[2] - 2 : (int) a->ne[2] - 1;\n        if (filter_width < 1) {\n            filter_width = 1;\n        }\n    }\n    WHISPER_ASSERT(filter_width < a->ne[2] || filter_width == 1);\n")
-  string(FIND "${text}" "${narrowed}" done)
+  string(FIND "${text}" "${to}" done)
   if(NOT done EQUAL -1)
     return()
   endif()
-  string(FIND "${text}" "${asserted}" at)
+  string(FIND "${text}" "${from}" at)
   if(at EQUAL -1)
-    message(FATAL_ERROR "whisper.cpp no longer has the DTW median filter assert that transcribe's cmake/whisper.cmake replaces; remove alpha2_narrow_dtw_median_filter")
+    message(FATAL_ERROR "whisper.cpp no longer has the ${what} that transcribe's cmake/whisper.cmake replaces; remove that replacement")
   endif()
-  string(REPLACE "${asserted}" "${narrowed}" text "${text}")
+  string(REPLACE "${from}" "${to}" text "${text}")
   file(WRITE "${source}" "${text}")
 endfunction()
 
@@ -32,5 +28,14 @@ if(MSVC)
   alpha2_restore_release_flags()
 endif()
 if(PROJECT_NAME STREQUAL "whisper.cpp")
-  alpha2_narrow_dtw_median_filter()
+  # whisper.cpp 1.8.3 asserts that its DTW median filter is narrower than the decoded stretch;
+  # its master branch narrows the filter instead.
+  alpha2_replace_in_whisper("DTW median filter assert"
+    "    WHISPER_ASSERT(filter_width < a->ne[2]);\n"
+    "    if (filter_width >= a->ne[2]) {\n        filter_width = (a->ne[2] % 2) ? (int) a->ne[2] - 2 : (int) a->ne[2] - 1;\n        if (filter_width < 1) {\n            filter_width = 1;\n        }\n    }\n    WHISPER_ASSERT(filter_width < a->ne[2] || filter_width == 1);\n")
+  # whisper.cpp deletes a context whose model failed to load without freeing the model's buffers,
+  # and ggml's Metal device asserts at exit that every buffer was freed.
+  alpha2_replace_in_whisper("model load failure's delete"
+    "        WHISPER_LOG_ERROR(\"%s: failed to load model\\n\", __func__);\n        delete ctx;\n"
+    "        WHISPER_LOG_ERROR(\"%s: failed to load model\\n\", __func__);\n        whisper_free(ctx);\n")
 endif()
