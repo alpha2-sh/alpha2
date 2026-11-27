@@ -349,12 +349,22 @@ fn the_windows_default_renders_by_performance_and_auto_on_the_adapter_that_encod
             report.explanation
         );
     }
-    let mut host = crate::create_host_on(
+    let mut host = match crate::create_host_on(
         VideoDecodePolicy::Software,
         crate::config::RendererPolicy::Gpu,
         &AdapterPolicy::Auto,
-    )
-    .expect("an auto host");
+    ) {
+        Ok(host) => host,
+        Err(error) if error.code == "GPU_INIT_FAILED" => {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::MultiAdapter,
+                "no hardware DX12 adapter renders here: {}",
+                error.message
+            );
+            return;
+        }
+        Err(error) => panic!("an auto host: {}", error.message),
+    };
     let report = host.adapter_choice.clone().expect("a DX12 host's choice");
     let hardware: Vec<_> = report
         .records

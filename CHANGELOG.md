@@ -13,6 +13,19 @@ All notable changes to this project are documented in this file.
   leaves its buffers allocated, which with Metal made the process abort when it exited.
 - `ExtractResult.sourceDecode`: how the browser decoded each source of an extraction.
 
+### Changed
+
+- **Breaking:** `alpha2-host --renderer gpu` (`ALPHA2_RENDERER=gpu`, the clients' `renderer: "gpu"`)
+  no longer renders on a software adapter (lavapipe, llvmpipe, WARP, SwiftShader) unless
+  `ALPHA2_GPU_ADAPTER` pins it. Without a hardware adapter the host does not start: it fails with
+  `GPU_INIT_FAILED`, now a permanent failure (class `INVALID_INPUT`), naming every adapter it saw
+  with its backend and whether it is a software one, and the two remedies (`--renderer cpu`, or the
+  pin); `details.adapterChoice` carries the records, with the new reason `no-hardware-adapter`.
+  Results and `capabilities.gpu` report `softwareAdapter`. `auto` is unchanged.
+- An export that pins an encoder taking GPU frames only (`h264_vulkan`, `h264_d3d12va`) on a host
+  whose shared device was not made fails with `GPU_OUTPUT_UNAVAILABLE` naming that device and why
+  it was not made, instead of `INVALID_INPUT` "video encoder ... is unavailable".
+
 ### Fixed
 
 - `runExtractor` failed with a bare WebCodecs `OperationError` on a source whose software decoder

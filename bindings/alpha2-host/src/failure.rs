@@ -86,12 +86,15 @@ pub fn phase_tag(message: &str) -> Option<(ExportPhase, Option<u64>)> {
 
 /// Failure classes no protocol code names. `HARDWARE_STALL` is not a class; it makes a stall's
 /// `resource` the GPU ([`hardware_stall`]).
-const EVIDENCE_CLASSES: [&str; 4] = [
+const EVIDENCE_CLASSES: [&str; 5] = [
     "OUT_OF_MEMORY",
     "ALLOCATION_FAILED",
     "VALIDATION_FAILED",
     "HARDWARE_STALL",
+    NO_HARDWARE_ADAPTER,
 ];
+
+pub const NO_HARDWARE_ADAPTER: &str = "NO_HARDWARE_ADAPTER";
 
 /// Only the evidence decides; the words are for whoever reads the message.
 pub fn hardware_stall(hardware: bool, message: String) -> String {
@@ -306,6 +309,9 @@ pub fn classify_failure(
         "EXTRACTOR_TIMEOUT" | "PLUGIN_FETCH_FAILED" => return class("UNKNOWN", "unknown"),
         // A defect (a caught panic or an internal error), which a fresh host may not meet again.
         "INTERNAL" => return class("DEFECT", "unknown"),
+        "GPU_INIT_FAILED" if native == Some(NO_HARDWARE_ADAPTER) => {
+            return class("INVALID_INPUT", "gpu");
+        }
         _ => {}
     }
     let missing_canary = message.contains(alpha2_render::GPU_WORK_DROPPED_MESSAGE);

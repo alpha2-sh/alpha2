@@ -134,8 +134,9 @@ export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
   readonly videoDecode?: VideoDecodeMode;
   /**
    * Renderer for every request. Unset uses `ALPHA2_RENDERER`, else `auto`, which picks a hardware
-   * GPU or the CPU renderer but never a software GPU adapter. `gpu` accepts any adapter and fails
-   * with `GPU_INIT_FAILED` without one. `cpu` opens no graphics driver.
+   * GPU or the CPU renderer but never a software GPU adapter. `gpu` takes a hardware adapter, or a
+   * software one only when `ALPHA2_GPU_ADAPTER` pins it, and fails with `GPU_INIT_FAILED`
+   * otherwise. `cpu` opens no graphics driver.
    */
   readonly renderer?: RendererMode;
   /**
@@ -400,6 +401,11 @@ export interface NativeExportResult {
   readonly container: ExportContainer;
   /** The GPU adapter that rendered, or the CPU renderer's name. */
   readonly adapter: string;
+  /**
+   * Whether {@link adapter} rasterizes in software, which happens only when `ALPHA2_GPU_ADAPTER`
+   * pins it; `false` on the CPU renderer.
+   */
+  readonly softwareAdapter: boolean;
   /** The FFmpeg encoder that wrote the video; `null` for a packet copy, which encodes nothing. */
   readonly videoEncoder: string | null;
   /** `hardware` or `software`: how {@link videoEncoder} runs. */

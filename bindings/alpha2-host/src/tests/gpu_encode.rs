@@ -571,3 +571,62 @@ fn gpu_required_does_not_restart_after_a_rejected_frame() {
     assert!(!directory.join("out.mp4").exists());
     std::fs::remove_dir_all(&directory).ok();
 }
+
+#[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "hwencode"))]
+#[test]
+fn a_gpu_only_encoder_pin_names_the_missing_shared_device() {
+    let _gpu = gpu_test_lock();
+    let (encoder, device) = if cfg!(target_os = "windows") {
+        ("h264_d3d12va", "D3D12")
+    } else {
+        ("h264_vulkan", "Vulkan")
+    };
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    #[cfg(target_os = "linux")]
+    {
+        host.shared_vulkan = None;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        host.shared_d3d12 = None;
+    }
+    host.device_mut().encode_adapters.no_device =
+        Some("no Vulkan adapter carries the shared device".to_owned());
+    let directory = scratch_directory("gpu-only-pin");
+    let project = include_str!("../../../../tests/cases/host-parity-shapes-project.json");
+    let assets = HashMap::from([("still".to_owned(), corpus("parity-image.png"))]);
+    let error = host
+        .export(
+            project,
+            &assets,
+            &HashMap::new(),
+            Vec::new(),
+            0,
+            alpha2_time::TICKS_PER_SECOND / 4,
+            RateRequest { num: 24, den: 1 },
+            false,
+            crate::protocol::ResolvedFormat {
+                container: alpha2_media::Container::Mp4,
+                video: NativeVideoCodec::H264,
+                audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
+            },
+            Some(encoder),
+            VideoQualityRequest::Level(QualityLevel::High),
+            AudioQualityRequest::Level(QualityLevel::High),
+            None,
+            directory.join("pinned.mp4"),
+            &mut |_| Ok(()),
+        )
+        .expect_err("the pinned encoder has no device");
+    let error = HostError::classify(error);
+    assert_eq!(error.code, "GPU_OUTPUT_UNAVAILABLE", "{}", error.message);
+    assert!(
+        error.message.contains(&format!(
+            "video encoder {encoder} needs the shared {device} device, which was not made: no \
+             Vulkan adapter carries the shared device"
+        )),
+        "{}",
+        error.message
+    );
+}

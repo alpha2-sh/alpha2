@@ -363,6 +363,9 @@ jobs:
       - name: Fetch the pinned DXC
         if: runner.os == 'Windows'
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
+      - name: Pin WARP, the runner's software adapter
+        if: runner.os == 'Windows'
+        run: echo "ALPHA2_GPU_ADAPTER=Microsoft Basic Render" >> "$GITHUB_ENV"
       - name: Adapters
         run: cargo run -q -p alpha2-gpu --example adapters
       - name: Build the plugins the host tests pack

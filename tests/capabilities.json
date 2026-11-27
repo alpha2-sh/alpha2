@@ -111,6 +111,10 @@
     "description": "Two or more GPU adapters.",
     "probe": "two or more adapters on the test backends"
   },
+  "software-adapter": {
+    "description": "A software GPU adapter the host can pin (lavapipe, WARP).",
+    "probe": "ALPHA2_GPU_ADAPTER=llvmpipe on Linux or Microsoft Basic Render on Windows starts a GPU host"
+  },
   "unorm16": {
     "description": "16-bit normalized textures on the test device.",
     "probe": "the test device has TEXTURE_FORMAT_16BIT_NORM"

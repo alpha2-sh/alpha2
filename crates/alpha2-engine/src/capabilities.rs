@@ -58,6 +58,8 @@ pub struct CapabilityReport {
 pub struct GpuReport {
     /// The adapter's name.
     pub adapter: String,
+    /// Whether the adapter rasterizes in software (lavapipe, llvmpipe, WARP, `SwiftShader`).
+    pub software_adapter: bool,
     /// The graphics backend.
     pub backend: String,
     /// The driver's name.
@@ -162,6 +164,7 @@ impl CapabilityReport {
             runtime,
             gpu: GpuReport {
                 adapter: capabilities.adapter_name.clone(),
+                software_adapter: capabilities.software_rasterizer,
                 backend: capabilities.backend.clone(),
                 driver: capabilities.driver.clone(),
                 driver_info: capabilities.driver_info.clone(),
@@ -207,6 +210,7 @@ impl CapabilityReport {
             runtime,
             gpu: GpuReport {
                 adapter: format!("alpha2 CPU renderer ({} threads)", renderer.threads()),
+                software_adapter: false,
                 backend: "cpu".to_owned(),
                 driver: "alpha2".to_owned(),
                 driver_info: env!("CARGO_PKG_VERSION").to_owned(),

@@ -367,7 +367,7 @@ pub enum RendererPolicy {
     /// (lavapipe, llvmpipe, WARP, `SwiftShader`).
     #[default]
     Auto,
-    /// The GPU renderer on whatever adapter is found, software ones included.
+    /// The GPU renderer on a hardware adapter, or on a software one `ALPHA2_GPU_ADAPTER` pins.
     Gpu,
     Cpu,
 }

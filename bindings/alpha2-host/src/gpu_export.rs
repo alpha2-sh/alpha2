@@ -182,17 +182,27 @@ impl Host {
         // macOS has one encoder, whose codec is checked below.
         let asked = cfg!(any(target_os = "windows", target_os = "linux")).then_some(codec);
         let device = self.hardware_encode_device();
+        let pinned_backend = pinned.and_then(|name| {
+            alpha2_native::HardwareEncodeBackend::of_gpu_frames_only_encoder(name)
+                .map(|backend| (name, backend))
+        });
         let capability = device
             .as_ref()
-            .ok_or_else(|| self.no_encode_device(asked))
+            .ok_or_else(|| {
+                let reason = self.no_encode_device(asked);
+                match pinned_backend {
+                    Some((name, backend)) => format!(
+                        "video encoder {name} needs the shared {} device, which was not made: \
+                         {reason}",
+                        backend.device_name()
+                    ),
+                    None => reason,
+                }
+            })
             .and_then(|device| self.device_capability(device, asked));
-        // Pinning a GPU-frames-only encoder requires this path. The D3D12VA encoders are GPU-only,
-        // so pinning one requires it even where no device encodes.
-        let pinned_d3d12va =
-            cfg!(target_os = "windows") && pinned.is_some_and(|name| name.ends_with("_d3d12va"));
         let pinned_gpu_encoder = capability.as_ref().is_ok_and(|capability| {
             capability.gpu_input_only && pinned == Some(capability.encoder)
-        }) || pinned_d3d12va;
+        }) || pinned_backend.is_some();
         let refuse = |reason: String| GpuOutputRefusal {
             reason,
             required: pinned_gpu_encoder,
@@ -219,7 +229,7 @@ impl Host {
         if let Some(name) = pinned
             && name != capability.encoder
         {
-            return Err(refuse(if pinned_d3d12va {
+            return Err(refuse(if pinned_backend.is_some() {
                 format!(
                     "the pinned encoder {name} does not encode {}; this host's GPU-input encoder \
                      for it is {}",

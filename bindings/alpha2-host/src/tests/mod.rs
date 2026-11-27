@@ -58,6 +58,7 @@ mod export_pipeline;
 mod extract;
 mod failures;
 mod gpu_encode;
+mod gpu_renderer;
 mod gpu_resident;
 mod hardware_decode;
 mod openh264;
