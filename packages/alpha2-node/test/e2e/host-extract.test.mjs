@@ -128,6 +128,24 @@ function run(extractor, name, size, end, extra = {}) {
   );
 }
 
+const expectedProgress = (times, end) => {
+  const report = (stage, completed, covered) => ({
+    phase: "extract",
+    stage,
+    pass: 0,
+    completed,
+    total: null,
+    covered,
+    span: end,
+  });
+  return [
+    report("begin", 0, 0),
+    report("pass", 0, 0),
+    ...times.map((time, index) => report("pass", index + 1, time)),
+    report("end", times.length, end),
+  ];
+};
+
 test("the JS digest fixture records the bytes the Rust reader pins", async () => {
   const pinned = JSON.parse(
     await readFile(
@@ -169,8 +187,13 @@ test("the JS digest fixture records the bytes the Rust reader pins", async () =>
     });
     assert.deepEqual(found, pinned[name], name);
     assert.ok(set.made_from, `${name}: made_from is the conformed original`);
-    assert.ok(
-      progress.length > 0 && progress.every((step) => step.phase === "extract"),
+    assert.deepEqual(
+      progress,
+      expectedProgress(
+        pinned[name].map(([time]) => time),
+        40_000,
+      ),
+      name,
     );
   }
 });

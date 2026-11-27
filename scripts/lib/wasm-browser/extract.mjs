@@ -65,13 +65,26 @@ const digest = {
   },
 };
 const pinned = await (await fetch("/tests/golden/extract-recipe.json")).json();
+const expectedProgress = (times, end) => {
+  const report = (stage, completed, covered) =>
+    ({ phase: "extract", stage, pass: 0, completed, total: null, covered, span: end });
+  return [
+    report("begin", 0, 0),
+    report("pass", 0, 0),
+    ...times.map((time, index) => report("pass", index + 1, time)),
+    report("end", times.length, end),
+  ];
+};
+const sorted = (report) => JSON.stringify(report, Object.keys(report ?? {}).sort());
 const found = {};
 const undecodable = {};
 const decoded = {};
+const progressDiffers = {};
 let ok = true;
 // Every pinned file this browser decodes; H.264 always.
 for (const name of Object.keys(pinned)) {
   let result;
+  const heard = [];
   try {
     result = await runExtractor({
     binding: wasm, project, media: { v: await media(name) },
@@ -80,6 +93,7 @@ for (const name of Object.keys(pinned)) {
       input: { from: "source", source_id: "v", range: { start: 0, end: 40000 }, size: 96 },
       outputs: { digest: "frames" },
     },
+    onProgress: (progress) => heard.push(progress),
   }, digest);
   } catch (error) {
     const refused = error?.code === "DECODE_UNAVAILABLE" || error?.code === "PLANAR_DECODE_UNAVAILABLE";
@@ -95,6 +109,12 @@ for (const name of Object.keys(pinned)) {
       .toString(16).padStart(8, "0"),
   ]);
   ok &&= JSON.stringify(found[name]) === JSON.stringify(pinned[name]);
+  const expected = expectedProgress(pinned[name].map(([time]) => time), 40000).map(sorted);
+  const differs = expected.findIndex((report, index) => report !== sorted(heard[index]));
+  if (differs >= 0 || heard.length !== expected.length) {
+    ok = false;
+    progressDiffers[name] = differs < 0 ? expected.length : differs;
+  }
 }
 const fellBack = Object.values(decoded).every(
   (decode) => decode?.hardwareAcceleration === "no-preference" && decode.softwareRefusal !== undefined,
@@ -104,6 +124,7 @@ report({
   found,
   undecodable,
   decoded,
+  progressDiffers,
 });
 `;
 }

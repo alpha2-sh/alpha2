@@ -31,6 +31,7 @@ from alpha2 import (
 )
 from alpha2.client import _HOST_SHUTDOWN_TIMEOUT, resolve_host_binary
 from alpha2.errors import failure_class_of_code
+from alpha2.extract import ExtractProgress
 from alpha2.install import host_executable_name
 from alpha2.protocol import describe_exit, windows_policy_blocked
 
@@ -2529,8 +2530,9 @@ def test_an_exception_from_a_signal_handler_cancels_the_export_before_it_propaga
     assert lines_in(log)[-1] == f"published next.mp4 {pid}"
 
 
-def emit_host(log: Path) -> str:
-    """Asks an extract's extractor for its ``end`` step and answers as the host would."""
+def emit_host(log: Path, progress: dict[str, Any] | None = None) -> str:
+    """Asks an extract's extractor for its ``end`` step and answers as the host would; with
+    ``progress``, reports it first."""
     return f"""
     pid = str(os.getpid())
     record({str(log)!r}, "start " + pid)
@@ -2539,6 +2541,8 @@ def emit_host(log: Path) -> str:
         operation = request["operation"]
         if operation == "extract":
             pending["extract"] = request
+            if {progress!r} is not None:
+                write_message({{"type": "progress", "requestId": request["requestId"], **{progress!r}}})
             write_message({{"type": "extract.step", "requestId": request["requestId"], "seq": 0, "step": "end"}})
         elif operation == "extract.ack":
             extract = pending.pop("extract")
@@ -3054,6 +3058,53 @@ def test_an_emit_goes_out_as_a_plain_number_or_fails_the_extract(
         emits = [{"output": "level", "time": 4_000, "values": [sent]}]
         assert lines_in(log)[-1] == "ack emits " + json.dumps(emits)
     assert client.export(**export_args("next.mp4"))["pid"] == starts_in(log)[0]
+
+
+END_PROGRESS = {
+    "phase": "extract",
+    "stage": "end",
+    "pass": 1,
+    "completed": 4,
+    "total": None,
+    "covered": 9,
+    "span": 9,
+}
+
+
+def test_an_extract_progress_reaches_on_progress_with_its_stage_and_covered_span(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, emit_host(log, END_PROGRESS)))
+    heard: list[ExtractProgress] = []
+    client.extract(
+        project_document(),
+        EXTRACT_REQUEST,
+        EmitsAtEnd("sample", "level", 0, [1]),
+        on_progress=heard.append,
+    )
+    assert heard == [
+        ExtractProgress(stage="end", pass_index=1, completed=4, total=None, covered=9, span=9)
+    ]
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [{"stage": None}, {"stage": "load"}, {"pass": None}, {"covered": 10}],
+    ids=["no stage", "unknown stage", "no pass", "covered past span"],
+)
+def test_an_extract_progress_without_its_stage_or_span_fails_the_request(
+    tmp_path: Path, fake_host: FakeHost, broken: dict[str, Any]
+) -> None:
+    progress = {
+        key: value
+        for key, value in (END_PROGRESS | broken).items()
+        if value is not None or key == "total"
+    }
+    client = HostClient(host_path=fake_host(tmp_path, emit_host(tmp_path / "log", progress)))
+    with pytest.raises(Alpha2HostError) as caught:
+        client.extract(project_document(), EXTRACT_REQUEST, EmitsAtEnd("sample", "level", 0, [1]))
+    assert caught.value.code == "INVALID_RESPONSE", caught.value
 
 
 def test_an_acknowledgement_that_cannot_be_encoded_fails_the_extract(

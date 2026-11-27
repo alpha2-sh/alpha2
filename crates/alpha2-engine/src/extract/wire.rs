@@ -4,7 +4,7 @@ use alpha2_model::{DataInterval, DataWord};
 use alpha2_time::MediaTime;
 use serde_json::{Value, json};
 
-use super::{Emit, RunContext};
+use super::{Emit, ExtractSession, RunContext};
 
 /// An emit as clients write it, `{ output, time, values }` for samples (`null` a lost channel),
 /// `{ output, start, end, text, speaker? }` for words, and for intervals
@@ -81,5 +81,21 @@ pub fn client_context_json(context: &RunContext) -> Value {
         "video": context.video.map(|(size, format)| json!({ "size": size, "format": format })),
         "audio": context.audio.map(|(rate, channels, block)| json!({ "rate": rate, "channels": channels, "blockFrames": block })),
         "frameRate": context.frame_rate,
+    })
+}
+
+/// A run's progress as every surface reports it: the `stage` it is in, the `pass` that
+/// concerns, and that pass's `completed`, `total`, `covered` and `span`.
+#[must_use]
+pub fn progress_json(session: &ExtractSession) -> Value {
+    let (stage, pass) = session.stage();
+    let progress = session.progress()[pass];
+    json!({
+        "stage": stage.name(),
+        "pass": pass,
+        "completed": progress.completed,
+        "total": progress.total,
+        "covered": progress.covered,
+        "span": progress.span,
     })
 }

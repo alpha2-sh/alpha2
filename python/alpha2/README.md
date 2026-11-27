@@ -241,7 +241,9 @@ with alpha2.HostClient() as client:
   descriptor's `params_schema` first.
 - Output the project would refuse fails with `INVALID_EMIT`, a step that raises with
   `EXTRACTOR_FAILED`, and a step slower than the host's `--extract-step-timeout` with
-  `EXTRACTOR_TIMEOUT`. `cancel=` and `on_progress=` work as for `export`.
+  `EXTRACTOR_TIMEOUT`. `cancel=` and `on_progress=` work as for `export`. An extraction's
+  progress (`alpha2.extract.ExtractProgress`) has `stage` (`begin`, `pass` or `end`),
+  `pass_index`, `completed`, `total` (`None` for source frames) and `covered` of `span` ticks.
 - A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass
   `plugin={"manifest": ..., "sha256": ...}` and no extractor. The host fetches the manifest (an
   `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact

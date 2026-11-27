@@ -322,13 +322,42 @@ impl fmt::Display for SessionError {
 
 impl std::error::Error for SessionError {}
 
-/// Completed and total deliveries of one pass; the total is unknown for source frames.
+/// How far one pass is, by deliveries and by time.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct PassProgress {
     /// Deliveries handed over.
     pub completed: u64,
-    /// Deliveries the pass will hand over, when known.
+    /// Deliveries the pass will hand over, when known; unknown for source frames.
     pub total: Option<u64>,
+    /// Ticks of the range the pass reads, from its start to the range's bound in its direction.
+    pub span: u64,
+    /// Ticks of `span` between the pass's start and its latest delivery's bound (a frame's pts,
+    /// a block's far edge), and all of `span` once the pass has ended. Never decreases.
+    pub covered: u64,
+}
+
+/// The part of a run a progress report describes.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Stage {
+    /// Before the first pass, where the extractor's `begin` runs.
+    Begin,
+    /// Inside a pass.
+    Pass,
+    /// After the last pass, where the extractor's `end` runs.
+    End,
+}
+
+impl Stage {
+    /// The name every surface reports.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Begin => "begin",
+            Self::Pass => "pass",
+            Self::End => "end",
+        }
+    }
 }
 
 /// What the extractor is told when the run begins.
@@ -716,6 +745,8 @@ impl ExtractSession {
             .map(|pass| PassProgress {
                 completed: 0,
                 total: session.pass_total(pass),
+                span: session.pass_span(pass),
+                covered: 0,
             })
             .collect();
         Ok(session)
@@ -763,10 +794,23 @@ impl ExtractSession {
         &self.request
     }
 
-    /// Completed and total deliveries of each pass.
+    /// Each pass's deliveries and how much of its span it has read.
     #[must_use]
     pub fn progress(&self) -> &[PassProgress] {
         &self.progress
+    }
+
+    /// The stage the run is in and the pass that concerns: the first before any pass has begun,
+    /// the last once all have ended.
+    #[must_use]
+    pub fn stage(&self) -> (Stage, usize) {
+        match &self.phase {
+            Phase::BeforePass(_) => (Stage::Begin, 0),
+            Phase::Running(cursor) | Phase::Waiting(cursor, _) | Phase::Delivering(cursor, _) => {
+                (Stage::Pass, cursor.pass)
+            }
+            Phase::Done | Phase::Finished => (Stage::End, self.passes.len().saturating_sub(1)),
+        }
     }
 
     fn range(&self) -> TimeRange {
@@ -809,6 +853,30 @@ impl ExtractSession {
         }
     }
 
+    fn pass_span(&self, pass: usize) -> u64 {
+        let Pass { start, direction } = self.passes[pass];
+        let range = self.range();
+        let ticks = match direction {
+            Direction::Forward => range.end().ticks() - start.ticks(),
+            Direction::Backward => start.ticks() - range.start().ticks(),
+        };
+        u64::try_from(ticks).unwrap_or(0)
+    }
+
+    fn covered_by(&self, pass: usize) -> u64 {
+        let Some(bound) = self.delivered else {
+            return 0;
+        };
+        let Pass { start, direction } = self.passes[pass];
+        let ticks = match direction {
+            Direction::Forward => bound.ticks().saturating_sub(start.ticks()),
+            Direction::Backward => start.ticks().saturating_sub(bound.ticks()),
+        };
+        u64::try_from(ticks)
+            .unwrap_or(0)
+            .min(self.progress[pass].span)
+    }
+
     /// The next step. Calling it again before supplying an outstanding need repeats the need.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Step {
@@ -832,19 +900,24 @@ impl ExtractSession {
                         direction: self.passes[pass].direction,
                     };
                 }
-                Phase::Running(cursor) => match self.need_at(cursor) {
-                    Some(need) => {
+                Phase::Running(cursor) => {
+                    if let Some(need) = self.need_at(cursor) {
                         self.phase = Phase::Waiting(cursor, need.clone());
                         return Step::Need(need);
                     }
-                    None => self.phase = Phase::BeforePass(cursor.pass + 1),
-                },
+                    let ended = &mut self.progress[cursor.pass];
+                    ended.covered = ended.span;
+                    self.phase = Phase::BeforePass(cursor.pass + 1);
+                }
                 Phase::Waiting(cursor, need) => {
                     self.phase = Phase::Waiting(cursor, need.clone());
                     return Step::Need(need);
                 }
                 Phase::Delivering(cursor, delivery) => {
-                    self.progress[cursor.pass].completed += 1;
+                    let covered = self.covered_by(cursor.pass);
+                    let progress = &mut self.progress[cursor.pass];
+                    progress.completed += 1;
+                    progress.covered = progress.covered.max(covered);
                     self.phase = Phase::Running(cursor);
                     return Step::Deliver(delivery);
                 }

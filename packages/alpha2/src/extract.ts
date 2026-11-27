@@ -440,6 +440,13 @@ export async function runExtractor(
     JSON.stringify(descriptor),
     JSON.stringify(request.request),
   );
+  const report = (): void => {
+    if (request.onProgress === undefined) return;
+    request.onProgress({
+      phase: "extract",
+      ...(JSON.parse(session.progress()) as Omit<ExtractProgress, "phase">),
+    });
+  };
   const sources = new Map<string, SourceFrames>();
   const audio = new Map<string, MediabunnyAudioDecoder>();
   const resource = (id: string): MediabunnyInput => {
@@ -450,8 +457,8 @@ export async function runExtractor(
   };
   try {
     const context = JSON.parse(session.context()) as ExtractContext;
+    report();
     await step(() => extractor.begin?.(context));
-    let pass = 0;
     for (;;) {
       if (request.signal?.aborted === true)
         throw coded("ABORTED", "the extraction was cancelled");
@@ -560,7 +567,8 @@ export async function runExtractor(
       }
       const { emits, out } = collectEmits();
       if (next.step === "pass") {
-        pass = next.pass ?? 0;
+        report();
+        const pass = next.pass ?? 0;
         await step(() =>
           extractor.pass?.({
             pass,
@@ -598,14 +606,9 @@ export async function runExtractor(
         );
       }
       session.emit(JSON.stringify(emits));
-      const progress = JSON.parse(session.progress()) as {
-        completed: number;
-        total: number | null;
-      }[];
-      const current = progress[pass];
-      if (current !== undefined && next.step !== "pass")
-        request.onProgress?.({ phase: "extract", pass, ...current });
+      if (next.step !== "pass") report();
     }
+    report();
     const { emits, out } = collectEmits();
     await step(() => extractor.end?.(out));
     session.emit(JSON.stringify(emits));

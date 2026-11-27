@@ -49,7 +49,7 @@ const { result } = await bridge.extract({
   outputs: { silence: "silence" },
 }, {
   plugin: { manifest, sha256 },
-  onProgress: (progress) => { if (progress.phase === "extract") loadedAt ??= performance.now(); },
+  onProgress: (progress) => { if (progress.phase === "extract" && progress.stage === "pass") loadedAt ??= performance.now(); },
 });
 const ended = performance.now();
 await new Promise((resolve) => setTimeout(resolve, 100));

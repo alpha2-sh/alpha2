@@ -376,18 +376,12 @@ impl WebExtractSession {
         })
     }
 
-    /// Each pass's progress, JSON `[{ completed, total }]`.
+    /// The run's progress as JSON: `{ stage, pass, completed, total, covered, span }`.
     ///
     /// # Errors
     /// After `finish`.
     pub fn progress(&mut self) -> Result<String, JsValue> {
-        let progress = self
-            .session()?
-            .progress()
-            .iter()
-            .map(|pass| json!({ "completed": pass.completed, "total": pass.total }))
-            .collect::<Vec<_>>();
-        Ok(Value::Array(progress).to_string())
+        Ok(alpha2_engine::extract::progress_json(self.session()?).to_string())
     }
 
     /// The data sets, JSON; `made_from` (a fingerprint's JSON, or empty) is recorded on every

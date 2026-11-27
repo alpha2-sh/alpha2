@@ -2103,7 +2103,12 @@ class _Pool:
                         try:
                             extraction.on_progress(
                                 ExtractProgress(
-                                    message.get("pass", 0), message["completed"], message["total"]
+                                    stage=message["stage"],
+                                    pass_index=message["pass"],
+                                    completed=message["completed"],
+                                    total=message["total"],
+                                    covered=message["covered"],
+                                    span=message["span"],
                                 )
                             )
                         except Exception as cause:  # noqa: BLE001 - reported as the request's failure

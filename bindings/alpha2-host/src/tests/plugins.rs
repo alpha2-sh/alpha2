@@ -538,6 +538,55 @@ fn a_wasm_plugin_past_its_limits_fails_and_the_host_stays_ready() {
 }
 
 #[test]
+fn a_plugin_run_reports_its_stages_and_covered_span() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-progress");
+    let (manifest, sha256) = plugin_dir(&dir, "scripted", true, false);
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    serving.write(&extract(
+        "p",
+        "alpha2.test.scripted",
+        &manifest,
+        &sha256,
+        &json!({}),
+        &json!({}),
+    ));
+    let mut seen = Vec::new();
+    let response = loop {
+        let message = serving.message(Duration::from_secs(120));
+        if message["requestId"] != "p" {
+            continue;
+        }
+        if message.get("ok").is_some() {
+            break message;
+        }
+        if message["type"] == "progress" {
+            assert_eq!(message["phase"], "extract", "{message}");
+            seen.push(
+                ["stage", "pass", "completed", "total", "covered", "span"]
+                    .map(|field| message[field].clone()),
+            );
+        }
+    };
+    assert_eq!(response["ok"], true, "{response}");
+    let report = |stage: &str, completed: u64, covered: u64| {
+        [
+            json!(stage),
+            json!(0),
+            json!(completed),
+            Value::Null,
+            json!(covered),
+            json!(40_000),
+        ]
+    };
+    let mut expected = vec![report("begin", 0, 0), report("pass", 0, 0)];
+    expected.extend((0..10).map(|frame| report("pass", frame + 1, frame * 4_000)));
+    expected.push(report("end", 10, 40_000));
+    assert_eq!(seen, expected);
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
 fn a_cancel_stops_a_wasm_plugin_call_long_before_its_deadline() {
     let _gpu = gpu_test_lock();
     let dir = scratch_directory("plugin-cancel");
@@ -557,7 +606,10 @@ fn a_cancel_stops_a_wasm_plugin_call_long_before_its_deadline() {
     // The first delivery reports progress; the second never returns.
     loop {
         let message = serving.message(Duration::from_secs(120));
-        if message["requestId"] == "spin" && message["type"] == "progress" {
+        if message["requestId"] == "spin"
+            && message["type"] == "progress"
+            && message["completed"] == 1
+        {
             break;
         }
         assert!(message.get("ok").is_none(), "{message}");
@@ -691,7 +743,10 @@ fn a_cancel_stops_a_hung_native_call_in_its_worker() {
     ));
     loop {
         let message = serving.message(Duration::from_secs(120));
-        if message["requestId"] == "hang" && message["type"] == "progress" {
+        if message["requestId"] == "hang"
+            && message["type"] == "progress"
+            && message["completed"] == 1
+        {
             break;
         }
         assert!(message.get("ok").is_none(), "{message}");

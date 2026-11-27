@@ -169,6 +169,46 @@ fn digest_times(sets: &[alpha2_model::DataSet]) -> Vec<i64> {
     samples.times.iter().map(|time| time.ticks()).collect()
 }
 
+fn progress_seen(session: &mut ExtractSession, fake: &mut Fake) -> Vec<(Stage, usize, u64, u64)> {
+    let at = |session: &ExtractSession| {
+        let (stage, pass) = session.stage();
+        let progress = session.progress()[pass];
+        (stage, pass, progress.completed, progress.covered)
+    };
+    let mut seen = vec![at(session)];
+    loop {
+        match session.next() {
+            Step::Need(need) => match &need {
+                Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
+                    match fake.frame(&need).expect("frame") {
+                        Some(frame) => session.supply_video(frame).expect("supply"),
+                        None => session.supply_end().expect("end"),
+                    }
+                }
+                _ => session
+                    .supply_audio(fake.audio(&need).expect("audio"))
+                    .expect("supply"),
+            },
+            Step::PassBoundary { .. } | Step::Deliver(_) => seen.push(at(session)),
+            Step::Done => {
+                seen.push(at(session));
+                return seen;
+            }
+        }
+    }
+}
+
+fn video_session(from: InputFrom, range: TimeRange, passes: Vec<Pass>) -> ExtractSession {
+    let digest = Digest::new(video_input(VideoFormat::Rgba8, 960));
+    let descriptor = digest.describe().clone();
+    ExtractSession::new(
+        &project(),
+        &descriptor,
+        request(&descriptor, from, range, passes),
+    )
+    .expect("session")
+}
+
 const PTS: [i64; 6] = [0, 4_000, 8_000, 12_000, 16_000, 20_000];
 
 #[test]
@@ -702,6 +742,165 @@ fn audio_blocks_are_a_function_of_range_passes_and_block_size() {
 }
 
 #[test]
+fn a_forward_frame_pass_covers_its_span_by_the_frames_it_delivers() {
+    use Stage::{Begin as B, End as E, Pass as P};
+    let mut session = video_session(InputFrom::Source, range(5_000, 16_000), vec![]);
+    assert_eq!(session.progress()[0].span, 11_000);
+    let seen = progress_seen(&mut session, &mut Fake::new(PTS.to_vec()));
+    assert_eq!(
+        seen,
+        vec![
+            (B, 0, 0, 0),
+            (P, 0, 0, 0),
+            (P, 0, 1, 0),
+            (P, 0, 2, 3_000),
+            (P, 0, 3, 7_000),
+            (E, 0, 3, 11_000)
+        ]
+    );
+}
+
+#[test]
+fn a_backward_frame_pass_covers_its_span_down_to_the_range_start() {
+    use Stage::{Begin as B, End as E, Pass as P};
+    let passes = vec![Pass {
+        start: MediaTime(15_999),
+        direction: Direction::Backward,
+    }];
+    let mut session = video_session(InputFrom::Source, range(5_000, 16_000), passes);
+    assert_eq!(session.progress()[0].span, 10_999);
+    let seen = progress_seen(&mut session, &mut Fake::new(PTS.to_vec()));
+    assert_eq!(
+        seen,
+        vec![
+            (B, 0, 0, 0),
+            (P, 0, 0, 0),
+            (P, 0, 1, 3_999),
+            (P, 0, 2, 7_999),
+            (P, 0, 3, 10_999),
+            (E, 0, 3, 10_999)
+        ]
+    );
+}
+
+#[test]
+fn each_pass_has_its_own_span_and_an_ended_pass_covers_all_of_it() {
+    use Stage::{Begin as B, End as E, Pass as P};
+    let passes = vec![
+        Pass {
+            start: MediaTime(8_000),
+            direction: Direction::Forward,
+        },
+        Pass {
+            start: MediaTime(8_000),
+            direction: Direction::Backward,
+        },
+    ];
+    let mut session = video_session(InputFrom::Source, range(0, 20_000), passes);
+    let seen = progress_seen(&mut session, &mut Fake::new(PTS.to_vec()));
+    assert_eq!(
+        seen,
+        vec![
+            (B, 0, 0, 0),
+            (P, 0, 0, 0),
+            (P, 0, 1, 0),
+            (P, 0, 2, 4_000),
+            (P, 0, 3, 8_000),
+            (P, 1, 0, 0),
+            (P, 1, 1, 0),
+            (P, 1, 2, 4_000),
+            (P, 1, 3, 8_000),
+            (E, 1, 3, 8_000)
+        ]
+    );
+    let progress = session.progress();
+    assert_eq!((progress[0].covered, progress[0].span), (12_000, 12_000));
+    assert_eq!((progress[1].covered, progress[1].span), (8_000, 8_000));
+}
+
+#[test]
+fn audio_passes_cover_their_span_by_block_edges() {
+    let digest = Digest::new(audio_input(64));
+    let descriptor = digest.describe().clone();
+    let passes = vec![
+        Pass {
+            start: MediaTime(6_001),
+            direction: Direction::Forward,
+        },
+        Pass {
+            start: MediaTime(6_001),
+            direction: Direction::Backward,
+        },
+    ];
+    let mut session = ExtractSession::new(
+        &project(),
+        &descriptor,
+        request(&descriptor, InputFrom::Source, range(1_001, 11_001), passes),
+    )
+    .expect("session");
+    let progress = session.progress();
+    assert_eq!(
+        (
+            progress[0].span,
+            progress[0].total,
+            progress[1].span,
+            progress[1].total
+        ),
+        (5_000, Some(32), 5_000, Some(32))
+    );
+    let seen = progress_seen(&mut session, &mut Fake::new(vec![]));
+    let delivered = |pass: usize| {
+        seen.iter()
+            .filter(|(stage, at, completed, _)| {
+                *stage == Stage::Pass && *at == pass && *completed > 0
+            })
+            .map(|(_, _, _, covered)| *covered)
+            .collect::<Vec<_>>()
+    };
+    for pass in 0..2 {
+        assert!(delivered(pass).is_sorted(), "pass {pass} went back");
+    }
+    let forward = delivered(0);
+    assert_eq!((forward[0], forward[31]), (162, 5_000));
+    let backward = delivered(1);
+    assert_eq!((backward[0], backward[31]), (159, 4_999));
+    assert_eq!(seen.last(), Some(&(Stage::End, 1, 32, 5_000)));
+}
+
+#[test]
+fn timeline_frames_cover_their_span_by_frame_times() {
+    let mut session = video_session(InputFrom::Timeline, range(1, 20_000), vec![]);
+    assert_eq!(
+        (session.progress()[0].span, session.progress()[0].total),
+        (19_999, Some(4))
+    );
+    let seen = progress_seen(&mut session, &mut Fake::new(vec![]));
+    assert_eq!(
+        seen.iter()
+            .map(|(.., covered)| *covered)
+            .collect::<Vec<_>>(),
+        vec![0, 0, 3_999, 7_999, 11_999, 15_999, 19_999]
+    );
+    assert_eq!(seen.last(), Some(&(Stage::End, 0, 4, 19_999)));
+}
+
+#[test]
+fn a_backward_pass_from_the_range_start_has_no_span() {
+    use Stage::{Begin as B, End as E, Pass as P};
+    let passes = vec![Pass {
+        start: MediaTime(4_000),
+        direction: Direction::Backward,
+    }];
+    let mut session = video_session(InputFrom::Source, range(4_000, 16_000), passes);
+    assert_eq!(session.progress()[0].span, 0);
+    let seen = progress_seen(&mut session, &mut Fake::new(PTS.to_vec()));
+    assert_eq!(
+        seen,
+        vec![(B, 0, 0, 0), (P, 0, 0, 0), (P, 0, 1, 0), (E, 0, 1, 0)]
+    );
+}
+
+#[test]
 fn progress_counts_deliveries_and_cancel_is_not_calling_next() {
     let digest = Digest::new(audio_input(1024));
     let descriptor = digest.describe().clone();
@@ -715,7 +914,9 @@ fn progress_counts_deliveries_and_cancel_is_not_calling_next() {
         session.progress(),
         &[PassProgress {
             completed: 0,
-            total: Some(47)
+            total: Some(47),
+            span: 120_000,
+            covered: 0,
         }]
     );
     let mut fake = Fake::new(vec![]);
@@ -731,6 +932,12 @@ fn progress_counts_deliveries_and_cancel_is_not_calling_next() {
         }
     }
     assert_eq!(session.progress()[0].completed, 3);
+    assert_eq!(session.progress()[0].covered, 7_680);
+    assert_eq!(
+        progress_json(&session),
+        serde_json::json!({ "stage": "pass", "pass": 0, "completed": 3, "total": 47,
+                            "covered": 7_680, "span": 120_000 })
+    );
     // Cancelling: no more `next`; finishing early is refused.
     assert!(matches!(
         session.finish(),
