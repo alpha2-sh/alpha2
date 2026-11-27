@@ -594,7 +594,7 @@ fn a_gpu_only_encoder_pin_names_the_missing_shared_device() {
         Some("no Vulkan adapter carries the shared device".to_owned());
     let directory = scratch_directory("gpu-only-pin");
     let project = include_str!("../../../../tests/cases/host-parity-shapes-project.json");
-    let assets = HashMap::from([("still".to_owned(), corpus("parity-image.png"))]);
+    let assets = crate::tests::sources([("still".to_owned(), corpus("parity-image.png"))]);
     let error = host
         .export(
             project,

@@ -119,7 +119,7 @@ fn a_pinned_software_adapter_renders_under_gpu() {
     assert_eq!(report["gpu"]["softwareAdapter"], json!(true), "{report}");
     let directory = scratch_directory("pinned-software-adapter");
     let project = include_str!("../../../../tests/cases/host-parity-shapes-project.json");
-    let assets = HashMap::from([("still".to_owned(), corpus("parity-image.png"))]);
+    let assets = crate::tests::sources([("still".to_owned(), corpus("parity-image.png"))]);
     let result = host
         .export(
             project,
