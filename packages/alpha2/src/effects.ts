@@ -189,6 +189,12 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
   readonly uploadedFrameBytes: bigint;
   readonly supportsExternalVideoFrame: boolean;
   loadProject(projectJson: string): void;
+  /**
+   * Supplies the frame of a source the loaded project declares at `mediaTimeTicks`, as
+   * `frameNeeds` names it; every `upload*` method shares this contract. Determinism and the result
+   * cache hold for frames that are the source's decoded media, not for pixels the application
+   * draws itself.
+   */
   uploadVideoFrame(
     sourceId: string,
     mediaTimeTicks: bigint,
