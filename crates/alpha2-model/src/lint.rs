@@ -108,6 +108,14 @@ pub enum LintIssue {
         /// `root.children[1].text_animators[0]`.
         at: String,
     },
+    /// A highlight over a text with no timed run, which draws nothing.
+    HighlightWithoutTimedRuns {
+        /// What holds the text: a text generator, or a caption track none of whose cues has a
+        /// timed run.
+        owner: LintOwner,
+        /// The highlight, like `style.highlight` or `styles.loud.highlight`.
+        at: String,
+    },
 }
 
 /// The shapes or layout generator a shape [`LintIssue`] is about.
@@ -332,13 +340,21 @@ impl Project {
         let lint =
             |owner: &LintOwner, generator: &Generator, at: &str, issues: &mut Vec<LintIssue>| {
                 match generator {
-                    Generator::Text { style, .. } => {
+                    Generator::Text { text, style } => {
                         empty_animators(
                             owner,
                             &style.animators,
                             &format!("{at}style.animators"),
                             issues,
                         );
+                        if style.highlight.is_some()
+                            && text.runs().iter().all(|run| run.time.is_none())
+                        {
+                            issues.push(LintIssue::HighlightWithoutTimedRuns {
+                                owner: owner.clone(),
+                                at: format!("{at}style.highlight"),
+                            });
+                        }
                     }
                     Generator::Layout { root } => root.walk(|path, node| {
                         empty_animators(
@@ -1073,6 +1089,31 @@ fn lint_caption_animators(
         },
     );
     empty_animators(&owner, &captions.style.animators, "style.animators", issues);
+    let timed = captions
+        .cues
+        .iter()
+        .any(|cue| cue.text.runs().iter().any(|run| run.time.is_some()));
+    if !timed {
+        let highlights = captions
+            .style
+            .highlight
+            .is_some()
+            .then(|| "style.highlight".to_owned())
+            .into_iter()
+            .chain(
+                captions
+                    .styles
+                    .iter()
+                    .filter(|(_, patch)| matches!(patch.highlight, Some(Some(_))))
+                    .map(|(name, _)| format!("styles.{name}.highlight")),
+            );
+        for at in highlights {
+            issues.push(LintIssue::HighlightWithoutTimedRuns {
+                owner: owner.clone(),
+                at,
+            });
+        }
+    }
     for name in captions.styles.keys() {
         let used = captions.cues.iter().any(|cue| {
             cue.style.as_deref() == Some(name.as_str())

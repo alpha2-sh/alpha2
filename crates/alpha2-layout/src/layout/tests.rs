@@ -74,6 +74,7 @@ fn shaped(rasterizer: &TextRasterizer, content: &str, pixels: f32) -> ShapedText
             advance_headroom: 1.0,
             animator_grouping: alpha2_text::ClusterGrouping::Character,
             animator_pivot: [0.5, 0.5],
+            highlight: None,
         })
         .expect("shapes")
 }

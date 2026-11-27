@@ -288,6 +288,7 @@ fn a_patch_replaces_whole_lists() {
             padding: crate::TextInsets::all(0.2),
             radius: 0.0,
             border: None,
+            extent: crate::TextBoxExtent::Line,
         }),
         ..base.clone()
     });

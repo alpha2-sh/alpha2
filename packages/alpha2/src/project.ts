@@ -99,6 +99,7 @@ import {
   MAX_LINE_HEIGHT,
   MAX_TEXT_PADDING,
   MAX_REVEAL_FEATHER,
+  MAX_HIGHLIGHT_TRANSITION,
   MAX_TEXT_BORDER_WIDTH,
   MAX_TEXT_DASH_ENTRY,
   MAX_TEXT_DASH_OFFSET,
@@ -3298,7 +3299,26 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
       validTextAnimators(style.animators, false)) &&
     (style.animator_pivot === undefined ||
       validAnimatorPivot(style.animator_pivot)) &&
-    (background == null || validTextBackground(background))
+    (background == null || validTextBackground(background)) &&
+    (style.highlight == null || validTextHighlight(style.highlight))
+  );
+}
+
+/** Mirrors `TextHighlight::is_valid`. */
+function validTextHighlight(highlight: unknown): boolean {
+  if (!isRecord(highlight)) return false;
+  const transition = highlight.transition ?? 0;
+  return (
+    validTextBackground({
+      color: highlight.color,
+      padding: highlight.padding,
+      radius: highlight.radius,
+      border: highlight.border,
+    }) &&
+    Number.isInteger(transition) &&
+    (transition as number) >= 0 &&
+    (transition as number) <= MAX_HIGHLIGHT_TRANSITION &&
+    (highlight.easing === undefined || validCurve(highlight.easing))
   );
 }
 
@@ -5603,6 +5623,13 @@ export type LintIssue =
       readonly kind: "empty_text_animator";
       readonly owner: LintOwner;
       /** Such as `style.animators[0]`, or `root.children[1].text_animators[0]` in a layout. */
+      readonly at: string;
+    }
+  /** A highlight over a text with no timed run (a caption track: none in any cue), which draws nothing. */
+  | {
+      readonly kind: "highlight_without_timed_runs";
+      readonly owner: LintOwner;
+      /** Such as `style.highlight` or `styles.loud.highlight`. */
       readonly at: string;
     };
 

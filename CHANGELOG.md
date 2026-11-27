@@ -23,6 +23,9 @@ All notable changes to this project are documented in this file.
   every gradient up to 16 stops (was 8), in text, shapes, fills and layouts.
 - **Breaking:** imported WebVTT and SRT `<b>`, `<i>` and `<u>` are drawn bold, italic and
   underlined, as WebVTT applies CSS to them; the runs keep their `b`, `i` and `u` classes.
+- A text's background boxes and run backgrounds follow its characters where tracking (and an
+  animator's push) place them: a tracked line's box grows with the line and re-aligns with it,
+  where it kept the line's untracked extent before.
 - **Breaking:** `WasmTextRasterizer.rasterize` takes `runs` (text with per-run family, weight,
   style, pixel size, letter spacing, fill, strokes, background color and decorations) in place of
   `text`, and a `clamp`; a request with both or neither of `text` and `runs` is refused.
@@ -54,6 +57,17 @@ All notable changes to this project are documented in this file.
   whole exactly. Fill, strokes, decorations and color glyphs are cut alike, shadows follow from
   the revealed glyphs, and background boxes are not cut. Several reveals intersect.
   `WasmTextRasterizer.rasterize` takes a cluster state's `reveals`.
+- A text style's `background` takes `extent`: `line` (the default), `revealed` (from each
+  line's first to its last revealed character that is not white space, so a typewriter's box
+  grows with it; run backgrounds then show only behind revealed characters) or `block` (one box
+  over the whole layout box, `max_width` wide). A character is revealed while it is shown, not
+  scaled to nothing and not hidden by a reveal.
+- Text styles and caption style patches gain `highlight` (`color`, `padding`, `radius`,
+  `border` as a background's, `transition` up to 10 s, `easing`, `gap`: `hold` or `hide`): a
+  box over the timed run being said that slides from run to run, drawn over the background and
+  under the glyphs. Lint `highlight_without_timed_runs` reports one over a text without timed
+  runs. `WasmTextRasterizer.rasterize` takes a `highlight` with `steps` (`{ run, progress }`)
+  and a background `extent`.
 - `WasmTextMeasurer.layoutText`, Python `TextMeasurer.text_layout` and Rust
   `alpha2_layout::text_layout`: where a text generator's lines, words and grapheme clusters lie
   (boxes, em boxes, baselines, ink and font sizes, in canvas fractions), at the fitted size and

@@ -127,6 +127,7 @@ fuzz_target!(|data: &[u8]| {
         advance_headroom,
         animator_grouping,
         animator_pivot,
+        highlight: None,
     };
     let mut rasterizer = rasterizer()
         .lock()

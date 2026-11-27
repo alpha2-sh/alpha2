@@ -178,6 +178,9 @@ MAX_GROUP_INPUTS = 16
 MAX_HDR_PEAK_NITS = 10000
 """Mirrors `alpha2_model::MAX_HDR_PEAK_NITS`."""
 
+MAX_HIGHLIGHT_TRANSITION = 1200000
+"""Mirrors `alpha2_model::MAX_HIGHLIGHT_TRANSITION`."""
+
 MAX_INLINED_NODES = 65536
 """Mirrors `alpha2_model::MAX_INLINED_NODES`."""
 
@@ -449,6 +452,9 @@ GRID_AUTO_FLOW_VALUES: tuple[GridAutoFlow, ...] = ("row", "column", "row_dense",
 HDR_SOURCES_VALUES: tuple[HdrSources, ...] = ("tone_map", "reject")
 """Every `HdrSources`, in the model's order."""
 
+HIGHLIGHT_GAP_VALUES: tuple[HighlightGap, ...] = ("hold", "hide")
+"""Every `HighlightGap`, in the model's order."""
+
 JUSTIFY_CONTENT_VALUES: tuple[JustifyContent, ...] = ("start", "center", "end", "space_between", "space_around", "space_evenly")
 """Every `JustifyContent`, in the model's order."""
 
@@ -499,6 +505,9 @@ SPREAD_VALUES: tuple[Spread, ...] = ("pad", "repeat", "reflect")
 
 TEXT_ALIGN_VALUES: tuple[TextAlign, ...] = ("start", "center", "end")
 """Every `TextAlign`, in the model's order."""
+
+TEXT_BOX_EXTENT_VALUES: tuple[TextBoxExtent, ...] = ("line", "revealed", "block")
+"""Every `TextBoxExtent`, in the model's order."""
 
 TEXT_UNIT_VALUES: tuple[TextUnit, ...] = ("characters", "characters_excluding_spaces", "words", "lines")
 """Every `TextUnit`, in the model's order."""
@@ -1542,6 +1551,10 @@ GridPlacement: TypeAlias = "int | str"
 
 HdrSources: TypeAlias = Literal["tone_map", "reject"]
 """What a project does with HDR sources."""
+
+
+HighlightGap: TypeAlias = Literal["hold", "hide"]
+"""What a highlight does after its run ends, before the next starts."""
 
 
 class InsetsVariant3(TypedDict):
@@ -3020,6 +3033,8 @@ class TextBackground(TypedDict):
     """A line inside the box's edge, as a CSS border. `None` draws none."""
     color: Rgba
     """Box color."""
+    extent: NotRequired[TextBoxExtent]
+    """Which part of each line the box spans."""
     padding: NotRequired[TextInsets]
     """Space between the text and the box edge, as fractions of the font size, each side in
     `[0, 2]`.
@@ -3043,6 +3058,12 @@ class TextBoxBorder(TypedDict):
     """Width as a fraction of the font size, in `(0, 0.5]`."""
 
 
+TextBoxExtent: TypeAlias = Literal["line", "revealed", "block"]
+"""Which part of each line a text's background box spans, where tracking and pushing place its
+characters.
+"""
+
+
 TextContent: TypeAlias = "str | list[TextRun]"
 """A text: one string, or runs whose texts joined are the text.
 
@@ -3061,6 +3082,33 @@ class TextDash(TypedDict):
     """Alternating dash and gap lengths, as fractions of the font size: one to
     `MAX_DASH_ENTRIES` entries in `[0, 4]`, not all zero. An odd count repeats once
     more to pair up.
+    """
+
+
+class TextHighlight(TypedDict):
+    """A box over the timed run being said, sliding from run to run, drawn over the background
+    boxes and under the glyphs. The run is the timed run that started last; before the first
+    starts there is none.
+    """
+
+    border: NotRequired[TextBoxBorder | None]
+    """A line inside the box's edge, as a background's `border`."""
+    color: Rgba
+    """Box color."""
+    easing: NotRequired[Easing]
+    """The slide's timing curve."""
+    gap: NotRequired[HighlightGap]
+    """What the box does between a run's end and the next run's start."""
+    padding: NotRequired[TextInsets]
+    """Space between the run and the box edge, as a background's `padding`.
+
+    Default: `0`.
+    """
+    radius: NotRequired[float]
+    """Every corner's radius, as a background's `radius`."""
+    transition: NotRequired[MediaTime]
+    """How long the box takes to slide to the next run once it starts, at most
+    `MAX_HIGHLIGHT_TRANSITION`; 0 jumps. A change during a slide starts where the box is.
     """
 
 
@@ -3331,6 +3379,8 @@ class TextStyle(TypedDict):
 
     Default: `400`.
     """
+    highlight: NotRequired[TextHighlight | None]
+    """A box over the timed run being said. Needs timed runs; without them it draws nothing."""
     letter_spacing: NotRequired[float]
     """Space after each character, as a fraction of the font size, in `[-0.5, 1]`, added as CSS
     `letter-spacing` does: none after a line's last character or within cursive scripts such
@@ -3407,6 +3457,8 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::font_style`."""
     font_weight: NotRequired[int | None]
     """See `TextStyle::font_weight`."""
+    highlight: NotRequired[TextHighlight | None]
+    """The box over the timed run being said; `null` removes the base's."""
     letter_spacing: NotRequired[float | None]
     """See `TextStyle::letter_spacing`."""
     line_clamp: NotRequired[LineClamp | None]

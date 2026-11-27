@@ -235,6 +235,11 @@ fn fixture_requests_match_the_pinned_rasters() {
                             offset: dash["offset"].as_f64().unwrap_or(0.0) as f32,
                         }),
                     }),
+                    extent: match background["extent"].as_str() {
+                        Some("revealed") => BoxExtent::Revealed,
+                        Some("block") => BoxExtent::Block,
+                        _ => BoxExtent::Line,
+                    },
                 }
             }),
             font_family: request["fontFamily"].as_str().map(Into::into),
@@ -254,6 +259,7 @@ fn fixture_requests_match_the_pinned_rasters() {
                 .map_or([0.5, 0.5], |pivot| {
                     [0, 1].map(|axis| pivot[axis].as_f64().expect("a fraction") as f32)
                 }),
+            highlight: None,
         };
         let mut start = 0;
         let mut spans = Vec::new();
@@ -409,6 +415,7 @@ fn metrics_pixels_cache_and_invalidation_are_stable() {
         advance_headroom: 1.0,
         animator_grouping: ClusterGrouping::Character,
         animator_pivot: [0.5, 0.5],
+        highlight: None,
     };
     let first = rasterizer.rasterize(&request).expect("rasterized");
     assert!(first.descriptor.is_valid());
@@ -788,6 +795,7 @@ fn caption(text: &str, outline: Option<TextStroke>, version: u64) -> TextRasterR
         advance_headroom: 1.0,
         animator_grouping: ClusterGrouping::Character,
         animator_pivot: [0.5, 0.5],
+        highlight: None,
     }
 }
 
@@ -1104,6 +1112,7 @@ fn plain(
             advance_headroom: 1.0,
             animator_grouping: ClusterGrouping::Character,
             animator_pivot: [0.5, 0.5],
+            highlight: None,
         })
         .unwrap_or_else(|error| panic!("{text:?}: {error}"))
 }
@@ -1393,6 +1402,7 @@ fn request(text: &str, size: f32) -> TextRasterRequest {
         advance_headroom: 1.0,
         animator_grouping: ClusterGrouping::Character,
         animator_pivot: [0.5, 0.5],
+        highlight: None,
     }
 }
 
@@ -1937,6 +1947,7 @@ fn the_background_is_every_line_box_byte_for_byte() {
                 width,
                 [margin, margin],
                 &line_boxes,
+                &[],
                 &[],
                 &[],
                 &RequestLook::of(&request, [90.0, advance * 5.0]),

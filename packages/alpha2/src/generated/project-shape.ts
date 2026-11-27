@@ -1210,6 +1210,12 @@ export const PROJECT_SHAPE: unknown = {
         { const: "reject", type: "string" },
       ],
     },
+    HighlightGap: {
+      oneOf: [
+        { const: "hold", type: "string" },
+        { const: "hide", type: "string" },
+      ],
+    },
     Insets: {
       anyOf: [
         { format: "float", type: "number" },
@@ -2861,6 +2867,7 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/TextBoxBorder" }, { type: "null" }],
         },
         color: { $ref: "#/$defs/Rgba" },
+        extent: { $ref: "#/$defs/TextBoxExtent" },
         padding: { $ref: "#/$defs/TextInsets", default: 0 },
         radius: { format: "float", type: "number" },
       },
@@ -2876,6 +2883,13 @@ export const PROJECT_SHAPE: unknown = {
       },
       required: ["width", "color"],
       type: "object",
+    },
+    TextBoxExtent: {
+      oneOf: [
+        { const: "line", type: "string" },
+        { const: "revealed", type: "string" },
+        { const: "block", type: "string" },
+      ],
     },
     TextContent: {
       anyOf: [
@@ -2895,6 +2909,22 @@ export const PROJECT_SHAPE: unknown = {
         },
       },
       required: ["pattern"],
+      type: "object",
+    },
+    TextHighlight: {
+      additionalProperties: false,
+      properties: {
+        border: {
+          anyOf: [{ $ref: "#/$defs/TextBoxBorder" }, { type: "null" }],
+        },
+        color: { $ref: "#/$defs/Rgba" },
+        easing: { $ref: "#/$defs/Easing" },
+        gap: { $ref: "#/$defs/HighlightGap" },
+        padding: { $ref: "#/$defs/TextInsets", default: 0 },
+        radius: { format: "float", type: "number" },
+        transition: { $ref: "#/$defs/MediaTime" },
+      },
+      required: ["color"],
       type: "object",
     },
     TextInsets: {
@@ -3083,6 +3113,9 @@ export const PROJECT_SHAPE: unknown = {
           minimum: 0,
           type: "integer",
         },
+        highlight: {
+          anyOf: [{ $ref: "#/$defs/TextHighlight" }, { type: "null" }],
+        },
         letter_spacing: { default: 0, format: "float", type: "number" },
         line_clamp: {
           anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
@@ -3137,6 +3170,9 @@ export const PROJECT_SHAPE: unknown = {
           maximum: 65535,
           minimum: 0,
           type: ["integer", "null"],
+        },
+        highlight: {
+          anyOf: [{ $ref: "#/$defs/TextHighlight" }, { type: "null" }],
         },
         letter_spacing: { format: "float", type: ["number", "null"] },
         line_clamp: {

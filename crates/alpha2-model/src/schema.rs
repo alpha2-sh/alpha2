@@ -287,6 +287,10 @@ pub fn project_limits_json() -> Value {
         ("MAX_TEXT_BORDER_WIDTH", json!(crate::MAX_TEXT_BORDER_WIDTH)),
         ("MAX_TEXT_DASH_ENTRY", json!(crate::MAX_TEXT_DASH_ENTRY)),
         ("MAX_TEXT_DASH_OFFSET", json!(crate::MAX_TEXT_DASH_OFFSET)),
+        (
+            "MAX_HIGHLIGHT_TRANSITION",
+            json!(crate::MAX_HIGHLIGHT_TRANSITION.ticks()),
+        ),
         ("MAX_SEQUENCE_FRAMES", json!(crate::MAX_SEQUENCE_FRAMES)),
         ("MAX_SELECTED_CHANNELS", json!(crate::MAX_SELECTED_CHANNELS)),
         (

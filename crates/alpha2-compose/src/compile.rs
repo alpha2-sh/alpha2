@@ -3242,7 +3242,9 @@ fn still_source(source: &MediaSource) -> bool {
                 .as_ref()
                 .is_some_and(|generator| match generator {
                     Generator::Fill { .. } => true,
-                    Generator::Text { text, style } => style.animators.is_empty() && !text.varies(),
+                    Generator::Text { text, style } => {
+                        style.animators.is_empty() && style.highlight.is_none() && !text.varies()
+                    }
                     other => !serde_json::to_string(other)
                         .is_ok_and(|text| text.contains("\"keyframes\"")),
                 })

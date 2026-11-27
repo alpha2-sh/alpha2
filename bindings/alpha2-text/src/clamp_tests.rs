@@ -34,6 +34,7 @@ fn request(text: &str, max_width: f32, clamp: Option<TextClamp>) -> TextRasterRe
         advance_headroom: 1.0,
         animator_grouping: ClusterGrouping::Character,
         animator_pivot: [0.5, 0.5],
+        highlight: None,
     }
 }
 

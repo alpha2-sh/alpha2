@@ -58,15 +58,21 @@ pub(crate) struct LinePaint {
 }
 
 impl LinePaint {
+    /// Adds line `index`'s run backgrounds and decorations: `extents` gives each cluster's
+    /// advance and the part of it a background is drawn behind, `None` for none.
     pub(crate) fn add_line(
         &mut self,
         faces: &Faces<'_>,
         shaping: &Shaping,
         layout: &Layout,
         index: usize,
-        extent: impl Fn(usize) -> (f32, f32),
+        extents: (
+            impl Fn(usize) -> (f32, f32),
+            impl Fn(usize) -> Option<(f32, f32)>,
+        ),
         affine: impl Fn(usize) -> [f32; 6],
     ) {
+        let (extent, shown) = extents;
         let baseline = layout.baseline(index);
         let look_of = |cluster: usize| layout.clusters[cluster].look;
         let mut order = Vec::<usize>::new();
@@ -85,8 +91,11 @@ impl LinePaint {
             start = end;
             let paint = &shaping.looks[usize::from(look)];
             let size = paint.size;
-            if let Some(color) = paint.background {
-                let (left, right) = span_of(fragment, &extent);
+            let behind = fragment
+                .iter()
+                .filter_map(|&cluster| shown(cluster))
+                .reduce(|held, (start, end)| (held.0.min(start), held.1.max(end)));
+            if let (Some(color), Some((left, right))) = (paint.background, behind) {
                 self.boxes.push(RunBox {
                     left,
                     top: baseline - 0.8 * size,

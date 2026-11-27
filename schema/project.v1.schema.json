@@ -2785,6 +2785,21 @@
         }
       ]
     },
+    "HighlightGap": {
+      "description": "What a highlight does after its run ends, before the next starts.",
+      "oneOf": [
+        {
+          "const": "hold",
+          "description": "Stays on the run until the next starts or its holder ends.",
+          "type": "string"
+        },
+        {
+          "const": "hide",
+          "description": "Is drawn only while its run lasts; a run that starts after the last one ended takes the\nbox without sliding.",
+          "type": "string"
+        }
+      ]
+    },
     "Insets": {
       "anyOf": [
         {
@@ -6828,6 +6843,10 @@
           "$ref": "#/$defs/Rgba",
           "description": "Box color."
         },
+        "extent": {
+          "$ref": "#/$defs/TextBoxExtent",
+          "description": "Which part of each line the box spans."
+        },
         "padding": {
           "$ref": "#/$defs/TextInsets",
           "default": 0.0,
@@ -6875,6 +6894,26 @@
       ],
       "type": "object"
     },
+    "TextBoxExtent": {
+      "description": "Which part of each line a text's background box spans, where tracking and pushing place its\ncharacters.",
+      "oneOf": [
+        {
+          "const": "line",
+          "description": "From the line's first character to its last that is not a hanging space.",
+          "type": "string"
+        },
+        {
+          "const": "revealed",
+          "description": "From the first to the last revealed character that is not white space: shown, not scaled\nto nothing, and not hidden by a reveal. A line with none has no box; a text without\nanimators draws as `line`.",
+          "type": "string"
+        },
+        {
+          "const": "block",
+          "description": "One box over the whole layout box, `max_width` wide and as tall as the lines.",
+          "type": "string"
+        }
+      ]
+    },
     "TextContent": {
       "anyOf": [
         {
@@ -6914,6 +6953,53 @@
       },
       "required": [
         "pattern"
+      ],
+      "type": "object"
+    },
+    "TextHighlight": {
+      "additionalProperties": false,
+      "description": "A box over the timed run being said, sliding from run to run, drawn over the background\nboxes and under the glyphs. The run is the timed run that started last; before the first\nstarts there is none.",
+      "properties": {
+        "border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextBoxBorder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A line inside the box's edge, as a background's `border`."
+        },
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Box color."
+        },
+        "easing": {
+          "$ref": "#/$defs/Easing",
+          "description": "The slide's timing curve."
+        },
+        "gap": {
+          "$ref": "#/$defs/HighlightGap",
+          "description": "What the box does between a run's end and the next run's start."
+        },
+        "padding": {
+          "$ref": "#/$defs/TextInsets",
+          "default": 0.0,
+          "description": "Space between the run and the box edge, as a background's `padding`."
+        },
+        "radius": {
+          "description": "Every corner's radius, as a background's `radius`.",
+          "format": "float",
+          "type": "number"
+        },
+        "transition": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "How long the box takes to slide to the next run once it starts, at most\n[`MAX_HIGHLIGHT_TRANSITION`]; 0 jumps. A change during a slide starts where the box is."
+        }
+      },
+      "required": [
+        "color"
       ],
       "type": "object"
     },
@@ -7384,6 +7470,17 @@
           "minimum": 0,
           "type": "integer"
         },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextHighlight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A box over the timed run being said. Needs timed runs; without them it draws nothing."
+        },
         "letter_spacing": {
           "default": 0.0,
           "description": "Space after each character, as a fraction of the font size, in `[-0.5, 1]`, added as CSS\n`letter-spacing` does: none after a line's last character or within cursive scripts such\nas Arabic. A non-zero value turns optional ligatures off.",
@@ -7583,6 +7680,17 @@
             "integer",
             "null"
           ]
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextHighlight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The box over the timed run being said; `null` removes the base's."
         },
         "letter_spacing": {
           "description": "See [`TextStyle::letter_spacing`].",

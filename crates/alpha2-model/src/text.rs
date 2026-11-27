@@ -1,6 +1,7 @@
 //! Styled text: what caption tracks and text generators draw.
 
 use crate::{Paint, Rgba, TextAnimator, Vec2};
+use alpha2_time::MediaTime;
 use serde::{Deserialize, Serialize};
 
 /// Most bytes of text in one caption cue or text generator.
@@ -161,6 +162,9 @@ pub struct TextStyle {
     /// A box behind each line.
     #[serde(default)]
     pub background: Option<TextBackground>,
+    /// A box over the timed run being said. Needs timed runs; without them it draws nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<TextHighlight>,
     /// Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].
     /// Keyframes are in the holder's time (since a caption cue's start, or a text generator's
     /// picture time). They never re-break lines while they play; an animator whose advance
@@ -227,6 +231,7 @@ impl Default for TextStyle {
             strokes: Vec::new(),
             shadows: Vec::new(),
             background: None,
+            highlight: None,
             animators: Vec::new(),
             animator_grouping: crate::AnimatorGrouping::Character,
             animator_pivot: default_animator_pivot(),
@@ -441,6 +446,93 @@ pub struct TextBackground {
     /// A line inside the box's edge, as a CSS border. `None` draws none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border: Option<TextBoxBorder>,
+    /// Which part of each line the box spans.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub extent: TextBoxExtent,
+}
+
+/// Which part of each line a text's background box spans, where tracking and pushing place its
+/// characters.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TextBoxExtent {
+    /// From the line's first character to its last that is not a hanging space.
+    #[default]
+    Line,
+    /// From the first to the last revealed character that is not white space: shown, not scaled
+    /// to nothing, and not hidden by a reveal. A line with none has no box; a text without
+    /// animators draws as `line`.
+    Revealed,
+    /// One box over the whole layout box, `max_width` wide and as tall as the lines.
+    Block,
+}
+
+/// A box over the timed run being said, sliding from run to run, drawn over the background
+/// boxes and under the glyphs. The run is the timed run that started last; before the first
+/// starts there is none.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextHighlight {
+    /// Box color.
+    pub color: Rgba,
+    /// Space between the run and the box edge, as a background's `padding`.
+    #[serde(default)]
+    pub padding: TextInsets,
+    /// Every corner's radius, as a background's `radius`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub radius: f32,
+    /// A line inside the box's edge, as a background's `border`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<TextBoxBorder>,
+    /// How long the box takes to slide to the next run once it starts, at most
+    /// [`MAX_HIGHLIGHT_TRANSITION`]; 0 jumps. A change during a slide starts where the box is.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub transition: MediaTime,
+    /// The slide's timing curve.
+    #[serde(default = "linear", skip_serializing_if = "is_linear")]
+    pub easing: crate::Easing,
+    /// What the box does between a run's end and the next run's start.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub gap: HighlightGap,
+}
+
+/// What a highlight does after its run ends, before the next starts.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum HighlightGap {
+    /// Stays on the run until the next starts or its holder ends.
+    #[default]
+    Hold,
+    /// Is drawn only while its run lasts; a run that starts after the last one ended takes the
+    /// box without sliding.
+    Hide,
+}
+
+/// Longest highlight transition.
+pub const MAX_HIGHLIGHT_TRANSITION: MediaTime =
+    MediaTime::from_ticks(10 * alpha2_time::TICKS_PER_SECOND);
+
+const fn linear() -> crate::Easing {
+    crate::Easing::Linear
+}
+
+fn is_linear(easing: &crate::Easing) -> bool {
+    matches!(easing, crate::Easing::Linear)
+}
+
+impl TextHighlight {
+    pub(crate) fn is_valid(&self) -> bool {
+        self.color.is_valid()
+            && self.padding.is_valid()
+            && (0.0..=MAX_TEXT_PADDING).contains(&self.radius)
+            && self.border.as_ref().is_none_or(TextBoxBorder::is_valid)
+            && self.transition >= MediaTime::ZERO
+            && self.transition <= MAX_HIGHLIGHT_TRANSITION
+            && self.easing.is_valid()
+    }
 }
 
 impl TextBackground {
@@ -452,6 +544,7 @@ impl TextBackground {
             padding: TextInsets::all(padding),
             radius: 0.0,
             border: None,
+            extent: TextBoxExtent::Line,
         }
     }
 
@@ -712,6 +805,7 @@ impl TextStyle {
                 .background
                 .as_ref()
                 .is_none_or(TextBackground::is_valid)
+            && self.highlight.as_ref().is_none_or(TextHighlight::is_valid)
     }
 }
 

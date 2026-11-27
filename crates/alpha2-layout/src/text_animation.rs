@@ -7,7 +7,7 @@
 //! `sqrt` enter the selection, so native and wasm agree bit for bit.
 
 use alpha2_eval::{SampledAnimator, SampledSelector};
-use alpha2_model::{RangeShape, RangeUnits, RunState, TextRun, TextUnit};
+use alpha2_model::{RangeShape, RangeUnits, RunState, RunTime, TextRun, TextUnit};
 use alpha2_text::{ClusterState, ColorMix, MAX_CLUSTER_SCALE, RevealEdge, TextLayout};
 use alpha2_time::MediaTime;
 
@@ -355,6 +355,69 @@ fn text_states(
         }
     }
     (states, if identity { 0 } else { hash.max(1) })
+}
+
+/// The highlight's steps at `time` over a text of `runs`: the byte ranges of the timed runs that
+/// have started, in the order they started (ties in text order), each with the eased progress of
+/// its slide, the first at 1. Earlier steps a step at 1 replaces are left out. Empty before the
+/// first run starts, and with [`alpha2_model::HighlightGap::Hide`] once the current run ended.
+#[must_use]
+pub fn highlight_steps(
+    runs: &[TextRun],
+    time: MediaTime,
+    highlight: &alpha2_model::TextHighlight,
+) -> Vec<(std::ops::Range<usize>, f32)> {
+    let mut start = 0;
+    let mut started = runs
+        .iter()
+        .filter_map(|run| {
+            let bytes = start..start + run.text.len();
+            start = bytes.end;
+            run.time
+                .filter(|span| span.start <= time)
+                .map(|span| (span, bytes))
+        })
+        .collect::<Vec<_>>();
+    started.sort_by_key(|(span, bytes)| (span.start, bytes.start));
+    let Some((current, _)) = started.last() else {
+        return Vec::new();
+    };
+    let hide = highlight.gap == alpha2_model::HighlightGap::Hide;
+    if hide && time >= current.end {
+        return Vec::new();
+    }
+    let mut steps = Vec::<(std::ops::Range<usize>, f32)>::with_capacity(started.len());
+    let mut previous: Option<RunTime> = None;
+    for (span, bytes) in started {
+        let jumps = previous.is_none_or(|previous| hide && span.start > previous.end);
+        let progress = if jumps || highlight.transition <= MediaTime::ZERO {
+            1.0
+        } else {
+            #[expect(clippy::cast_precision_loss, reason = "ticks within ten seconds")]
+            let linear =
+                (time.ticks() - span.start.ticks()) as f64 / highlight.transition.ticks() as f64;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "eased progress near [0, 1]"
+            )]
+            let eased = highlight.easing.apply(linear) as f32;
+            if linear >= 1.0 {
+                1.0
+            } else {
+                eased.clamp(0.0, 1.0)
+            }
+        };
+        if progress >= 1.0 {
+            steps.clear();
+        }
+        steps.push((bytes, progress));
+        previous = Some(span);
+    }
+    if steps.len() > alpha2_text::MAX_HIGHLIGHT_STEPS {
+        steps.drain(..steps.len() - alpha2_text::MAX_HIGHLIGHT_STEPS);
+        steps[0].1 = 1.0;
+    }
+    steps
 }
 
 /// `mix` (or the color unchanged) mixed toward the straight sRGB `target` by `weight`, in

@@ -164,6 +164,14 @@ pub struct TextStylePatch {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "Option<TextBackground>"))]
     pub background: Option<Option<TextBackground>>,
+    /// The box over the timed run being said; `null` removes the base's.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<crate::TextHighlight>"))]
+    pub highlight: Option<Option<crate::TextHighlight>>,
     /// See [`TextStyle::animators`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(
@@ -240,6 +248,9 @@ impl TextStylePatch {
         }
         if let Some(background) = &self.background {
             style.background.clone_from(background);
+        }
+        if let Some(highlight) = &self.highlight {
+            style.highlight.clone_from(highlight);
         }
         if let Some(animators) = &self.animators {
             style.animators.clone_from(animators);

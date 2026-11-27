@@ -53,6 +53,8 @@ pub(crate) struct TextRequestWire {
     animator_grouping: GroupingWire,
     #[serde(default = "centre")]
     animator_pivot: [f32; 2],
+    #[serde(default)]
+    highlight: Option<HighlightWire>,
 }
 
 #[derive(Default, Deserialize)]
@@ -341,9 +343,40 @@ struct BackgroundWire {
     radius: f32,
     #[serde(default)]
     border: Option<BorderWire>,
+    #[serde(default)]
+    extent: ExtentWire,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ExtentWire {
+    #[default]
+    Line,
+    Revealed,
+    Block,
+}
+
+/// A highlight's look and its steps, each a run of the request's `runs` and its progress.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HighlightWire {
+    color: [u8; 4],
+    padding: PaddingWire,
+    #[serde(default)]
+    radius: f32,
+    #[serde(default)]
+    border: Option<BorderWire>,
+    steps: Vec<StepWire>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StepWire {
+    run: usize,
+    progress: f32,
+}
+
+#[derive(Clone, Copy, Deserialize)]
 #[serde(untagged)]
 enum PaddingWire {
     All(f32),
@@ -370,21 +403,63 @@ struct DashWire {
 impl BackgroundWire {
     fn into_background(self) -> alpha2_text::TextBackground {
         alpha2_text::TextBackground {
-            color: self.color,
-            padding: match self.padding {
-                PaddingWire::All(padding) => [padding; 4],
-                PaddingWire::Sides(sides) => sides,
+            extent: match self.extent {
+                ExtentWire::Line => alpha2_text::BoxExtent::Line,
+                ExtentWire::Revealed => alpha2_text::BoxExtent::Revealed,
+                ExtentWire::Block => alpha2_text::BoxExtent::Block,
             },
-            radius: self.radius,
-            border: self.border.map(|border| alpha2_text::TextBoxBorder {
-                width: border.width,
-                color: border.color,
-                dash: border.dash.map(|dash| alpha2_text::TextBoxDash {
-                    pattern: dash.pattern,
-                    offset: dash.offset,
-                }),
-            }),
+            ..box_look(self.color, self.padding, self.radius, self.border)
         }
+    }
+}
+
+/// A box of `color`, `padding`, `radius` and `border` over each line.
+fn box_look(
+    color: [u8; 4],
+    padding: PaddingWire,
+    radius: f32,
+    border: Option<BorderWire>,
+) -> alpha2_text::TextBackground {
+    alpha2_text::TextBackground {
+        color,
+        padding: match padding {
+            PaddingWire::All(padding) => [padding; 4],
+            PaddingWire::Sides(sides) => sides,
+        },
+        radius,
+        border: border.map(|border| alpha2_text::TextBoxBorder {
+            width: border.width,
+            color: border.color,
+            dash: border.dash.map(|dash| alpha2_text::TextBoxDash {
+                pattern: dash.pattern,
+                offset: dash.offset,
+            }),
+        }),
+        extent: alpha2_text::BoxExtent::Line,
+    }
+}
+
+impl HighlightWire {
+    /// The highlight over `runs`' byte ranges; `None` for a step past the last run.
+    fn into_highlight(self, runs: &[RunWire]) -> Option<alpha2_text::TextHighlightRequest> {
+        let mut start = 0;
+        let ranges = runs
+            .iter()
+            .map(|run| {
+                let bytes = start..start + run.text.len();
+                start = bytes.end;
+                bytes
+            })
+            .collect::<Vec<_>>();
+        let steps = self
+            .steps
+            .iter()
+            .map(|step| Some((ranges.get(step.run)?.clone(), step.progress)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(alpha2_text::TextHighlightRequest {
+            look: box_look(self.color, self.padding, self.radius, self.border),
+            steps,
+        })
     }
 }
 
@@ -428,6 +503,14 @@ impl TextRequestWire {
             (None, Some(runs)) => (runs.iter().map(|run| run.text.as_str()).collect(), runs),
             _ => return Err(alpha2_text::TextRasterError::InvalidRequest),
         };
+        let highlight = match self.highlight {
+            Some(highlight) => Some(
+                highlight
+                    .into_highlight(&runs)
+                    .ok_or(alpha2_text::TextRasterError::InvalidRequest)?,
+            ),
+            None => None,
+        };
         let mut request = TextRasterRequest {
             text,
             font_size: self.font_size,
@@ -465,6 +548,7 @@ impl TextRequestWire {
                 GroupingWire::All => alpha2_text::ClusterGrouping::All,
             },
             animator_pivot: self.animator_pivot,
+            highlight,
         };
         let mut start = 0;
         for run in runs {

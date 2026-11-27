@@ -660,3 +660,105 @@ fn an_all_revealed_text_hashes_as_identity() {
     assert_eq!(hash, 0);
     assert!(states.iter().all(ClusterState::is_identity));
 }
+
+fn timed(words: &[(&str, i64, i64)]) -> Vec<TextRun> {
+    words
+        .iter()
+        .map(|&(text, start, end)| TextRun {
+            text: text.into(),
+            time: Some(RunTime {
+                start: MediaTime::from_ticks(start),
+                end: MediaTime::from_ticks(end),
+            }),
+            ..TextRun::default()
+        })
+        .collect()
+}
+
+fn highlight(transition: i64, gap: alpha2_model::HighlightGap) -> alpha2_model::TextHighlight {
+    alpha2_model::TextHighlight {
+        color: alpha2_model::Rgba::new(1.0, 1.0, 0.0, 1.0),
+        padding: alpha2_model::TextInsets::default(),
+        radius: 0.0,
+        border: None,
+        transition: MediaTime::from_ticks(transition),
+        easing: alpha2_model::Easing::Linear,
+        gap,
+    }
+}
+
+fn steps_at(
+    runs: &[TextRun],
+    ticks: i64,
+    look: &alpha2_model::TextHighlight,
+) -> Vec<(std::ops::Range<usize>, f32)> {
+    highlight_steps(runs, MediaTime::from_ticks(ticks), look)
+}
+
+#[test]
+fn the_highlight_takes_the_latest_started_run() {
+    let runs = timed(&[("one ", 0, 100), ("two ", 100, 200), ("three", 100, 300)]);
+    let jump = highlight(0, alpha2_model::HighlightGap::Hold);
+    assert_eq!(steps_at(&runs, -1, &jump), []);
+    assert_eq!(steps_at(&runs, 50, &jump), [(0..4, 1.0)]);
+    assert_eq!(
+        steps_at(&runs, 150, &jump),
+        [(8..13, 1.0)],
+        "a tie goes to the later run"
+    );
+}
+
+#[test]
+fn the_highlight_eases_over_its_transition() {
+    let runs = timed(&[("one ", 0, 100), ("two", 100, 200)]);
+    let mut slide = highlight(40, alpha2_model::HighlightGap::Hold);
+    assert_eq!(steps_at(&runs, 110, &slide), [(0..4, 1.0), (4..7, 0.25)]);
+    assert_eq!(steps_at(&runs, 140, &slide), [(4..7, 1.0)]);
+    slide.easing =
+        alpha2_model::Easing::CubicBezier(alpha2_model::CubicBezier::new(0.42, 0.0, 1.0, 1.0));
+    let eased = steps_at(&runs, 120, &slide)[1].1;
+    assert!(
+        eased < 0.5,
+        "ease-in is slower than linear at the middle: {eased}"
+    );
+}
+
+#[test]
+fn an_interrupted_transition_starts_where_the_box_is() {
+    let runs = timed(&[("a ", 0, 100), ("b ", 100, 110), ("c", 110, 200)]);
+    let slide = highlight(40, alpha2_model::HighlightGap::Hold);
+    assert_eq!(
+        steps_at(&runs, 120, &slide),
+        [(0..2, 1.0), (2..4, 0.5), (4..5, 0.25)],
+        "c slides from where the slide to b has got to"
+    );
+}
+
+#[test]
+fn a_held_highlight_stays_through_a_pause() {
+    let runs = timed(&[("one ", 0, 100), ("two", 200, 300)]);
+    let hold = highlight(0, alpha2_model::HighlightGap::Hold);
+    assert_eq!(steps_at(&runs, 150, &hold), [(0..4, 1.0)]);
+    assert_eq!(
+        steps_at(&runs, 400, &hold),
+        [(4..7, 1.0)],
+        "and after the last run ends"
+    );
+}
+
+#[test]
+fn a_hidden_highlight_appears_after_a_pause_without_sliding() {
+    let runs = timed(&[("one ", 0, 100), ("two ", 200, 300), ("six", 300, 400)]);
+    let hide = highlight(40, alpha2_model::HighlightGap::Hide);
+    assert_eq!(steps_at(&runs, 150, &hide), [], "hidden in the pause");
+    assert_eq!(
+        steps_at(&runs, 210, &hide),
+        [(4..8, 1.0)],
+        "no slide after a pause"
+    );
+    assert_eq!(
+        steps_at(&runs, 310, &hide),
+        [(4..8, 1.0), (8..11, 0.25)],
+        "back to back runs slide"
+    );
+}

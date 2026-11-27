@@ -46,6 +46,7 @@ fuzz_target!(|data: &[u8]| {
             advance_headroom: 1.0,
             animator_grouping: alpha2_text::ClusterGrouping::Character,
             animator_pivot: [0.5, 0.5],
+            highlight: None,
         });
     }
 });

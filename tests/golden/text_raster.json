@@ -1342,6 +1342,85 @@
         "maxWidth": 320,
         "text": "Rise from the corner"
       }
+    },
+    {
+      "contentVersion": 65,
+      "expected": {
+        "ascent": 24.0,
+        "descent": 6.240234375,
+        "firstBaseline": 27.75,
+        "height": 83,
+        "layoutHeight": 75.0,
+        "layoutWidth": 260.0,
+        "layoutX": 10.0,
+        "layoutY": 4.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "31066128c4d683cf",
+        "width": 280
+      },
+      "name": "box-revealed",
+      "request": {
+        "align": "start",
+        "background": {
+          "color": [
+            20,
+            20,
+            20,
+            210
+          ],
+          "extent": "revealed",
+          "padding": [
+            4,
+            10,
+            4,
+            10
+          ],
+          "radius": 8
+        },
+        "clusterStates": [
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          },
+          {
+            "opacity": 0
+          }
+        ],
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 30,
+        "lineHeight": 1.25,
+        "maxWidth": 260,
+        "text": "Typed out\nslowly"
+      }
     }
   ],
   "fonts": [

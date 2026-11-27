@@ -170,6 +170,9 @@ export const MAX_GROUP_INPUTS = 16;
 /** Mirrors `alpha2_model::MAX_HDR_PEAK_NITS`. */
 export const MAX_HDR_PEAK_NITS = 10000;
 
+/** Mirrors `alpha2_model::MAX_HIGHLIGHT_TRANSITION`. */
+export const MAX_HIGHLIGHT_TRANSITION = 1200000;
+
 /** Mirrors `alpha2_model::MAX_INLINED_NODES`. */
 export const MAX_INLINED_NODES = 65536;
 
@@ -519,6 +522,9 @@ export const GRID_AUTO_FLOW_VALUES: readonly GridAutoFlow[] = [
 /** Every {@link HdrSources}, in the model's order. */
 export const HDR_SOURCES_VALUES: readonly HdrSources[] = ["tone_map", "reject"];
 
+/** Every {@link HighlightGap}, in the model's order. */
+export const HIGHLIGHT_GAP_VALUES: readonly HighlightGap[] = ["hold", "hide"];
+
 /** Every {@link JustifyContent}, in the model's order. */
 export const JUSTIFY_CONTENT_VALUES: readonly JustifyContent[] = [
   "start",
@@ -622,6 +628,13 @@ export const TEXT_ALIGN_VALUES: readonly TextAlign[] = [
   "start",
   "center",
   "end",
+];
+
+/** Every {@link TextBoxExtent}, in the model's order. */
+export const TEXT_BOX_EXTENT_VALUES: readonly TextBoxExtent[] = [
+  "line",
+  "revealed",
+  "block",
 ];
 
 /** Every {@link TextUnit}, in the model's order. */
@@ -2057,6 +2070,11 @@ export type GridPlacement = number | string;
  * What a project does with HDR sources.
  */
 export type HdrSources = "tone_map" | "reject";
+
+/**
+ * What a highlight does after its run ends, before the next starts.
+ */
+export type HighlightGap = "hold" | "hide";
 
 /**
  * A length on each side of a box: one length for every side, the CSS shorthand of one to four lengths ("8px 16px": top first, clockwise), or the sides object, missing sides 0.
@@ -3985,6 +4003,10 @@ export interface TextBackground {
    */
   readonly color: Rgba;
   /**
+   * Which part of each line the box spans.
+   */
+  readonly extent?: TextBoxExtent;
+  /**
    * Space between the text and the box edge, as fractions of the font size, each side in
    * `[0, 2]`.
    *
@@ -4017,6 +4039,12 @@ export interface TextBoxBorder {
 }
 
 /**
+ * Which part of each line a text's background box spans, where tracking and pushing place its
+ * characters.
+ */
+export type TextBoxExtent = "line" | "revealed" | "block";
+
+/**
  * A text: one string, or runs whose texts joined are the text.
  *
  * Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]`.
@@ -4038,6 +4066,45 @@ export interface TextDash {
    * more to pair up.
    */
   readonly pattern: readonly number[];
+}
+
+/**
+ * A box over the timed run being said, sliding from run to run, drawn over the background
+ * boxes and under the glyphs. The run is the timed run that started last; before the first
+ * starts there is none.
+ */
+export interface TextHighlight {
+  /**
+   * A line inside the box's edge, as a background's `border`.
+   */
+  readonly border?: TextBoxBorder | null;
+  /**
+   * Box color.
+   */
+  readonly color: Rgba;
+  /**
+   * The slide's timing curve.
+   */
+  readonly easing?: Easing;
+  /**
+   * What the box does between a run's end and the next run's start.
+   */
+  readonly gap?: HighlightGap;
+  /**
+   * Space between the run and the box edge, as a background's `padding`.
+   *
+   * @defaultValue `0`
+   */
+  readonly padding?: TextInsets;
+  /**
+   * Every corner's radius, as a background's `radius`.
+   */
+  readonly radius?: number;
+  /**
+   * How long the box takes to slide to the next run once it starts, at most
+   * `MAX_HIGHLIGHT_TRANSITION`; 0 jumps. A change during a slide starts where the box is.
+   */
+  readonly transition?: MediaTime;
 }
 
 /**
@@ -4377,6 +4444,10 @@ export interface TextStyle {
    */
   readonly font_weight?: number;
   /**
+   * A box over the timed run being said. Needs timed runs; without them it draws nothing.
+   */
+  readonly highlight?: TextHighlight | null;
+  /**
    * Space after each character, as a fraction of the font size, in `[-0.5, 1]`, added as CSS
    * `letter-spacing` does: none after a line's last character or within cursive scripts such
    * as Arabic. A non-zero value turns optional ligatures off.
@@ -4488,6 +4559,10 @@ export interface TextStylePatch {
    * See `TextStyle::font_weight`.
    */
   readonly font_weight?: number | null;
+  /**
+   * The box over the timed run being said; `null` removes the base's.
+   */
+  readonly highlight?: TextHighlight | null;
   /**
    * See `TextStyle::letter_spacing`.
    */

@@ -158,6 +158,7 @@ pub(crate) fn text_request(
         advance_headroom: text.advance_headroom,
         animator_grouping: crate::text::cluster_grouping(text.animator_grouping),
         animator_pivot: [text.animator_pivot.x, text.animator_pivot.y],
+        highlight: None,
     }
 }
 

@@ -751,3 +751,30 @@ fn text_without_pushing_animators_measures_as_before() {
         )
     );
 }
+
+#[test]
+fn a_settled_highlight_shares_its_key() {
+    let size = PictureSize::new(640, 360).expect("size");
+    let content = runs(serde_json::json!([
+        { "text": "one ", "time": { "start": 0, "end": 60_000 } },
+        { "text": "two", "time": { "start": 60_000, "end": 120_000 } }
+    ]));
+    let style: TextStyle = serde_json::from_value(serde_json::json!({
+        "highlight": { "color": "#ffd040", "transition": 12_000 }
+    }))
+    .expect("a style");
+    let key = |ticks| animated_text_key(&content, &style, size, MediaTime::from_ticks(ticks));
+    assert_eq!(key(10_000), key(50_000), "held on one");
+    assert_ne!(key(50_000), key(66_000), "sliding to two");
+    assert_ne!(key(66_000), key(70_000));
+    assert_eq!(key(80_000), key(110_000), "settled on two");
+    assert_ne!(key(10_000), key(80_000));
+    let request = text_request(
+        &TextAt::new(&content, MediaTime::from_ticks(66_000)),
+        &style,
+        size,
+        1,
+    );
+    let highlight = request.highlight.expect("a highlight");
+    assert_eq!(highlight.steps, [(0..4, 1.0), (4..7, 0.5)]);
+}

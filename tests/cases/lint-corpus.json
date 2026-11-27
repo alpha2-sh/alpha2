@@ -1875,5 +1875,104 @@
         "time": 90000
       }
     ]
+  },
+  {
+    "name": "highlight-without-timed-runs",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "title",
+          "kind": "generated",
+          "generator": {
+            "type": "text",
+            "text": "Plain title",
+            "style": {
+              "highlight": {
+                "color": "#ffff00"
+              }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "title",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {},
+              "styles": {
+                "loud": {
+                  "highlight": {
+                    "color": "#ff0000"
+                  }
+                }
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 32000
+                  },
+                  "text": "untimed",
+                  "style": "loud"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "highlight_without_timed_runs",
+        "owner": {
+          "type": "caption_track",
+          "track": "subs"
+        },
+        "at": "styles.loud.highlight"
+      },
+      {
+        "kind": "highlight_without_timed_runs",
+        "owner": {
+          "type": "source",
+          "source": "title"
+        },
+        "at": "style.highlight"
+      }
+    ]
   }
 ]

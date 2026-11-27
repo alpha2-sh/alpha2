@@ -246,6 +246,7 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         advance_headroom,
         animator_grouping,
         animator_pivot,
+        highlight,
     } = request;
     feed(text.as_bytes());
     feed(&[0xff]);
@@ -296,6 +297,17 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         feed(&advance_headroom.to_bits().to_le_bytes());
     }
     feed_motion(feed, *animator_grouping, *animator_pivot);
+    if let Some(highlight) = highlight {
+        feed(&[0xee]);
+        feed(&highlight.look.color);
+        feed_box_shape(feed, &highlight.look);
+        feed_count(feed, highlight.steps.len());
+        for (bytes, progress) in &highlight.steps {
+            feed(&bytes.start.to_le_bytes());
+            feed(&bytes.end.to_le_bytes());
+            feed(&progress.to_bits().to_le_bytes());
+        }
+    }
 }
 
 /// Feeds a grouping and pivot other than the default's.
@@ -489,6 +501,7 @@ pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 
         strokes,
         shadows,
         background,
+        highlight,
         // `animated_text_key` adds the sampled animators.
         animators: _,
         animator_grouping,
@@ -535,21 +548,7 @@ pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 
         None => feed(&[0]),
     }
     // Only fields that are set are fed.
-    if let Some(height) = max_height {
-        feed(&[0xf0]);
-        feed(&height.to_bits().to_le_bytes());
-    }
-    if let Some(fit) = font_size_fit {
-        feed(&[0xf1]);
-        feed(&fit.min.to_bits().to_le_bytes());
-        feed(&fit.max.unwrap_or(-1.0).to_bits().to_le_bytes());
-    }
-    if let Some(clamp) = line_clamp {
-        feed(&[0xf2]);
-        feed(&clamp.max_lines.unwrap_or(0).to_le_bytes());
-        feed(clamp.block_ellipsis.text().unwrap_or_default().as_bytes());
-        feed(&[0xff, u8::from(clamp.block_ellipsis.text().is_some())]);
-    }
+    feed_fit(&mut feed, *max_height, *font_size_fit, line_clamp.as_ref());
     if !font_style.is_normal() {
         feed(&[0xf3, *font_style as u8]);
     }
@@ -558,6 +557,9 @@ pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 
     }
     if text.content.has_run_styles() {
         feed_spans(&mut feed, &text_spans(text, style, 1.0));
+    }
+    if let Some(highlight) = highlight {
+        feed_highlight(&mut feed, highlight);
     }
     let headroom = advance_headroom(text, style);
     if headroom > 1.0 {
@@ -781,6 +783,7 @@ pub fn text_request_at(
         strokes: stroke_pixels(&style.strokes, font_size),
         split_background: !style.shadows.is_empty()
             && (style.background.is_some()
+                || style.highlight.is_some()
                 || spans.iter().any(|span| span.background_color.is_some())),
         background: style
             .background
@@ -797,7 +800,77 @@ pub fn text_request_at(
         advance_headroom: advance_headroom(text, style),
         animator_grouping: cluster_grouping(style.animator_grouping),
         animator_pivot: [style.animator_pivot.x, style.animator_pivot.y],
+        highlight: style.highlight.as_ref().and_then(|highlight| {
+            let steps =
+                crate::text_animation::highlight_steps(text.content.runs(), text.time, highlight);
+            (!steps.is_empty()).then(|| alpha2_text::TextHighlightRequest {
+                look: highlight_look(highlight, font_size),
+                steps,
+            })
+        }),
     }
+}
+
+/// Feeds a style's box height, fit and clamp, each only when set.
+fn feed_fit(
+    feed: &mut impl FnMut(&[u8]),
+    max_height: Option<f32>,
+    font_size_fit: Option<alpha2_model::FontSizeFit>,
+    line_clamp: Option<&alpha2_model::LineClamp>,
+) {
+    if let Some(height) = max_height {
+        feed(&[0xf0]);
+        feed(&height.to_bits().to_le_bytes());
+    }
+    if let Some(fit) = font_size_fit {
+        feed(&[0xf1]);
+        feed(&fit.min.to_bits().to_le_bytes());
+        feed(&fit.max.unwrap_or(-1.0).to_bits().to_le_bytes());
+    }
+    if let Some(clamp) = line_clamp {
+        feed(&[0xf2]);
+        feed(&clamp.max_lines.unwrap_or(0).to_le_bytes());
+        feed(clamp.block_ellipsis.text().unwrap_or_default().as_bytes());
+        feed(&[0xff, u8::from(clamp.block_ellipsis.text().is_some())]);
+    }
+}
+
+/// Feeds `highlight`'s look at a one-pixel font and its timing.
+fn feed_highlight(feed: &mut impl FnMut(&[u8]), highlight: &alpha2_model::TextHighlight) {
+    let unit = highlight_look(highlight, 1.0);
+    feed(&[0xee]);
+    feed(&unit.color);
+    feed_box_shape(feed, &unit);
+    feed(&highlight.transition.ticks().to_le_bytes());
+    match highlight.easing {
+        alpha2_model::Easing::Linear => feed(&[0]),
+        alpha2_model::Easing::CubicBezier(curve) => {
+            feed(&[1]);
+            for value in [curve.x1, curve.y1, curve.x2, curve.y2] {
+                feed(&value.to_bits().to_le_bytes());
+            }
+        }
+    }
+    feed(&[highlight.gap as u8]);
+}
+
+/// `highlight`'s box look in pixels of a `font_size`-pixel font, as [`text_background`] sizes a
+/// background.
+#[must_use]
+pub fn highlight_look(
+    highlight: &alpha2_model::TextHighlight,
+    font_size: f32,
+) -> alpha2_text::TextBackground {
+    text_background(
+        &alpha2_model::TextBackground {
+            color: highlight.color,
+            padding: highlight.padding,
+            radius: highlight.radius,
+            border: highlight.border.clone(),
+            extent: alpha2_model::TextBoxExtent::Line,
+        },
+        font_size,
+    )
 }
 
 /// The most `style`'s animators can widen an advance of `text` ([`alpha2_eval::advance_headroom`]).
@@ -834,6 +907,11 @@ pub fn text_background(
                     offset: dash.offset * font_size,
                 }),
             }),
+        extent: match background.extent {
+            alpha2_model::TextBoxExtent::Line => alpha2_text::BoxExtent::Line,
+            alpha2_model::TextBoxExtent::Revealed => alpha2_text::BoxExtent::Revealed,
+            alpha2_model::TextBoxExtent::Block => alpha2_text::BoxExtent::Block,
+        },
     }
 }
 
@@ -1008,7 +1086,7 @@ pub fn animated_text_key(
     time: alpha2_time::MediaTime,
 ) -> u64 {
     let key = text_key(&TextAt::new(content, time), style, size);
-    if style.animators.is_empty() {
+    if style.animators.is_empty() && style.highlight.is_none() {
         return key;
     }
     let mut hash = key;
@@ -1017,6 +1095,18 @@ pub fn animated_text_key(
             hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
         }
     };
+    if let Some(highlight) = &style.highlight {
+        let steps = crate::text_animation::highlight_steps(content.runs(), time, highlight);
+        feed(&[0xee]);
+        feed_count(&mut feed, steps.len());
+        for (bytes, progress) in &steps {
+            feed(&bytes.start.to_le_bytes());
+            feed(&progress.to_bits().to_le_bytes());
+        }
+    }
+    if style.animators.is_empty() {
+        return hash.max(1);
+    }
     feed(&[0xfa]);
     let mut stable = alpha2_geometry::StableHash::new();
     alpha2_eval::hash_sampled_animators(

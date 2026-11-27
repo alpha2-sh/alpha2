@@ -43,6 +43,7 @@ fn boxed(text: &str, background: TextBackground) -> TextRasterRequest {
         advance_headroom: 1.0,
         animator_grouping: ClusterGrouping::Character,
         animator_pivot: [0.5, 0.5],
+        highlight: None,
     }
 }
 
@@ -267,4 +268,234 @@ fn a_line_box_spans_the_em_box_of_its_largest_run() {
     let baseline = rasterizer.layout(&request).expect("lays out").lines[0].baseline;
     let [_, top, _, bottom] = painted(&drawn);
     assert_eq!((top, bottom), (baseline - 64.0, baseline + 16.0));
+}
+
+fn animated(
+    rasterizer: &mut TextRasterizer,
+    request: &TextRasterRequest,
+    change: impl Fn(&mut [ClusterState]),
+) -> Arc<TextRasterResult> {
+    static VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 41);
+    let mut states =
+        vec![ClusterState::IDENTITY; rasterizer.layout(request).expect("lays out").clusters.len()];
+    change(&mut states);
+    rasterizer
+        .rasterize_animated(
+            &TextRasterRequest {
+                content_version: VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                ..request.clone()
+            },
+            &states,
+        )
+        .expect("draws")
+}
+
+fn extent(extent: BoxExtent) -> TextBackground {
+    TextBackground {
+        extent,
+        ..TextBackground::padded(BOX, 0.0)
+    }
+}
+
+#[test]
+fn a_tracked_line_box_follows_its_clusters() {
+    let mut rasterizer = fixture();
+    let request = boxed("IIII", extent(BoxExtent::Line));
+    let plain = painted(&rasterizer.rasterize(&request).expect("draws"));
+    let tracked = painted(&animated(&mut rasterizer, &request, |states| {
+        for state in states.iter_mut() {
+            state.tracking = 10.0;
+        }
+    }));
+    assert_eq!(tracked[0], plain[0]);
+    assert_eq!(tracked[2], plain[2] + 30.0, "three gaps of 10 pixels");
+}
+
+#[test]
+fn a_revealed_box_spans_only_revealed_clusters() {
+    let mut rasterizer = fixture();
+    let request = boxed("II II", extent(BoxExtent::Revealed));
+    let layout = rasterizer.layout(&request).expect("lays out");
+    let drawn = animated(&mut rasterizer, &request, |states| {
+        states[1].opacity = 0.0;
+        for state in &mut states[3..] {
+            state.scale = [0.0, 0.0];
+        }
+    });
+    let [left, _, right, _] = painted(&drawn);
+    let first = &layout.clusters[0];
+    assert_eq!(
+        (left, right),
+        (first.x.floor(), (first.x + first.advance).ceil())
+    );
+    let middle = animated(&mut rasterizer, &request, |states| {
+        states[1].opacity = 0.0;
+        states[4].opacity = 0.0;
+    });
+    let [left, _, right, _] = painted(&middle);
+    let fourth = &layout.clusters[3];
+    assert_eq!(
+        (left, right),
+        (first.x.floor(), (fourth.x + fourth.advance).ceil()),
+        "a hidden cluster between shown ones is covered; the space at the end is not counted"
+    );
+}
+
+#[test]
+fn a_line_with_nothing_revealed_has_no_box() {
+    let mut rasterizer = fixture();
+    let request = boxed("II\nII", extent(BoxExtent::Revealed));
+    let drawn = animated(&mut rasterizer, &request, |states| {
+        for state in &mut states[..3] {
+            state.opacity = 0.0;
+        }
+    });
+    let [_, top, _, _] = painted(&drawn);
+    assert_eq!(top, 40.0, "only the second line has a box");
+}
+
+#[test]
+fn a_revealed_box_without_animators_is_the_line_box() {
+    let mut rasterizer = fixture();
+    let line = rasterizer
+        .rasterize(&boxed(" II ", extent(BoxExtent::Line)))
+        .expect("draws");
+    let revealed = rasterizer
+        .rasterize(&TextRasterRequest {
+            content_version: 2,
+            ..boxed(" II ", extent(BoxExtent::Revealed))
+        })
+        .expect("draws");
+    assert_eq!(line.pixels.rgba8, revealed.pixels.rgba8);
+    let request = boxed(" II ", extent(BoxExtent::Revealed));
+    let shown = animated(&mut rasterizer, &request, |states| {
+        states[1].tracking = 0.0;
+        states[1].offset = [0.0, 0.0];
+        states[1].fill = Some(ColorMix {
+            keep: 0.5,
+            add: [0.0; 4],
+        });
+    });
+    assert_eq!(
+        painted(&shown),
+        painted(&line),
+        "every cluster shows, so the line box"
+    );
+}
+
+#[test]
+fn a_block_box_spans_the_layout_box() {
+    let mut rasterizer = fixture();
+    let request = TextRasterRequest {
+        max_width: 300.0,
+        ..boxed("II\nIIII", extent(BoxExtent::Block))
+    };
+    let drawn = rasterizer.rasterize(&request).expect("draws");
+    assert_eq!(painted(&drawn), [0.0, 0.0, 300.0, 80.0]);
+    let hidden = animated(&mut rasterizer, &request, |states| {
+        for state in states.iter_mut() {
+            state.opacity = 0.0;
+        }
+    });
+    assert_eq!(
+        painted(&hidden),
+        [0.0, 0.0, 300.0, 80.0],
+        "whatever is revealed"
+    );
+}
+
+#[test]
+fn run_backgrounds_follow_the_reveal() {
+    let mut rasterizer = fixture();
+    let base = boxed("IIII", extent(BoxExtent::Revealed));
+    let request = TextRasterRequest {
+        background: None,
+        spans: vec![TextSpan {
+            bytes: 0..4,
+            font_family: None,
+            font_weight: 400,
+            font_style: FontStyle::Normal,
+            font_size: 40.0,
+            letter_spacing: 0.0,
+            fill: base.fill.clone(),
+            strokes: Vec::new(),
+            background_color: Some(LINE),
+            underline: false,
+            line_through: false,
+        }],
+        ..base.clone()
+    };
+    let layout = rasterizer.layout(&request).expect("lays out");
+    let tracked = animated(&mut rasterizer, &request, |states| {
+        for state in states.iter_mut() {
+            state.tracking = 10.0;
+        }
+    });
+    let last = &layout.clusters[3];
+    assert_eq!(
+        painted(&tracked)[2],
+        (last.x + last.advance + 30.0).ceil(),
+        "it follows tracking"
+    );
+    let revealing = TextRasterRequest {
+        background: Some(TextBackground {
+            color: [0; 4],
+            ..extent(BoxExtent::Revealed)
+        }),
+        ..request.clone()
+    };
+    let half = animated(&mut rasterizer, &revealing, |states| {
+        states[2].opacity = 0.0;
+        states[3].opacity = 0.0;
+    });
+    let second = &layout.clusters[1];
+    assert_eq!(
+        painted(&half)[2],
+        (second.x + second.advance).ceil(),
+        "under a revealed box it is drawn behind revealed clusters only"
+    );
+}
+
+#[test]
+fn highlight_steps_fold_to_the_eased_rectangle() {
+    let mut rasterizer = fixture();
+    let words = "II IIII";
+    let highlight = |steps: Vec<(std::ops::Range<usize>, f32)>| TextRasterRequest {
+        background: None,
+        highlight: Some(TextHighlightRequest {
+            look: TextBackground::padded(BOX, 0.0),
+            steps,
+        }),
+        ..boxed(words, extent(BoxExtent::Line))
+    };
+    let layout = rasterizer.layout(&highlight(Vec::new())).expect("lays out");
+    let span = |first: usize, last: usize| {
+        let (start, end) = (&layout.clusters[first], &layout.clusters[last]);
+        (start.x, end.x + end.advance)
+    };
+    let (first, second) = (span(0, 1), span(3, 6));
+    let mut at = |progress: f32| {
+        painted(
+            &rasterizer
+                .rasterize(&TextRasterRequest {
+                    content_version: u64::from(progress.to_bits()) + 1,
+                    ..highlight(vec![(0..2, 1.0), (3..7, progress)])
+                })
+                .expect("draws"),
+        )
+    };
+    let start = at(0.0);
+    assert_eq!((start[0], start[2]), (first.0.floor(), first.1.ceil()));
+    let end = at(1.0);
+    assert_eq!((end[0], end[2]), (second.0.floor(), second.1.ceil()));
+    let half = at(0.5);
+    let middle = |a: f32, b: f32| f32::midpoint(a, b);
+    assert_eq!(
+        (half[0], half[2]),
+        (
+            middle(first.0, second.0).floor(),
+            middle(first.1, second.1).ceil()
+        )
+    );
+    assert_eq!((half[1], half[3]), (0.0, 40.0), "the em box down");
 }
