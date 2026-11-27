@@ -301,7 +301,7 @@ fn provider_original(
     if !path.is_file() {
         return Some(offline(path));
     }
-    let bytes = match alpha2_host_core::providers::read_source(path, provider) {
+    let bytes = match alpha2_host_core::providers::read_source(&path.into(), provider) {
         Ok(bytes) => bytes,
         Err(error) => {
             return Some(OriginalState::Unsupported {

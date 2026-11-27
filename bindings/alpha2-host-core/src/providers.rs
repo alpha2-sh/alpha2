@@ -33,12 +33,13 @@ use alpha2_model::{ClipId, NodeId, Project, ProviderSource};
 use alpha2_time::MediaTime;
 
 use crate::cursor::DecodeCursorKey;
+use crate::remote::{RemoteError, SourceLocation};
 
 /// The files provider sources read, by source ID.
 #[derive(Clone, Debug, Default)]
 pub struct ProviderFiles {
     /// None for an image sequence.
-    pub originals: HashMap<String, PathBuf>,
+    pub originals: HashMap<String, SourceLocation>,
     /// In project order; `None` where the sequence has a gap.
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
     /// Read once when the export starts.
@@ -46,7 +47,7 @@ pub struct ProviderFiles {
     /// Files an SVG or Lottie source names outside itself, by source ID and then by locator, as a
     /// browser page registers them with `registerResource`. A missing locator draws as
     /// `missing_image`.
-    pub resources: HashMap<String, HashMap<String, PathBuf>>,
+    pub resources: HashMap<String, HashMap<String, SourceLocation>>,
 }
 
 /// What a provider call tells a watchdog: when it waits for another caller of the same source, and
@@ -110,7 +111,10 @@ pub struct ProviderMedia {
     budget: u64,
     open: Mutex<OpenSources>,
     diagnostics: Mutex<Diagnostics>,
+    remote_failure: RemoteFailure,
 }
+
+type RemoteFailure = Arc<Mutex<Option<RemoteError>>>;
 
 /// Past this, distinct provider diagnostics are only counted.
 pub const MAX_PROVIDER_DIAGNOSTICS: usize = 256;
@@ -187,6 +191,7 @@ impl ProviderMedia {
             budget,
             open: Mutex::new(OpenSources::default()),
             diagnostics: Mutex::default(),
+            remote_failure: RemoteFailure::default(),
         }
     }
 
@@ -201,6 +206,7 @@ impl ProviderMedia {
             budget: u64::MAX,
             open: Mutex::new(OpenSources::default()),
             diagnostics: Mutex::default(),
+            remote_failure: RemoteFailure::default(),
         })
     }
 
@@ -330,7 +336,7 @@ impl ProviderMedia {
                     Some(readers) => self.open_reader(source, readers, heartbeat),
                     None => self.open_source(source),
                 }
-                .map_err(|error| refused(source, &error))?;
+                .map_err(|error| self.refused(source, &error))?;
                 // A probe without the resources would report every font and image missing.
                 self.record(source, &opened.report().diagnostics);
                 *visual = Some(opened);
@@ -353,7 +359,7 @@ impl ProviderMedia {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .within(self.budget, frame);
-        let frame = rendered.map_err(|error| refused(source, &error))?;
+        let frame = rendered.map_err(|error| self.refused(source, &error))?;
         self.record(source, &frame.diagnostics);
         let (pixel_format, bytes, bytes_per_pixel) = match frame.pixels {
             FramePixels::Rgba8(pixels) => {
@@ -430,6 +436,22 @@ impl ProviderMedia {
         Ok(opened)
     }
 
+    /// A provider failure, by the remote failure behind it when a remote read failed.
+    fn refused(&self, source: &SourceId, error: &ExtensionError) -> ProviderError {
+        match self
+            .remote_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        {
+            Some(remote) => ProviderError {
+                code: Some(remote.failure.code()),
+                message: format!("extension source {}: {}", source.as_str(), remote.message),
+            },
+            None => refused(source, error),
+        }
+    }
+
     fn open_source(&self, source: &SourceId) -> Result<Box<dyn VisualSource>, ExtensionError> {
         let spec = self
             .specs
@@ -439,13 +461,18 @@ impl ProviderMedia {
             .files
             .originals
             .get(source.as_str())
-            .map(|path| read_source(path, spec).map(Arc::from))
+            .map(|location| {
+                read_source(location, spec)
+                    .map(Arc::from)
+                    .map_err(|error| error.kept_in(&self.remote_failure))
+            })
             .transpose()?;
         let resolver: SharedResolver = Arc::new(FileResolver::new(
             spec,
             self.files.frames.get(source.as_str()),
             self.files.resources.get(source.as_str()),
             &self.files.fonts,
+            Arc::clone(&self.remote_failure),
         )?);
         self.registry.open(spec, own, resolver)
     }
@@ -540,56 +567,116 @@ const fn decodes_in_order(spec: &ProviderSource) -> bool {
     matches!(spec, ProviderSource::AnimatedImage)
 }
 
+/// Why a provider source's or resource's bytes could not be read.
+#[derive(Debug)]
+pub enum SourceReadError {
+    /// The file or bytes are not what a provider reads.
+    Extension(ExtensionError),
+    /// A remote source failed: refused, changed or unreachable.
+    Remote(RemoteError),
+}
+
+impl SourceReadError {
+    /// The extension error a provider call reports, the remote failure kept in `failure` for the
+    /// answer's code.
+    fn kept_in(self, failure: &RemoteFailure) -> ExtensionError {
+        match self {
+            Self::Extension(error) => error,
+            Self::Remote(error) => {
+                let message = error.message.clone();
+                *failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+                ExtensionError::MissingResource(message)
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for SourceReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Extension(error) => error.fmt(formatter),
+            Self::Remote(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for SourceReadError {}
+
+fn unreadable(location: &SourceLocation, error: &std::io::Error) -> SourceReadError {
+    RemoteError::of(error).map_or_else(
+        || {
+            SourceReadError::Extension(ExtensionError::MissingResource(format!(
+                "{}: {error}",
+                location.shown()
+            )))
+        },
+        |remote| SourceReadError::Remote(remote.clone()),
+    )
+}
+
+/// The first byte on: a file, or a remote object streamed past its request's block cache.
+fn whole_reader(location: &SourceLocation) -> std::io::Result<Box<dyn std::io::Read>> {
+    Ok(match location {
+        SourceLocation::File(path) => Box::new(std::fs::File::open(path)?),
+        SourceLocation::Remote(object) => Box::new(object.stream()),
+    })
+}
+
 /// Lottie, dotLottie and SVG files are read whole, so one larger than its provider reads is
-/// refused from its size and first bytes before it is read.
+/// refused from its size and first bytes before it is read; a remote one from the length its
+/// probe stated and its first block.
 ///
 /// # Errors
-/// [`ExtensionError::Budget`] for a file past its limit, or
-/// [`ExtensionError::MissingResource`] when it cannot be read.
+/// [`ExtensionError::Budget`] for a file past its limit, [`ExtensionError::MissingResource`] when
+/// it cannot be read, and the remote failure of a remote source.
 pub fn read_source(
-    path: &std::path::Path,
+    location: &SourceLocation,
     spec: &ProviderSource,
-) -> Result<Vec<u8>, ExtensionError> {
-    use std::io::{Read as _, Seek as _};
-    let unreadable = |error: std::io::Error| {
-        ExtensionError::MissingResource(format!("{}: {error}", path.display()))
-    };
-    let mut file = std::fs::File::open(path).map_err(unreadable)?;
-    let length = file.metadata().map_err(unreadable)?.len();
+) -> Result<Vec<u8>, SourceReadError> {
+    use std::io::Read as _;
+    let failed = |error: std::io::Error| unreadable(location, &error);
+    let length = location.byte_length().map_err(failed)?;
     let mut head = Vec::with_capacity(4);
-    (&mut file)
-        .take(4)
-        .read_to_end(&mut head)
-        .map_err(unreadable)?;
-    check_document_size(spec, &head, length)?;
+    let head_reader: Box<dyn std::io::Read> = match location {
+        SourceLocation::File(path) => Box::new(std::fs::File::open(path).map_err(failed)?),
+        SourceLocation::Remote(object) => Box::new(object.reader()),
+    };
+    head_reader.take(4).read_to_end(&mut head).map_err(failed)?;
+    check_document_size(spec, &head, length).map_err(SourceReadError::Extension)?;
     // A file that grows after its size was read is read only one byte past the limit, which the
     // provider refuses.
     let most = document_limit(spec, &head).map_or(u64::MAX, |(limit, _)| limit as u64 + 1);
-    file.rewind().map_err(unreadable)?;
     let mut bytes = Vec::with_capacity(usize::try_from(length.min(most)).unwrap_or(0));
-    file.take(most)
+    whole_reader(location)
+        .map_err(failed)?
+        .take(most)
         .read_to_end(&mut bytes)
-        .map_err(unreadable)?;
+        .map_err(failed)?;
     Ok(bytes)
 }
 
-fn read(path: &std::path::Path) -> Result<Arc<[u8]>, ExtensionError> {
-    std::fs::read(path)
-        .map(Arc::from)
-        .map_err(|error| ExtensionError::MissingResource(format!("{}: {error}", path.display())))
+fn read(location: &SourceLocation) -> Result<Arc<[u8]>, SourceReadError> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    whole_reader(location)
+        .and_then(|mut reader| reader.read_to_end(&mut bytes))
+        .map_err(|error| unreadable(location, &error))?;
+    Ok(Arc::from(bytes))
 }
 
 struct FileResolver {
-    files: HashMap<String, PathBuf>,
+    files: HashMap<String, SourceLocation>,
     fonts: Vec<Arc<[u8]>>,
+    remote_failure: RemoteFailure,
 }
 
 impl FileResolver {
     fn new(
         spec: &ProviderSource,
         frames: Option<&Vec<Option<PathBuf>>>,
-        resources: Option<&HashMap<String, PathBuf>>,
+        resources: Option<&HashMap<String, SourceLocation>>,
         fonts: &[Arc<[u8]>],
+        remote_failure: RemoteFailure,
     ) -> Result<Self, ExtensionError> {
         let mut files = resources.cloned().unwrap_or_default();
         if let ProviderSource::ImageSequence {
@@ -599,7 +686,11 @@ impl FileResolver {
             let paths = frames.ok_or_else(|| {
                 ExtensionError::MissingResource("the sequence's frame files".into())
             })?;
-            files = frame_files(locators, paths).map_err(ExtensionError::Mismatch)?;
+            files = frame_files(locators, paths)
+                .map_err(ExtensionError::Mismatch)?
+                .into_iter()
+                .map(|(locator, path)| (locator, SourceLocation::File(path)))
+                .collect();
         }
         Ok(Self {
             files,
@@ -608,6 +699,7 @@ impl FileResolver {
             } else {
                 Vec::new()
             },
+            remote_failure,
         })
     }
 }
@@ -618,7 +710,7 @@ impl ResourceResolver for FileResolver {
             .files
             .get(locator)
             .ok_or_else(|| ExtensionError::MissingResource(locator.to_owned()))?;
-        read(path)
+        read(path).map_err(|error| error.kept_in(&self.remote_failure))
     }
 
     fn fonts(&self) -> Vec<Arc<[u8]>> {

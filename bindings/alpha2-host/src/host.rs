@@ -46,6 +46,7 @@ use alpha2_engine::{
     FramesWithText, QualityProfile, TextTextures,
 };
 use alpha2_gpu::CapabilityTier;
+use alpha2_host_core::remote::SourceLocation;
 use alpha2_media::{CancelToken, EncodeEvent};
 use alpha2_model::{MediaFingerprint, MediaKind, Project};
 use alpha2_native::{
@@ -883,7 +884,11 @@ impl Host {
             0
         };
         let provider_files = alpha2_host_core::providers::ProviderFiles {
-            originals: resolved.paths.clone(),
+            originals: resolved
+                .paths
+                .iter()
+                .map(|(id, path)| (id.clone(), SourceLocation::from(path)))
+                .collect(),
             frames: inputs.frames.clone(),
             fonts: Vec::new(),
             resources: inputs
@@ -893,7 +898,7 @@ impl Host {
                     let paths = locators
                         .iter()
                         .filter_map(|(locator, location)| {
-                            Some((locator.clone(), location.path()?.to_path_buf()))
+                            Some((locator.clone(), SourceLocation::from(location.path()?)))
                         })
                         .collect();
                     (id.clone(), paths)
@@ -1526,10 +1531,10 @@ impl Host {
         for (id, files) in resources {
             identity.add("resources", id.as_bytes());
             let mut files = files.iter().collect::<Vec<_>>();
-            files.sort();
-            for (locator, path) in files {
+            files.sort_by(|a, b| a.0.cmp(b.0));
+            for (locator, source) in files {
                 identity.add("locator", locator.as_bytes());
-                identity.add_file("resource", path);
+                identity.add_source("resource", source);
             }
         }
         for font in font_files {

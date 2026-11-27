@@ -266,7 +266,9 @@ fn check_case(path: &Path, case: &Case, frames: u64, samples: u64) {
     assert_eq!(audio.channels, Some(2), "{label}");
     let (video_index, audio_index) = (video.index, audio.index);
 
-    let mut input = crate::decode::open_input(path).expect("input");
+    let mut input =
+        crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(path))
+            .expect("input");
     let video_base = input.streams()[video_index].time_base;
     let audio_base = input.streams()[audio_index].time_base;
     let mut video_pts = Vec::new();
@@ -635,7 +637,7 @@ fn copy_into(container: Container) -> Result<crate::PacketCopyPlan, String> {
         .map(|frame| MediaTime::from_ticks(frame * alpha2_time::TICKS_PER_SECOND / 30))
         .collect::<Vec<_>>();
     crate::plan_packet_copy(&crate::PacketCopyRequest {
-        source: &source,
+        source: &alpha2_host_core::remote::SourceLocation::from(&source),
         frame_times: &frame_times,
         width: 128,
         height: 96,
@@ -652,7 +654,9 @@ fn copy_into(container: Container) -> Result<crate::PacketCopyPlan, String> {
 
 fn video_packets(path: &Path) -> Vec<Vec<u8>> {
     let index = probe(path).expect("probe").selected_video.expect("video");
-    let mut input = crate::decode::open_input(path).expect("input");
+    let mut input =
+        crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(path))
+            .expect("input");
     let mut packets = Vec::new();
     while let Some(packet) = input.read_packet().expect("packet") {
         if usize::try_from(packet.stream_index).ok() == Some(index) {

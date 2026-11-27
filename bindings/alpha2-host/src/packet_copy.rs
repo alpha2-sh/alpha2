@@ -187,12 +187,13 @@ pub(crate) fn packet_copy_plan(request: &CopyRequest) -> Result<CopyPlan, String
             .assets
             .get(segment.source_id.as_str())
             .ok_or_else(|| format!("source {} has no file", segment.source_id))?;
+        let source = alpha2_host_core::remote::SourceLocation::from(source);
         let frame_times = shown
             .iter()
             .map(|time| segment.source_time(*time))
             .collect::<Vec<_>>();
         let run = planner.plan(&PacketCopyRequest {
-            source,
+            source: &source,
             frame_times: &frame_times,
             width: request.project.settings.width,
             height: request.project.settings.height,

@@ -73,6 +73,7 @@ mod openh264;
 mod outputs;
 mod pixel_outputs;
 mod project_audio;
+mod remote;
 mod seeking;
 mod stills;
 
@@ -413,7 +414,9 @@ fn exported_audio(path: &Path) -> (u32, i64) {
         .selected_audio_stream()
         .and_then(|stream| stream.sample_rate)
         .expect("rate");
-    let mut input = crate::decode::open_input(path).expect("input");
+    let mut input =
+        crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(path))
+            .expect("input");
     let time_base = input.streams()[index].time_base;
     assert_eq!(
         (time_base.num, time_base.den),

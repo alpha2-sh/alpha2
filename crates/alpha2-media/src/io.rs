@@ -1130,6 +1130,24 @@ pub enum DecodeError {
         /// The failed call and its platform status.
         message: String,
     },
+    /// The source's bytes could not be read, outside the decoder: a remote source that was
+    /// refused, changed or could not be reached.
+    Source(SourceFailure),
+}
+
+/// Why a source's bytes could not be read, as the host protocol answers it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceFailure {
+    /// The protocol code, such as `MEDIA_CHANGED` or `MEDIA_UNREACHABLE`.
+    pub code: &'static str,
+    /// What failed, naming the source without credentials.
+    pub message: String,
+    /// The status the server answered, when it answered.
+    pub status: Option<u16>,
+    /// How long a busy server asks to wait, in milliseconds.
+    pub retry_after_ms: Option<u64>,
+    /// The operator rule that refused the source.
+    pub policy: Option<&'static str>,
 }
 
 /// Why an encoder did not open, as far as its own status and log say.
@@ -1192,6 +1210,7 @@ impl fmt::Display for DecodeError {
             Self::Adapter(message) | Self::Gpu { message, .. } => {
                 write!(formatter, "decoder adapter failed: {message}")
             }
+            Self::Source(failure) => formatter.write_str(&failure.message),
         }
     }
 }

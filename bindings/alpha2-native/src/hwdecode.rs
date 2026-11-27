@@ -1,8 +1,8 @@
 //! Standalone Linux Vulkan hardware-decode probe for the CLI.
 
+use alpha2_host_core::remote::SourceLocation;
 use std::collections::HashSet;
 use std::ffi::CString;
-use std::path::Path;
 
 use alpha2_ffmpeg_bridge::{VulkanFrameInfo, VulkanFrameLease, pixel_format_name};
 use alpha2_media::DecodeError;
@@ -67,7 +67,7 @@ pub struct VulkanDecodeProbe {
 /// the resident-surface contract.
 #[allow(clippy::too_many_lines)]
 pub fn probe_vulkan_decode(
-    path: impl AsRef<Path>,
+    source: impl Into<SourceLocation>,
     frame_limit: usize,
 ) -> Result<VulkanDecodeProbe, DecodeError> {
     if frame_limit < 2 {
@@ -75,8 +75,9 @@ pub fn probe_vulkan_decode(
             "Vulkan decode probe requires at least two frames".into(),
         ));
     }
-    let mut input = open_input(path.as_ref())?;
-    let selected = probe_context(&input, path.as_ref())?
+    let source = source.into();
+    let mut input = open_input(&source)?;
+    let selected = probe_context(&input, &source)?
         .selected_video
         .ok_or_else(|| DecodeError::Unsupported("source has no video stream".into()))?;
     input.discard_all_but(selected);
@@ -255,7 +256,10 @@ fn decode_next_raw(
             }
             return Ok(None);
         }
-        let Some(packet) = input.read_packet().map_err(adapter_error)? else {
+        let Some(packet) = input
+            .read_packet()
+            .map_err(|error| crate::decode::demux_error(input, error))?
+        else {
             *demux_eof = true;
             continue;
         };

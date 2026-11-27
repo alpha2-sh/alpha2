@@ -88,7 +88,7 @@ pub(crate) fn yuv_transcode_plan(
 ) -> Result<TranscodePlan, String> {
     plan_with(project, assets, range, |source| {
         alpha2_native::check_yuv_transcode(
-            source,
+            &alpha2_host_core::remote::SourceLocation::from(source),
             project.settings.width,
             project.settings.height,
             encoding,

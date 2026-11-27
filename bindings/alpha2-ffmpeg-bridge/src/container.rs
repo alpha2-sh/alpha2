@@ -1,12 +1,13 @@
 //! Container open and close, replacing rsmpeg's constructors.
 //!
-//! rsmpeg's input builder cannot install an interrupt callback before `avformat_open_input`, and
-//! its output `Drop` unwraps `avio_close`, which panics after a failed write such as a full disk.
+//! rsmpeg's input builder cannot install an interrupt callback or a custom input before
+//! `avformat_open_input`, and its output `Drop` unwraps `avio_close`, which panics after a failed
+//! write such as a full disk.
 
 use std::{
-    ffi::{CStr, CString, c_int, c_void},
+    ffi::{CStr, CString, c_char, c_int, c_void},
     fs::File,
-    io::Read,
+    io::{self, Read, Seek, SeekFrom},
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     path::Path,
@@ -17,8 +18,10 @@ use std::{
 use rsmpeg::{
     UnsafeDerefMut,
     avcodec::AVPacket,
-    avformat::{AVFormatContextInput, AVFormatContextOutput, AVIOContextContainer},
-    avutil::AVDictionary,
+    avformat::{
+        AVFormatContextInput, AVFormatContextOutput, AVIOContextContainer, AVIOContextCustom,
+    },
+    avutil::{AVDictionary, AVMem},
     error::RsmpegError,
     ffi,
 };
@@ -66,12 +69,50 @@ unsafe extern "C" fn interrupt_requested(opaque: *mut c_void) -> c_int {
 /// # }
 /// ```
 pub struct DemuxInput {
-    // Declared first so it closes before the interrupt state is released.
+    // Declared first so it closes before the interrupt state and the custom input are released.
     input: AVFormatContextInput,
+    _custom: Option<AVIOContextCustom>,
+    read_error: ReadError,
     interrupt: Arc<InputInterrupt>,
 }
 
+/// The failure a custom input's reader returned last, which `FFmpeg` sees only as `AVERROR_EXIT`.
+type ReadError = Arc<Mutex<Option<io::Error>>>;
+
+/// A byte source `FFmpeg` reads instead of a file.
+pub trait InputReader: Read + Seek + Send {}
+
+impl<T: Read + Seek + Send> InputReader for T {}
+
+/// An input read through readers its caller opens, such as a remote object read by range.
+pub struct CustomInput<'a> {
+    /// The input's name as `FFmpeg` sees its URL; probing reads its extension, as a file's.
+    pub name: &'a str,
+    /// The input's length in bytes, answered to `AVSEEK_SIZE`.
+    pub length: u64,
+    /// Opens a reader at the first byte; each sniff and the demuxer read through their own.
+    pub open: &'a dyn Fn() -> io::Result<Box<dyn InputReader>>,
+}
+
+/// Where an input's bytes are.
+#[derive(Clone, Copy)]
+pub enum InputLocation<'a> {
+    /// A local file, read through `FFmpeg`'s `file` protocol.
+    File(&'a Path),
+    /// Readers set as the context's `pb`; the input opens nothing else.
+    Custom(&'a CustomInput<'a>),
+}
+
 impl DemuxInput {
+    /// The failure a custom input's reader returned, taken once: `FFmpeg` reports such a failure
+    /// as `AVERROR_EXIT`.
+    pub fn take_read_error(&self) -> Option<io::Error> {
+        self.read_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+
     /// Makes blocking I/O on this input stop with `AVERROR_EXIT` once `check` returns true.
     pub fn interrupt_when(&self, check: impl Fn() -> bool + Send + Sync + 'static) {
         *self
@@ -133,9 +174,25 @@ impl DemuxInput {
     /// The next packet in file order, or `None` at the end of the file.
     ///
     /// # Errors
-    /// The `FFmpeg` read failure, or `AVERROR_EXIT` when interrupted.
+    /// The `FFmpeg` read failure, or `AVERROR_EXIT` when interrupted or when a custom input's
+    /// reader failed.
     pub fn read_packet(&mut self) -> Result<Option<AVPacket>, RsmpegError> {
-        self.input.read_packet()
+        let packet = self.input.read_packet();
+        self.unless_read_failed(packet)
+    }
+
+    /// A custom input's failed read can still leave `FFmpeg` a packet, cut short and flagged
+    /// corrupt; the call fails instead, and the reader's failure stays for [`Self::take_read_error`].
+    fn unless_read_failed<T>(&self, result: Result<T, RsmpegError>) -> Result<T, RsmpegError> {
+        let failed = self
+            .read_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some();
+        if failed {
+            return Err(RsmpegError::AVError(ffi::AVERROR_EXIT));
+        }
+        result
     }
 
     /// Seeks to the key frame at `timestamp` (`stream_index` -1 for `AV_TIME_BASE` units).
@@ -148,7 +205,8 @@ impl DemuxInput {
         timestamp: i64,
         flags: i32,
     ) -> Result<(), RsmpegError> {
-        self.input.seek(stream_index, timestamp, flags)
+        let sought = self.input.seek(stream_index, timestamp, flags);
+        self.unless_read_failed(sought)
     }
 
     /// Has the demuxer discard every stream but `index` (`mov` then skips their bytes entirely).
@@ -217,6 +275,8 @@ pub enum OpenInputError {
     Path(PathError),
     /// The file is a container `formats` does not name (the claiming demuxer).
     Refused(String),
+    /// A custom input's reader failed.
+    Read(io::Error),
     /// `FFmpeg` could not open or read it.
     Ffmpeg(RsmpegError),
 }
@@ -226,6 +286,7 @@ impl std::fmt::Display for OpenInputError {
         match self {
             Self::Path(error) => write!(formatter, "the path {error}"),
             Self::Refused(format) => write!(formatter, "the file is {format} input"),
+            Self::Read(error) => write!(formatter, "{error}"),
             Self::Ffmpeg(error) => write!(formatter, "{error}"),
         }
     }
@@ -233,43 +294,81 @@ impl std::fmt::Display for OpenInputError {
 
 impl std::error::Error for OpenInputError {}
 
-/// Opens `path` and reads its stream information using only the demuxers in `formats`
+/// Opens `location` and reads its stream information using only the demuxers in `formats`
 /// (comma-separated `FFmpeg` short names) and only the `file` protocol. With `decoders`
 /// (comma-separated `FFmpeg` decoder names), probing opens only those decoders.
+///
+/// A custom input is read only through its own readers: the context's `pb` is set before the open
+/// and every nested open (`io_open`) is refused, so its bytes can never make `FFmpeg` open a file.
 ///
 /// Still images pick their demuxer by signature. Otherwise `image2` claims any file named like an
 /// image before the JPEG demuxer has seen a large JPEG whole, and `formats` leaves `image2` out.
 ///
 /// # Errors
 /// [`OpenInputError::Path`] for an unusable path, [`OpenInputError::Refused`] for a container
-/// `formats` leaves out, else the `FFmpeg` failure.
+/// `formats` leaves out, [`OpenInputError::Read`] when a custom input's reader failed, else the
+/// `FFmpeg` failure.
 pub fn open_input(
-    path: &Path,
+    location: InputLocation<'_>,
     formats: &CStr,
     decoders: Option<&CStr>,
 ) -> Result<DemuxInput, OpenInputError> {
-    let url = file_url(path).map_err(OpenInputError::Path)?;
-    let url = url.as_c_str();
     crate::install_log_capture();
-    let still = still_image_format(path)
+    let (url, mut reader) = match &location {
+        InputLocation::File(path) => (file_url(path).map_err(OpenInputError::Path)?, None),
+        InputLocation::Custom(custom) => (
+            CString::new(custom.name).map_err(|_| OpenInputError::Path(PathError::Nul))?,
+            Some((custom.open)().map_err(OpenInputError::Read)?),
+        ),
+    };
+    let url = url.as_c_str();
+    let signature = match (&location, reader.as_mut()) {
+        (InputLocation::File(path), _) => read_signature(File::open(path).ok()),
+        (InputLocation::Custom(_), Some(reader)) => {
+            let signature = read_signature(Some(&mut *reader));
+            reader
+                .seek(SeekFrom::Start(0))
+                .map_err(OpenInputError::Read)?;
+            signature
+        }
+        (InputLocation::Custom(_), None) => None,
+    };
+    let still = signature
+        .and_then(still_image_format)
         .filter(|name| allowed_name(name, formats))
         // SAFETY: `name` is a NUL-terminated demuxer name; the result is null or one of `FFmpeg`'s
         // static demuxers.
         .map_or(ptr::null(), |name| unsafe {
             ffi::av_find_input_format(name.as_ptr())
         });
-    open_with(url, formats, decoders, still).map_err(|failure| match failure {
-        OpenFailure::Open(opened) => refused_format(path, url, formats).map_or(
-            OpenInputError::Ffmpeg(RsmpegError::OpenInputError(opened)),
-            OpenInputError::Refused,
-        ),
+    let custom = match (&location, reader) {
+        (InputLocation::Custom(custom), Some(reader)) => Some((reader, custom.length)),
+        _ => None,
+    };
+    open_with(url, formats, decoders, still, custom).map_err(|failure| match failure {
+        OpenFailure::Open(opened) => {
+            let head = match &location {
+                InputLocation::File(path) => read_head(File::open(path).ok()),
+                InputLocation::Custom(custom) => read_head((custom.open)().ok()),
+            };
+            head.and_then(|head| refused_format(head, url, formats))
+                .map_or(
+                    OpenInputError::Ffmpeg(RsmpegError::OpenInputError(opened)),
+                    OpenInputError::Refused,
+                )
+        }
+        OpenFailure::Read(error) => OpenInputError::Read(error),
         OpenFailure::Other(error) => error,
     })
 }
 
-fn still_image_format(path: &Path) -> Option<&'static CStr> {
+fn read_signature(reader: Option<impl Read>) -> Option<[u8; 12]> {
     let mut signature = [0_u8; 12];
-    File::open(path).ok()?.read_exact(&mut signature).ok()?;
+    reader?.read_exact(&mut signature).ok()?;
+    Some(signature)
+}
+
+fn still_image_format(signature: [u8; 12]) -> Option<&'static CStr> {
     if signature.starts_with(&[0xff, 0xd8, 0xff]) {
         Some(c"jpeg_pipe")
     } else if signature.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -283,7 +382,83 @@ fn still_image_format(path: &Path) -> Option<&'static CStr> {
 
 enum OpenFailure {
     Open(c_int),
+    Read(io::Error),
     Other(OpenInputError),
+}
+
+/// `FFmpeg`'s read callback over a custom input's reader. A failure is kept for the caller and
+/// stops the call with `AVERROR_EXIT`, so `FFmpeg` never takes it for the end of the input.
+fn custom_read(reader: &mut dyn InputReader, buffer: &mut [u8], error: &ReadError) -> c_int {
+    loop {
+        match reader.read(buffer) {
+            Ok(0) => return ffi::AVERROR_EOF,
+            Ok(read) => return c_int::try_from(read).unwrap_or(c_int::MAX),
+            Err(failure) if failure.kind() == io::ErrorKind::Interrupted => {}
+            Err(failure) => {
+                *error.lock().unwrap_or_else(PoisonError::into_inner) = Some(failure);
+                return ffi::AVERROR_EXIT;
+            }
+        }
+    }
+}
+
+/// `FFmpeg`'s seek callback: `AVSEEK_SIZE` answers `length` without moving.
+fn custom_seek(reader: &mut dyn InputReader, length: u64, offset: i64, whence: c_int) -> i64 {
+    let size = c_int::try_from(ffi::AVSEEK_SIZE).unwrap_or(c_int::MAX);
+    if whence & size != 0 {
+        return i64::try_from(length).unwrap_or(i64::MAX);
+    }
+    let force = c_int::try_from(ffi::AVSEEK_FORCE).unwrap_or(0);
+    let target = match u32::try_from(whence & !force) {
+        Ok(ffi::SEEK_SET) => u64::try_from(offset).ok().map(SeekFrom::Start),
+        Ok(ffi::SEEK_CUR) => Some(SeekFrom::Current(offset)),
+        Ok(ffi::SEEK_END) => Some(SeekFrom::End(offset)),
+        _ => None,
+    };
+    let Some(target) = target else {
+        return i64::from(ffi::AVERROR(ffi::EINVAL));
+    };
+    reader.seek(target).map_or_else(
+        |_| i64::from(ffi::AVERROR(ffi::EINVAL)),
+        |position| i64::try_from(position).unwrap_or(i64::MAX),
+    )
+}
+
+/// Refuses every nested open, so a custom input can never make `FFmpeg` open another resource.
+unsafe extern "C" fn refuse_nested_open(
+    _context: *mut ffi::AVFormatContext,
+    _io: *mut *mut ffi::AVIOContext,
+    _url: *const c_char,
+    _flags: c_int,
+    _options: *mut *mut ffi::AVDictionary,
+) -> c_int {
+    ffi::AVERROR(ffi::EPERM)
+}
+
+/// The I/O buffer size of a custom input.
+const CUSTOM_BUFFER_BYTES: usize = 64 * 1024;
+
+fn custom_context(
+    reader: Box<dyn InputReader>,
+    length: u64,
+    error: &ReadError,
+) -> AVIOContextCustom {
+    let reader = Arc::new(Mutex::new(reader));
+    let (read_error, seek_reader) = (Arc::clone(error), Arc::clone(&reader));
+    AVIOContextCustom::alloc_context(
+        AVMem::new(CUSTOM_BUFFER_BYTES),
+        false,
+        Vec::new(),
+        Some(Box::new(move |_, buffer| {
+            let mut reader = reader.lock().unwrap_or_else(PoisonError::into_inner);
+            custom_read(&mut **reader, buffer, &read_error)
+        })),
+        None,
+        Some(Box::new(move |_, offset, whence| {
+            let mut reader = seek_reader.lock().unwrap_or_else(PoisonError::into_inner);
+            custom_seek(&mut **reader, length, offset, whence)
+        })),
+    )
 }
 
 /// Opens `url` with `format`, or lets `FFmpeg` pick when it is null.
@@ -292,8 +467,18 @@ fn open_with(
     formats: &CStr,
     decoders: Option<&CStr>,
     format: *const ffi::AVInputFormat,
+    custom: Option<(Box<dyn InputReader>, u64)>,
 ) -> Result<DemuxInput, OpenFailure> {
     let interrupt = Arc::new(InputInterrupt::default());
+    let read_error = ReadError::default();
+    let mut custom = custom.map(|(reader, length)| custom_context(reader, length, &read_error));
+    let read_failure = |failure: OpenFailure| {
+        read_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .map_or(failure, OpenFailure::Read)
+    };
     // SAFETY: allocation has no preconditions; a null result is handled below.
     let mut context = unsafe { ffi::avformat_alloc_context() };
     if context.is_null() {
@@ -308,6 +493,15 @@ fn open_with(
             callback: Some(interrupt_requested),
             opaque: Arc::as_ptr(&interrupt).cast_mut().cast(),
         };
+    }
+    if let Some(custom) = custom.as_mut() {
+        // SAFETY: the context is fresh and unshared. `pb` outlives it: the returned input keeps the
+        // custom context and drops it after the format context, and `avformat_open_input` frees
+        // the format context on failure without closing a `pb` it did not open.
+        unsafe {
+            (*context).pb = custom.as_mut_ptr();
+            (*context).io_open = Some(refuse_nested_open);
+        }
     }
     let mut options =
         AVDictionary::new(c"format_whitelist", formats, 0).set(c"protocol_whitelist", c"file", 0);
@@ -325,7 +519,7 @@ fn open_with(
     // owns.
     unsafe { ffi::av_dict_free(&raw mut options) };
     if opened < 0 {
-        return Err(OpenFailure::Open(opened));
+        return Err(read_failure(OpenFailure::Open(opened)));
     }
     let Some(context) = NonNull::new(context) else {
         return Err(OpenFailure::Open(opened));
@@ -356,23 +550,36 @@ fn open_with(
         unsafe { ffi::av_dict_free(dictionary) };
     }
     if found < 0 {
-        return Err(OpenFailure::Other(OpenInputError::Ffmpeg(
+        return Err(read_failure(OpenFailure::Other(OpenInputError::Ffmpeg(
             RsmpegError::FindStreamInfoError(found),
-        )));
+        ))));
     }
-    Ok(DemuxInput { input, interrupt })
+    if let Some(error) = read_error
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+    {
+        return Err(OpenFailure::Read(error));
+    }
+    Ok(DemuxInput {
+        input,
+        _custom: custom,
+        read_error,
+        interrupt,
+    })
 }
 
-/// The demuxer `FFmpeg` would pick for `path` when `formats` does not name it, so a failed open
-/// can say why instead of `EINVAL`.
-fn refused_format(path: &Path, url: &CStr, formats: &CStr) -> Option<String> {
+/// Up to the first 1 MiB of an input, for [`refused_format`].
+fn read_head(reader: Option<impl Read>) -> Option<Vec<u8>> {
     const PROBE_BYTES: u64 = 1 << 20;
     let mut bytes = Vec::new();
-    File::open(path)
-        .ok()?
-        .take(PROBE_BYTES)
-        .read_to_end(&mut bytes)
-        .ok()?;
+    reader?.take(PROBE_BYTES).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// The demuxer `FFmpeg` would pick for an input starting with `bytes` when `formats` does not name
+/// it, so a failed open can say why instead of `EINVAL`.
+fn refused_format(mut bytes: Vec<u8>, url: &CStr, formats: &CStr) -> Option<String> {
     let size = c_int::try_from(bytes.len()).ok()?;
     bytes.resize(
         bytes.len() + usize::try_from(ffi::AVPROBE_PADDING_SIZE).ok()?,

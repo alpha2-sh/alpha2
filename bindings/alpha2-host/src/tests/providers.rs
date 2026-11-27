@@ -289,9 +289,12 @@ fn a_document_file_past_its_limit_is_refused_before_it_is_read() {
     ] {
         let path = directory.join(name);
         sparse_tebibyte(&path, head);
-        let error = alpha2_host_core::providers::read_source(&path, spec).expect_err(name);
+        let error =
+            alpha2_host_core::providers::read_source(&path.clone().into(), spec).expect_err(name);
         assert!(
-            matches!(&error, alpha2_extensions::ExtensionError::Budget(message)
+            matches!(&error, alpha2_host_core::providers::SourceReadError::Extension(
+                alpha2_extensions::ExtensionError::Budget(message)
+            )
                 if message.contains(what) && message.contains("1099511627776 bytes")),
             "{name}: {error}"
         );
@@ -299,8 +302,11 @@ fn a_document_file_past_its_limit_is_refused_before_it_is_read() {
     let path = directory.join("small.svg");
     std::fs::write(&path, b"<svg/>").expect("file");
     assert_eq!(
-        alpha2_host_core::providers::read_source(&path, &alpha2_model::ProviderSource::Svg)
-            .expect("read"),
+        alpha2_host_core::providers::read_source(
+            &path.clone().into(),
+            &alpha2_model::ProviderSource::Svg
+        )
+        .expect("read"),
         b"<svg/>"
     );
 }
@@ -500,7 +506,7 @@ fn an_exr_frame_is_handed_over_without_copying_its_halves() {
     let media = alpha2_host_core::providers::ProviderMedia::new(
         &project,
         alpha2_host_core::providers::ProviderFiles {
-            originals: HashMap::from([("still".to_owned(), extension_corpus("half.exr"))]),
+            originals: HashMap::from([("still".to_owned(), extension_corpus("half.exr").into())]),
             ..Default::default()
         },
         (96, 64),
@@ -797,10 +803,10 @@ fn svg_sources_holding_images_are_closed_for_the_budget_once_off_screen() {
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64"><image width="96" height="64" href="photo.png"/></svg>"#,
         )
         .expect("svg");
-        files.originals.insert(source.to_owned(), path);
+        files.originals.insert(source.to_owned(), path.into());
         files.resources.insert(
             source.to_owned(),
-            HashMap::from([("photo.png".to_owned(), photo.clone())]),
+            HashMap::from([("photo.png".to_owned(), photo.clone().into())]),
         );
     }
     let clip = |id: &str, source: &str| {
@@ -908,8 +914,8 @@ fn readers_of_one_animated_image_keep_their_own_positions() {
         &two_reader_project(),
         alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
-                ("anim".to_owned(), path),
-                ("logo".to_owned(), extension_corpus("shapes.svg")),
+                ("anim".to_owned(), path.into()),
+                ("logo".to_owned(), extension_corpus("shapes.svg").into()),
             ]),
             ..Default::default()
         },
@@ -949,8 +955,8 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     write_paced_apng(&path, 32, FRAMES);
     let files = || alpha2_host_core::providers::ProviderFiles {
         originals: HashMap::from([
-            ("anim".to_owned(), path.clone()),
-            ("logo".to_owned(), extension_corpus("shapes.svg")),
+            ("anim".to_owned(), path.clone().into()),
+            ("logo".to_owned(), extension_corpus("shapes.svg").into()),
         ]),
         ..Default::default()
     };
@@ -1051,8 +1057,8 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
         &two_reader_project(),
         alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
-                ("anim".to_owned(), path),
-                ("logo".to_owned(), extension_corpus("shapes.svg")),
+                ("anim".to_owned(), path.into()),
+                ("logo".to_owned(), extension_corpus("shapes.svg").into()),
             ]),
             ..Default::default()
         },
@@ -1134,8 +1140,8 @@ fn different_provider_sources_are_drawn_at_once() {
         &two_reader_project(),
         alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
-                ("anim".to_owned(), path),
-                ("logo".to_owned(), extension_corpus("shapes.svg")),
+                ("anim".to_owned(), path.into()),
+                ("logo".to_owned(), extension_corpus("shapes.svg").into()),
             ]),
             ..Default::default()
         },
@@ -1224,9 +1230,9 @@ fn the_provider_sources_an_export_keeps_open_hold_at_most_their_budget() {
     let project = Project::from_json(&provider_succession_project().to_string()).expect("project");
     let files = || alpha2_host_core::providers::ProviderFiles {
         originals: HashMap::from([
-            ("gif".to_owned(), extension_corpus("animation.gif")),
-            ("gif2".to_owned(), extension_corpus("animation.gif")),
-            ("logo".to_owned(), extension_corpus("shapes.svg")),
+            ("gif".to_owned(), extension_corpus("animation.gif").into()),
+            ("gif2".to_owned(), extension_corpus("animation.gif").into()),
+            ("logo".to_owned(), extension_corpus("shapes.svg").into()),
         ]),
         ..Default::default()
     };

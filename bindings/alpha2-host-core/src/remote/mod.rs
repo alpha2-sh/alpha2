@@ -6,6 +6,7 @@
 
 mod cache;
 mod fetch;
+mod location;
 mod protocol;
 mod reader;
 
@@ -17,6 +18,7 @@ use std::time::Duration;
 
 use alpha2_media::CancelToken;
 
+pub use location::{SourceLocation, decode_error};
 pub use reader::{RemoteReader, RemoteStream};
 
 use cache::BlockCache;
@@ -389,6 +391,7 @@ impl Shared {
 
     fn waited(&self, since: Duration) {
         let waited = self.clock.now().saturating_sub(since);
+        crate::recovery::report_input_wait(waited);
         self.counters.read_wait_ns.fetch_add(
             u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX),
             Ordering::Relaxed,

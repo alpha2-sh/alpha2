@@ -30,7 +30,8 @@ mod container;
 mod log;
 
 pub use container::{
-    CreateOutputError, DemuxInput, OpenInputError, OutputFile, PathError, file_url, open_input,
+    CreateOutputError, CustomInput, DemuxInput, InputLocation, InputReader, OpenInputError,
+    OutputFile, PathError, file_url, open_input,
 };
 pub use log::{LogLine, LogMark, install_log_capture, log_detail, log_mark, log_since};
 
