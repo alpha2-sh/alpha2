@@ -14,7 +14,8 @@ use alpha2_model::{
 use alpha2_render::{
     BlendMode, CacheIntent, Color, CpuImage, CpuRenderer, EffectCatalog, EffectId, EffectInputs,
     EffectParams, EffectResources, EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID,
-    GraphError, GraphLayer, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
+    GraphError, GraphLayer, KEY_MIX_BACKDROP, KEY_MIX_EFFECT_ID, KEY_MIX_MASK, KEY_MIX_OPACITY,
+    KEY_MIX_UNMASKED_EFFECT_ID, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
     MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamType, ParamValue, PendingSourceWork,
     PlaneTarget, RenderCacheKey, RenderControls, RenderError, RenderGraph, RenderNodeId,
     RenderNodeKind, RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID,
@@ -1543,8 +1544,50 @@ fn step_node<'a>(
         StepOp::ShapeMask { input: from, masks } => {
             mask_node(graph, input(*from)?, masks, time, runtime, &context)?
         }
+        StepOp::KeyMix {
+            backdrop,
+            input: from,
+            mask,
+            opacity,
+        } => key_mix_node(
+            graph,
+            input(*from)?,
+            input(*backdrop)?,
+            mask.map(input).transpose()?,
+            sample_scalar(opacity, time, &context).clamp(0.0, 1.0),
+            runtime,
+        )?,
     };
     Ok(node)
+}
+
+fn key_mix_node(
+    graph: &mut RenderGraph<'_>,
+    picture: RenderNodeId,
+    backdrop: RenderNodeId,
+    mask: Option<RenderNodeId>,
+    opacity: f32,
+    runtime: EffectRuntime,
+) -> Result<RenderNodeId, RenderError> {
+    let mut inputs = EffectInputs::new();
+    inputs.insert(KEY_MIX_BACKDROP, backdrop);
+    let effect = match mask {
+        Some(mask) => {
+            inputs.insert(KEY_MIX_MASK, mask);
+            KEY_MIX_EFFECT_ID
+        }
+        None => KEY_MIX_UNMASKED_EFFECT_ID,
+    };
+    graph
+        .add_effect_with_inputs(
+            EffectId::from_static(effect, 1),
+            picture,
+            inputs,
+            EffectParams::new().with(KEY_MIX_OPACITY, ParamValue::Float(opacity)),
+            EffectResources::new(),
+            timeless(runtime),
+        )
+        .map_err(GraphError::into_render_error)
 }
 
 /// Graph width over height, for motion along spatial curves.

@@ -561,6 +561,10 @@ function walkPlaces(
             },
           );
           break;
+        case "key_mix":
+          if (isData(op.opacity))
+            found.push(["opacity", op.opacity, slotOf("scalar")]);
+          break;
         case "shape_mask":
           maskBindings(op.masks, "", found);
           break;
@@ -1165,6 +1169,8 @@ export function bindableProperties(
               accepts: ONE,
             }),
           );
+        case "key_mix":
+          return [{ property: "opacity", accepts: ONE }];
         case "shape_mask":
           return maskProperties(op.masks);
         case "group": {

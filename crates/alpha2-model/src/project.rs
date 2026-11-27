@@ -30,6 +30,8 @@ pub const MAX_CLIPS_PER_TRACK: usize = 4_096;
 pub const MAX_TRANSITIONS_PER_TRACK: usize = 4_096;
 /// Maximum number of effect resources in one project.
 pub const MAX_EFFECT_RESOURCES: usize = 10_000;
+/// The one transition a transition from or to an adjustment clip may run.
+pub const ADJUSTMENT_TRANSITION_ID: &str = "alpha2.transition.fade";
 
 /// A complete serializable project document.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -485,7 +487,7 @@ impl Project {
                     &transition.to_clip,
                 )?;
             }
-            ensure_transitions_are_supported(track)?;
+            ensure_transitions_are_supported(track, &index.sources)?;
             ensure_transition_effects_match_builtins(track)?;
             if !track.audio.validate() {
                 return Err(ModelError::InvalidTrackAudio {
@@ -497,7 +499,7 @@ impl Project {
         self.ensure_audio_effects_fit()?;
         crate::data_places::validate_data(self, &index.sources)?;
         ensure_ducking_is_acyclic(&self.timeline)?;
-        ensure_mattes_are_usable(&self.timeline)?;
+        ensure_mattes_are_usable(&self.timeline, &index.sources)?;
         ensure_frames_fit(&self.timeline, &index.sources, &inlined)?;
         crate::time_bound::ensure_times_are_writable(self)
     }
@@ -509,7 +511,15 @@ impl Project {
         let mut sources = HashMap::with_capacity(self.sources.len());
         for source in &self.sources {
             ensure_id(&source.id)?;
-            validate_source_content(source, (self.settings.width, self.settings.height))?;
+            if source.kind == MediaKind::Adjustment {
+                if *source != MediaSource::adjustment(source.id.clone()) {
+                    return Err(ModelError::InvalidAdjustmentSource {
+                        source: source.id.clone(),
+                    });
+                }
+            } else {
+                validate_source_content(source, (self.settings.width, self.settings.height))?;
+            }
             if sources.insert(&source.id, source).is_some() {
                 return Err(ModelError::DuplicateSourceId(source.id.clone()));
             }
@@ -653,7 +663,7 @@ fn validate_clip<'a>(
         at: issue.at,
         problem: issue.problem,
     })?;
-    if !visual && clip.matte.is_some() {
+    if (!visual || source.kind == MediaKind::Adjustment) && clip.matte.is_some() {
         return Err(ModelError::InvalidMatte {
             clip: clip.id.clone(),
         });
@@ -685,9 +695,13 @@ struct DocumentIndex<'a> {
     compositions: HashSet<&'a crate::CompositionId>,
 }
 
-/// Rejects transitions on audio tracks, transitions not fully covered by both clips, and a
-/// second transition between two clips.
-fn ensure_transitions_are_supported(track: &crate::Track) -> Result<(), ModelError> {
+/// Rejects transitions on audio tracks, transitions not fully covered by both clips, a second
+/// transition between two clips, and a transition from or to an adjustment clip that is not
+/// [`ADJUSTMENT_TRANSITION_ID`].
+fn ensure_transitions_are_supported(
+    track: &crate::Track,
+    sources: &HashMap<&alpha2_media::SourceId, &MediaSource>,
+) -> Result<(), ModelError> {
     let clips = track
         .clips
         .iter()
@@ -725,6 +739,40 @@ fn ensure_transitions_are_supported(track: &crate::Track) -> Result<(), ModelErr
                 track: track.id.clone(),
                 first: transition.from_clip.clone(),
                 second: transition.to_clip.clone(),
+            });
+        }
+    }
+    ensure_adjustments_only_fade(track, sources)
+}
+
+fn ensure_adjustments_only_fade(
+    track: &crate::Track,
+    sources: &HashMap<&alpha2_media::SourceId, &MediaSource>,
+) -> Result<(), ModelError> {
+    let adjustments = track
+        .clips
+        .iter()
+        .filter(|clip| {
+            sources
+                .get(&clip.source_id)
+                .is_some_and(|source| source.kind == MediaKind::Adjustment)
+        })
+        .map(|clip| &clip.id)
+        .collect::<HashSet<_>>();
+    if adjustments.is_empty() {
+        return Ok(());
+    }
+    for transition in &track.transitions {
+        if transition.effect.id == ADJUSTMENT_TRANSITION_ID {
+            continue;
+        }
+        if let Some(clip) = [&transition.from_clip, &transition.to_clip]
+            .into_iter()
+            .find(|clip| adjustments.contains(clip))
+        {
+            return Err(ModelError::InvalidAdjustmentTransition {
+                track: track.id.clone(),
+                clip: clip.clone(),
             });
         }
     }
@@ -828,17 +876,25 @@ fn tracks_on_cycles(next: &[Option<usize>]) -> Vec<bool> {
     cyclic
 }
 
-/// Rejects a matte that names no visual clip, the clip itself, a clip with its own matte, or
-/// a clip in a transition.
+/// Rejects a matte that names no visual clip, the clip itself, a clip with its own matte, an
+/// adjustment clip, or a clip in a transition.
 ///
 /// A chain of mattes would need an evaluation order the document does not give, and a clip
 /// in a transition is drawn by the transition.
-fn ensure_mattes_are_usable(timeline: &Timeline) -> Result<(), ModelError> {
+fn ensure_mattes_are_usable(
+    timeline: &Timeline,
+    sources: &HashMap<&alpha2_media::SourceId, &MediaSource>,
+) -> Result<(), ModelError> {
     let visual = timeline
         .tracks
         .iter()
         .filter(|track| track.kind == TrackKind::Video)
         .flat_map(|track| track.clips.iter().map(|clip| (&clip.id, clip)))
+        .filter(|(_, clip)| {
+            sources
+                .get(&clip.source_id)
+                .is_none_or(|source| source.kind != MediaKind::Adjustment)
+        })
         .collect::<HashMap<_, _>>();
     let in_transition = timeline
         .tracks

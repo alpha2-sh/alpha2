@@ -148,6 +148,17 @@ pub enum StepOp {
         /// Which property of the coverage image counts.
         mode: MatteMode,
     },
+    /// The backdrop replaced by the input by `k = opacity x mask alpha`.
+    KeyMix {
+        /// The replaced picture.
+        backdrop: usize,
+        /// The picture replacing it.
+        input: usize,
+        /// The coverage image; `None` covers everywhere.
+        mask: Option<usize>,
+        /// Scales the coverage, in `0..=1`.
+        opacity: Animated<f32>,
+    },
     /// The input kept inside shapes.
     ShapeMask {
         /// The masked image.
@@ -439,6 +450,7 @@ impl<'a> Planner<'a, '_> {
         generator_step(generator.clone(), start, self.lookup.canvas)
     }
 
+    #[expect(clippy::too_many_lines, reason = "one arm per node operation")]
     fn node_step(
         &mut self,
         scope: &Scope<'a>,
@@ -540,6 +552,17 @@ impl<'a> Planner<'a, '_> {
             NodeOp::ShapeMask { input, masks } => StepOp::ShapeMask {
                 input: at(input),
                 masks: masks.clone(),
+            },
+            NodeOp::KeyMix {
+                backdrop,
+                input,
+                mask,
+                opacity,
+            } => StepOp::KeyMix {
+                backdrop: at(backdrop),
+                input: at(input),
+                mask: mask.as_ref().map(|id| done[id]),
+                opacity: opacity.clone(),
             },
         };
         self.push(Step {
@@ -683,6 +706,7 @@ fn step_bytes(step: &Step) -> u64 {
             .map(|layer| size_of::<StepLayer>() + keyframe_bytes(&layer.opacity))
             .sum(),
         StepOp::ShapeMask { masks, .. } => masks.iter().map(mask_bytes).sum(),
+        StepOp::KeyMix { opacity, .. } => keyframe_bytes(opacity),
     };
     u64::try_from(size_of::<Step>() + step.node.as_str().len() + heap).unwrap_or(u64::MAX)
 }

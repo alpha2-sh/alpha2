@@ -27,6 +27,7 @@ fn renderer() -> Renderer {
     ]
     .into_iter()
     .chain(alpha2_render::mask_combine_definitions())
+    .chain(alpha2_render::key_mix_definitions())
     {
         pollster::block_on(renderer.register_effect(definition)).expect("effect compiles");
     }
@@ -197,6 +198,51 @@ fn a_matte_node_keeps_one_source_where_another_says() {
     let image = pixels(&renderer, &project(&inverted, "keep", "", ""), 90_000);
     assert_eq!(pixel(&image, 0, 0), [0, 0, 0, 255]);
     assert_eq!(pixel(&image, 3, 1), [255, 0, 0, 255]);
+}
+
+#[test]
+fn a_key_mix_node_replaces_the_backdrop_where_its_mask_says() {
+    let _lock = gpu_test_lock();
+    let renderer = renderer();
+    let cpu = alpha2_render::CpuRenderer::new(2);
+    let key_mix = |mask: &str, opacity: f32, bypass: bool| {
+        format!(
+            r#"{{ "id": "clip", "op": {{ "type": "clip" }} }},
+            {{ "id": "shape", "op": {{ "type": "media", "source_id": "left" }} }},
+            {{ "id": "red", "op": {{ "type": "media", "source_id": "red" }} }},
+            {{ "id": "mix", "bypass": {bypass}, "op": {{ "type": "key_mix", "backdrop": "red", "input": "clip"
+              {mask}, "opacity": {{ "mode": "constant", "value": {opacity} }} }} }}"#
+        )
+    };
+    let drawn = |nodes: &str| {
+        let project = project(nodes, "mix", "", "");
+        let gpu = pixels(&renderer, &project, 90_000);
+        let frame = project.evaluate(MediaTime(90_000)).expect("evaluates");
+        let on_cpu = cpu
+            .render_frame(RenderSize::new(W, H).expect("size"), &frame, &MissingFrames)
+            .expect("frame renders")
+            .texture
+            .expect("complete")
+            .read_rgba8();
+        assert_rgba8_near(&gpu, &on_cpu, 1);
+        gpu
+    };
+    let image = drawn(&key_mix(r#", "mask": "shape""#, 1.0, false));
+    assert_eq!(pixel(&image, 0, 0), [255, 255, 255, 255], "covered");
+    assert_eq!(pixel(&image, 3, 1), [255, 0, 0, 255], "uncovered");
+    let image = drawn(&key_mix(r#", "mask": "shape""#, 0.5, false));
+    assert_rgba8_near(&pixel(&image, 0, 0), &[255, 128, 128, 255], 1);
+    assert_eq!(pixel(&image, 3, 1), [255, 0, 0, 255]);
+    let image = drawn(&key_mix("", 0.5, false));
+    assert_rgba8_near(&pixel(&image, 3, 1), &[255, 128, 128, 255], 1);
+    for nodes in [
+        key_mix("", 0.0, false),
+        key_mix(r#", "mask": "shape""#, 1.0, true),
+    ] {
+        let image = drawn(&nodes);
+        assert_eq!(pixel(&image, 0, 0), [255, 0, 0, 255]);
+        assert_eq!(pixel(&image, 3, 1), [255, 0, 0, 255]);
+    }
 }
 
 #[test]

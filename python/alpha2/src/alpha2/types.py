@@ -443,7 +443,7 @@ MASK_MODE_VALUES: tuple[MaskMode, ...] = ("add", "subtract", "intersect")
 MATTE_MODE_VALUES: tuple[MatteMode, ...] = ("alpha", "alpha_inverted", "luma", "luma_inverted")
 """Every `MatteMode`, in the model's order."""
 
-MEDIA_KIND_VALUES: tuple[MediaKind, ...] = ("video", "audio", "image", "generated", "composition")
+MEDIA_KIND_VALUES: tuple[MediaKind, ...] = ("video", "audio", "image", "generated", "composition", "adjustment")
 """Every `MediaKind`, in the model's order."""
 
 MISSING_FRAMES_VALUES: tuple[MissingFrames, ...] = ("reject", "hold", "blank")
@@ -1972,7 +1972,7 @@ class MediaFingerprint(TypedDict):
     """The streams the file carries."""
 
 
-MediaKind: TypeAlias = Literal["video", "audio", "image", "generated", "composition"]
+MediaKind: TypeAlias = Literal["video", "audio", "image", "generated", "composition", "adjustment"]
 """The payload domain of a source."""
 
 
@@ -2013,7 +2013,8 @@ class MediaSource(TypedDict):
     """Media payload domain."""
     locator: NotRequired[str]
     """Opaque URI or host locator; the engine does not open it. Required except for
-    `MediaKind::Generated` and `MediaKind::Composition` sources.
+    `MediaKind::Generated`, `MediaKind::Composition` and `MediaKind::Adjustment` sources,
+    which have none.
 
     Default: `""`.
     """
@@ -2160,6 +2161,36 @@ class NodeOpMatte(TypedDict):
     type: Literal["matte"]
 
 
+class NodeOpKeyMix(TypedDict):
+    """The backdrop replaced by the input by `k = opacity x mask alpha`, as
+    `(1 - k) backdrop + k input` on premultiplied values: exactly the backdrop where `k` is 0
+    and the input where it is 1 (Nuke's KeyMix with an opacity). Bypassed, it passes the
+    backdrop through.
+    """
+
+    backdrop: NotRequired[NodeId | None]
+    """The picture replaced.
+
+    Default: `null`.
+    """
+    input: NotRequired[NodeId | None]
+    """The picture that replaces it.
+
+    Default: `null`.
+    """
+    mask: NotRequired[NodeId | None]
+    """The image whose alpha is coverage; unconnected, the coverage is `opacity` everywhere.
+
+    Default: `null`.
+    """
+    opacity: NotRequired[Animated[float]]
+    """Scales the coverage, in `0..=1`.
+
+    Default: `{"mode":"constant","value":1}`.
+    """
+    type: Literal["key_mix"]
+
+
 class NodeOpShapeMask(TypedDict):
     """The input kept inside shapes."""
 
@@ -2202,7 +2233,7 @@ class NodeOpGroupInput(TypedDict):
     type: Literal["group_input"]
 
 
-NodeOp: TypeAlias = "NodeOpClip | NodeOpMedia | NodeOpGenerator | NodeOpEffect | NodeOpTransition | NodeOpTransform | NodeOpMerge | NodeOpMatte | NodeOpShapeMask | NodeOpGroup | NodeOpGroupInput"
+NodeOp: TypeAlias = "NodeOpClip | NodeOpMedia | NodeOpGenerator | NodeOpEffect | NodeOpTransition | NodeOpTransform | NodeOpMerge | NodeOpMatte | NodeOpKeyMix | NodeOpShapeMask | NodeOpGroup | NodeOpGroupInput"
 """The operation of a `CompositionNode`.
 
 Animated settings are keyed in composition time (see `ClipComposition`).

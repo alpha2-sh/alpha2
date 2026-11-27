@@ -210,6 +210,9 @@ fn node_slot<'a>(op: &'a mut alpha2_model::NodeOp, property: &str) -> Option<Slo
             "transform.opacity" => Slot::Scalar(&mut transform.opacity, Domain::UNIT),
             _ => return None,
         },
+        NodeOp::KeyMix { opacity, .. } if property == "opacity" => {
+            Slot::Scalar(opacity, Domain::UNIT)
+        }
         NodeOp::Merge { layers } => {
             let index = property
                 .strip_prefix("layers[")?

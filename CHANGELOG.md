@@ -6,6 +6,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Breaking:** a composition `key_mix` node replaces its `backdrop` by its `input` by its
+  `opacity` times its `mask`'s alpha (`(1 - k) backdrop + k input`, the whole picture when `mask`
+  is unconnected); bypassed, it passes the backdrop through. Hosts and engines of 0.7.x refuse
+  documents that use it.
+- **Breaking:** a source of kind `adjustment` (an id and its kind, nothing else) backs adjustment
+  clips on video tracks. Such a clip takes no matte and is no clip's matte, and a transition from
+  or to it is `alpha2.transition.fade`. Hosts and engines of 0.7.x refuse documents that use it.
 - `alpha2.transcribe` 1.1.0 runs whisper.cpp on the GPU on Apple silicon (Metal), about 1.2x to
   2.6x faster there by model size. A new param `device` (`auto`, the default, or `cpu`) turns it
   off. Words and times can differ from the CPU's in a fraction of a percent of words, as they do

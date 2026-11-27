@@ -125,7 +125,11 @@ impl TrackKind {
             (self, source),
             (
                 Self::Video,
-                MediaKind::Video | MediaKind::Image | MediaKind::Generated | MediaKind::Composition
+                MediaKind::Video
+                    | MediaKind::Image
+                    | MediaKind::Generated
+                    | MediaKind::Composition
+                    | MediaKind::Adjustment
             ) | (Self::Audio, MediaKind::Audio)
         )
     }

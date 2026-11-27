@@ -13083,7 +13083,7 @@
     "name": "composition-unknown-operation",
     "valid": false,
     "rejected_by": "schema",
-    "problems": ["project.compositions[0].nodes[0].op.type must be one of \"clip\", \"media\", \"generator\", \"effect\", \"transition\", \"transform\", \"merge\", \"matte\", \"shape_mask\", \"group\", \"group_input\""],
+    "problems": ["project.compositions[0].nodes[0].op.type must be one of \"clip\", \"media\", \"generator\", \"effect\", \"transition\", \"transform\", \"merge\", \"matte\", \"key_mix\", \"shape_mask\", \"group\", \"group_input\""],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -37624,6 +37624,1171 @@
           "anchor": { "type": "timeline" },
           "kind": "words",
           "words": [{ "start": 0, "end": 6000, "text": "hi" }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "adjustment-layer-over-the-scene",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-source-with-a-locator",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source adjust is not a valid adjustment source: it has only an id and its kind"
+    ],
+    "error": "source adjust is not a valid adjustment source: it has only an id and its kind",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "adjust",
+          "kind": "adjustment",
+          "locator": "adjust.mov"
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-source-with-audio",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source adjust is not a valid adjustment source: it has only an id and its kind"
+    ],
+    "error": "source adjust is not a valid adjustment source: it has only an id and its kind",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment", "has_audio": true }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-source-with-a-fingerprint",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source adjust is not a valid adjustment source: it has only an id and its kind"
+    ],
+    "error": "source adjust is not a valid adjustment source: it has only an id and its kind",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment", "fingerprint": {} }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-clip-on-an-audio-track",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip x cannot sit on a audio track"],
+    "error": "clip x cannot use source adjust on track t3",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          },
+          {
+            "id": "t3",
+            "name": "T3",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "x",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-clip-with-a-matte",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip adj has an invalid matte"],
+    "error": "clip adj has an invalid matte",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" },
+                "matte": { "source": "c1", "mode": "alpha" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-clip-as-a-matte",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip c1 has an invalid matte"],
+    "error": "clip c1 has an invalid matte",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "matte": { "source": "adj", "mode": "luma" }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-fades-into-a-clip",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v",
+                "timeline_range": { "start": 60000, "end": 180000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": [
+              {
+                "from_clip": "adj",
+                "to_clip": "c2",
+                "timeline_range": { "start": 60000, "end": 120000 },
+                "easing": { "type": "linear" },
+                "effect": { "id": "alpha2.transition.fade", "version": 1 }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-transition-other-than-a-fade",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "a transition on track t2 names adjustment clip adj, which only fades"
+    ],
+    "error": "a transition on track t2 names adjustment clip adj, which only fades",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v",
+                "timeline_range": { "start": 60000, "end": 180000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": [
+              {
+                "from_clip": "adj",
+                "to_clip": "c2",
+                "timeline_range": { "start": 60000, "end": 120000 },
+                "easing": { "type": "linear" },
+                "effect": { "id": "alpha2.transition.directional", "version": 1 }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "adjustment-source-in-a-media-node",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["node m of composition shown cannot show source adjust"],
+    "error": "node m of composition shown cannot show source adjust",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        },
+        {
+          "id": "shown",
+          "nodes": [
+            {
+              "id": "m",
+              "op": { "type": "media", "source_id": "adjust" }
+            }
+          ],
+          "output": "m"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "composition-key-mix-with-a-mask",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "key_mix",
+                "backdrop": "clip",
+                "input": "blur",
+                "mask": "clip",
+                "opacity": { "mode": "constant", "value": 0.5 }
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "composition-key-mix-without-a-mask",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            },
+            {
+              "id": "mix",
+              "op": { "type": "key_mix", "backdrop": "clip", "input": "blur" }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "composition-key-mix-opacity-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["node mix of composition look has an invalid setting"],
+    "error": "node mix of composition look has an invalid setting",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "key_mix",
+                "backdrop": "clip",
+                "input": "blur",
+                "opacity": { "mode": "constant", "value": 1.5 }
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "composition-key-mix-mask-naming-an-absent-node",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "input mask of node mix in composition look names unknown node nowhere"
+    ],
+    "error": "input mask of node mix in composition look names unknown node nowhere",
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "key_mix",
+                "backdrop": "clip",
+                "input": "blur",
+                "mask": "nowhere"
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "composition-key-mix-opacity-follows-data",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "adjusted",
+      "name": "Adjusted",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "a.mp4" },
+        { "id": "adjust", "kind": "adjustment" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            },
+            {
+              "id": "media",
+              "op": { "type": "media", "source_id": "v" }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "key_mix",
+                "backdrop": "clip",
+                "input": "blur",
+                "opacity": {
+                  "mode": "data",
+                  "data": "level",
+                  "channel": "rms",
+                  "via": { "node": "media" }
+                }
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ]
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "adj",
+                "source_id": "adjust",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ]
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "level",
+          "anchor": { "type": "source", "source_id": "v" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
         }
       ]
     }

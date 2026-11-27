@@ -11,7 +11,8 @@ pub struct MediaSource {
     /// Stable source identity.
     pub id: SourceId,
     /// Opaque URI or host locator; the engine does not open it. Required except for
-    /// [`MediaKind::Generated`] and [`MediaKind::Composition`] sources.
+    /// [`MediaKind::Generated`], [`MediaKind::Composition`] and [`MediaKind::Adjustment`] sources,
+    /// which have none.
     #[serde(default)]
     pub locator: String,
     /// Media payload domain.
@@ -94,11 +95,31 @@ impl MediaSource {
         }
     }
 
+    /// Creates an adjustment source: its clips have no picture of their own and apply their
+    /// composition to what is composited beneath them.
+    #[must_use]
+    pub const fn adjustment(id: SourceId) -> Self {
+        Self {
+            id,
+            locator: String::new(),
+            kind: MediaKind::Adjustment,
+            color_metadata: None,
+            has_audio: false,
+            generator: None,
+            composition: None,
+            fingerprint: None,
+            provider: None,
+        }
+    }
+
     /// Returns whether a host supplies this source's media; the engine draws generated and
-    /// composition sources itself.
+    /// composition sources itself, and an adjustment source has no media.
     #[must_use]
     pub const fn is_host_supplied(&self) -> bool {
-        !matches!(self.kind, MediaKind::Generated | MediaKind::Composition)
+        !matches!(
+            self.kind,
+            MediaKind::Generated | MediaKind::Composition | MediaKind::Adjustment
+        )
     }
 
     /// Returns whether this source can contribute samples to the audio mix.
@@ -130,4 +151,8 @@ pub enum MediaKind {
     /// A composition of the project, drawn with the source time as its own time. The host
     /// supplies only the media its nodes read.
     Composition,
+    /// No picture of its own: a clip of it on a video track applies its composition, masks,
+    /// opacity and blend mode to everything composited beneath it, its `clip` nodes reading that
+    /// backdrop. The source has only an ID and this kind.
+    Adjustment,
 }

@@ -143,13 +143,18 @@ impl CompositionNode {
     }
 
     /// The inputs drawing the node reads, in input order: only its [`NodeOp::bypass_input`] when
-    /// bypassed (none for a merge without layers), every input otherwise.
+    /// bypassed (none for a merge without layers), every input otherwise except an unconnected
+    /// key mix mask.
     #[must_use]
     pub fn needed_inputs(&self) -> Vec<NodeInput<'_>> {
         if self.bypass {
             return self.op.bypass_input().into_iter().collect();
         }
-        self.op.inputs()
+        let mut inputs = self.op.inputs();
+        if let NodeOp::KeyMix { mask: None, .. } = self.op {
+            inputs.retain(|input| *input != NodeInput::Named("mask", None));
+        }
+        inputs
     }
 }
 
@@ -235,6 +240,24 @@ pub enum NodeOp {
         matte: Option<NodeId>,
         /// Which property of the matte image is coverage.
         mode: MatteMode,
+    },
+    /// The backdrop replaced by the input by `k = opacity x mask alpha`, as
+    /// `(1 - k) backdrop + k input` on premultiplied values: exactly the backdrop where `k` is 0
+    /// and the input where it is 1 (Nuke's `KeyMix` with an opacity). Bypassed, it passes the
+    /// backdrop through.
+    KeyMix {
+        /// The picture replaced.
+        #[serde(default)]
+        backdrop: Option<NodeId>,
+        /// The picture that replaces it.
+        #[serde(default)]
+        input: Option<NodeId>,
+        /// The image whose alpha is coverage; unconnected, the coverage is `opacity` everywhere.
+        #[serde(default)]
+        mask: Option<NodeId>,
+        /// Scales the coverage, in `0..=1`.
+        #[serde(default = "opaque")]
+        opacity: Animated<f32>,
     },
     /// The input kept inside shapes.
     ShapeMask {
@@ -433,7 +456,7 @@ impl<'a> CompositionReads<'a> {
 /// One named input of a node, as a node's inputs are listed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NodeInput<'a> {
-    /// A named input: `input`, `from`, `to`, or `matte`.
+    /// A named input: `input`, `from`, `to`, `matte`, `backdrop` or `mask`.
     Named(&'static str, Option<&'a NodeId>),
     /// The input of a merge layer, by layer index.
     Layer(usize, Option<&'a NodeId>),
@@ -502,6 +525,16 @@ impl NodeOp {
                 NodeInput::Named("input", input.as_ref()),
                 NodeInput::Named("matte", matte.as_ref()),
             ],
+            Self::KeyMix {
+                backdrop,
+                input,
+                mask,
+                ..
+            } => vec![
+                NodeInput::Named("backdrop", backdrop.as_ref()),
+                NodeInput::Named("input", input.as_ref()),
+                NodeInput::Named("mask", mask.as_ref()),
+            ],
             Self::Merge { layers } => layers
                 .iter()
                 .enumerate()
@@ -511,7 +544,8 @@ impl NodeOp {
     }
 
     /// The input a bypassed node passes through: `input` for one-input operations and mattes,
-    /// `from` for a transition, a merge's bottom layer, and a group's first input. `None` for
+    /// `from` for a transition, `backdrop` for a key mix, a merge's bottom layer, and a group's
+    /// first input. `None` for
     /// operations without inputs and merges without layers.
     #[must_use]
     pub fn bypass_input(&self) -> Option<NodeInput<'_>> {
@@ -1069,6 +1103,7 @@ fn validate_node(
         NodeOp::Merge { layers } => {
             layers.len() <= MAX_MERGE_LAYERS && layers.iter().all(|layer| unit(&layer.opacity))
         }
+        NodeOp::KeyMix { opacity, .. } => unit(opacity),
         NodeOp::ShapeMask { masks, .. } => {
             crate::mask::validate_masks(masks).map_err(shape_error)?;
             masks.len() <= crate::MAX_CLIP_MASKS

@@ -4674,6 +4674,11 @@
           "const": "composition",
           "description": "A composition of the project, drawn with the source time as its own time. The host\nsupplies only the media its nodes read.",
           "type": "string"
+        },
+        {
+          "const": "adjustment",
+          "description": "No picture of its own: a clip of it on a video track applies its composition, masks,\nopacity and blend mode to everything composited beneath it, its `clip` nodes reading that\nbackdrop. The source has only an ID and this kind.",
+          "type": "string"
         }
       ]
     },
@@ -4742,7 +4747,7 @@
         },
         "locator": {
           "default": "",
-          "description": "Opaque URI or host locator; the engine does not open it. Required except for\n[`MediaKind::Generated`] and [`MediaKind::Composition`] sources.",
+          "description": "Opaque URI or host locator; the engine does not open it. Required except for\n[`MediaKind::Generated`], [`MediaKind::Composition`] and [`MediaKind::Adjustment`] sources,\nwhich have none.",
           "type": "string"
         },
         "provider": {
@@ -5103,6 +5108,64 @@
           "required": [
             "type",
             "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The backdrop replaced by the input by `k = opacity x mask alpha`, as\n`(1 - k) backdrop + k input` on premultiplied values: exactly the backdrop where `k` is 0\nand the input where it is 1 (Nuke's KeyMix with an opacity). Bypassed, it passes the\nbackdrop through.",
+          "properties": {
+            "backdrop": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The picture replaced."
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The picture that replaces it."
+            },
+            "mask": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image whose alpha is coverage; unconnected, the coverage is `opacity` everywhere."
+            },
+            "opacity": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 1.0
+              },
+              "description": "Scales the coverage, in `0..=1`."
+            },
+            "type": {
+              "const": "key_mix",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
           "type": "object"
         },

@@ -44,6 +44,12 @@ fn check(plan: &CompositionPlan) {
             StepOp::Transition { from, to, .. } => vec![*from, *to],
             StepOp::Matte { input, matte, .. } => vec![*input, *matte],
             StepOp::Merge { layers } => layers.iter().map(|layer| layer.input).collect(),
+            StepOp::KeyMix {
+                backdrop,
+                input,
+                mask,
+                ..
+            } => [*backdrop, *input].into_iter().chain(*mask).collect(),
         };
         assert!(inputs.iter().all(|&input| input < index), "{plan:?}");
     }

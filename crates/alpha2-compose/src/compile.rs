@@ -3716,6 +3716,16 @@ fn remap_inputs(op: &mut NodeOp, ids: &BTreeMap<NodeId, NodeId>) {
             rename(input);
             rename(matte);
         }
+        NodeOp::KeyMix {
+            backdrop,
+            input,
+            mask,
+            ..
+        } => {
+            rename(backdrop);
+            rename(input);
+            rename(mask);
+        }
         NodeOp::Group { inputs, .. } => inputs.iter_mut().for_each(rename),
         _ => {}
     }
