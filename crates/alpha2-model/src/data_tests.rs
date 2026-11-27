@@ -875,6 +875,7 @@ mod schema {
         ),
         ("MergeLayer.opacity", "composition"),
         ("NodeOp[transition].progress", "composition"),
+        ("NodeOp[key_mix].opacity", "composition"),
         ("NodeOp[group].controls", "composition"),
         (
             "ShapeGeometry[rectangle].center",
