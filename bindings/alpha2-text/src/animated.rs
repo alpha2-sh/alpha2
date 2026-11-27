@@ -91,6 +91,21 @@ pub struct ColorMix {
 /// Largest scale of a [`ClusterState`] on either axis.
 pub const MAX_CLUSTER_SCALE: f32 = 10.0;
 
+/// The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+/// Grouping.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum ClusterGrouping {
+    /// Each cluster about its own pivot.
+    #[default]
+    Character,
+    /// Each word of [`ClusterInfo::word`]; a cluster in no word is its own group.
+    Word,
+    /// Each line.
+    Line,
+    /// The whole text.
+    All,
+}
+
 /// Animation state of one cluster.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ClusterState {
@@ -108,6 +123,9 @@ pub struct ClusterState {
     pub stroke: Option<ColorMix>,
     /// Extra space after the cluster in pixels, like letter spacing.
     pub tracking: f32,
+    /// How much its advance widens, in `[0, MAX_CLUSTER_SCALE]`: mapped about its group's pivot,
+    /// the advances of a group push the groups after it along their line, which is re-aligned.
+    pub advance_scale: f32,
 }
 
 impl ClusterState {
@@ -120,6 +138,7 @@ impl ClusterState {
         fill: None,
         stroke: None,
         tracking: 0.0,
+        advance_scale: 1.0,
     };
 
     /// Whether the state changes nothing.
@@ -143,6 +162,7 @@ impl ClusterState {
             && self.rotation.is_finite()
             && (0.0..=1.0).contains(&self.opacity)
             && self.tracking.is_finite()
+            && (0.0..=MAX_CLUSTER_SCALE).contains(&self.advance_scale)
             && mix(&self.fill)
             && mix(&self.stroke)
     }
@@ -599,34 +619,18 @@ impl TextRasterizer {
         let mut decorations = paint::LinePaint::default();
         let mut drawings = HashMap::<DrawingKey, Drawing>::new();
         let (mut ink_ascent, mut ink_descent) = (layout.ascent, layout.descent);
+        let pushed = Pushed::of(&layout, &shaping, request, states);
         for (index, line) in layout.lines.iter().enumerate() {
             let baseline = layout.baseline(index);
-            // Tracking goes after each cluster except the line's last, in visual order.
-            let mut shifts = Vec::with_capacity(line.glyphs.len());
-            let mut shift = 0.0_f32;
-            let mut previous: Option<usize> = None;
-            for glyph in &line.glyphs {
-                if let Some(before) = previous.filter(|&before| before != glyph.cluster) {
-                    shift += states[before].tracking;
-                }
-                previous = Some(glyph.cluster);
-                shifts.push(shift);
-            }
-            let width = line.width + shift;
-            let offset = line_start(&layout, line.rtl, width, request);
-            // Pivot is the middle of the advance and of the em box.
+            let (shifts, offset) = (&pushed.shifts[index], pushed.offsets[index]);
             let mut extents = HashMap::<usize, (f32, f32)>::new();
-            for (glyph, shift) in line.glyphs.iter().zip(&shifts) {
-                let left = glyph.x + shift + offset;
+            for (glyph, shift) in line.glyphs.iter().zip(shifts) {
+                let left = glyph.x + shift + offset + pushed.moves[glyph.cluster];
                 let extent = extents.entry(glyph.cluster).or_insert((left, left));
                 *extent = (extent.0.min(left), extent.1.max(left + glyph.advance));
             }
-            for (glyph, shift) in line.glyphs.iter().zip(&shifts) {
-                let (left, right) = extents[&glyph.cluster];
-                let affine = cluster_affine(
-                    &states[glyph.cluster],
-                    [f32::midpoint(left, right), baseline - glyph.size * 0.3],
-                );
+            for (glyph, shift) in line.glyphs.iter().zip(shifts) {
+                let affine = cluster_affine(&states[glyph.cluster], pushed.pivots[glyph.cluster]);
                 affines[glyph.cluster] = affine;
                 let key = drawing_key(&shaping, glyph);
                 let drawing = drawings
@@ -643,7 +647,7 @@ impl TextRasterizer {
                 slot.0.push(Placed {
                     key,
                     origin: [
-                        glyph.x + shift + glyph.x_offset + offset,
+                        glyph.x + shift + glyph.x_offset + offset + pushed.moves[glyph.cluster],
                         baseline - glyph.y_offset,
                     ],
                     scale,
@@ -965,6 +969,246 @@ impl TextRasterizer {
             pixels: HostTexturePixels { texture, rgba8 },
             background,
         })
+    }
+}
+
+/// Where an animated text's clusters go along their lines: tracked, then pushed apart by their
+/// advance scales, group by group in visual order, and the line re-aligned.
+struct Pushed {
+    /// Per line, each glyph's tracking shift, in visual order.
+    shifts: Vec<Vec<f32>>,
+    /// Per line, where it starts once tracked and pushed.
+    offsets: Vec<f32>,
+    /// Per cluster, how far its group moved along its line, from its tracked place at the
+    /// line's final start.
+    moves: Vec<f32>,
+    /// Per cluster, the point it scales and turns about.
+    pivots: Vec<[f32; 2]>,
+}
+
+impl Pushed {
+    fn of(
+        layout: &Layout,
+        shaping: &super::runs::Shaping,
+        request: &TextRasterRequest,
+        states: &[ClusterState],
+    ) -> Self {
+        let tracked = Tracked::of(layout, request, states);
+        let groups = group_ids(layout, shaping, request);
+        let mut boxes = vec![GroupBox::default(); groups.iter().max().map_or(0, |last| last + 1)];
+        for (cluster, extent) in tracked.extents.iter().enumerate() {
+            if let Some(extent) = extent {
+                let line = layout.clusters[cluster].line;
+                let size = tracked.sizes[cluster];
+                boxes[groups[cluster]].add(*extent, line, layout.baseline(line), size);
+            }
+        }
+        let group_pivots = boxes
+            .iter()
+            .map(|group| group.pivot(request.animator_pivot))
+            .collect::<Vec<_>>();
+        let mut moves = vec![0.0_f32; states.len()];
+        let mut pivots = groups
+            .iter()
+            .map(|&group| group_pivots[group])
+            .collect::<Vec<_>>();
+        let mut offsets = Vec::with_capacity(layout.lines.len());
+        for (line, &(tracked_offset, shift)) in layout.lines.iter().zip(&tracked.lines) {
+            let (group_moves, pushed) =
+                push_line(line, &tracked.extents, &groups, &group_pivots, states);
+            let offset = if pushed == 0.0 {
+                tracked_offset
+            } else {
+                line_start(layout, line.rtl, line.width + shift + pushed, request)
+            };
+            for glyph in &line.glyphs {
+                let (cluster, group) = (glyph.cluster, groups[glyph.cluster]);
+                let group_move = group_moves.get(&group).copied().unwrap_or(0.0);
+                moves[cluster] = group_move;
+                pivots[cluster][0] =
+                    group_pivots[group][0] + group_move + (offset - tracked_offset);
+            }
+            offsets.push(offset);
+        }
+        Self {
+            shifts: tracked.shifts,
+            offsets,
+            moves,
+            pivots,
+        }
+    }
+}
+
+/// An animated text's clusters placed with their tracking, before any push.
+struct Tracked {
+    /// Per line, each glyph's tracking shift, in visual order.
+    shifts: Vec<Vec<f32>>,
+    /// Per line, where it starts once tracked, and its tracking in all.
+    lines: Vec<(f32, f32)>,
+    /// Per cluster, its advance's extent from the layout box's left edge; `None` without glyphs.
+    extents: Vec<Option<(f32, f32)>>,
+    /// Per cluster, its glyphs' size.
+    sizes: Vec<f32>,
+}
+
+impl Tracked {
+    fn of(layout: &Layout, request: &TextRasterRequest, states: &[ClusterState]) -> Self {
+        let mut tracked = Self {
+            shifts: Vec::with_capacity(layout.lines.len()),
+            lines: Vec::with_capacity(layout.lines.len()),
+            extents: vec![None; states.len()],
+            sizes: vec![0.0; states.len()],
+        };
+        for line in &layout.lines {
+            // Tracking goes after each cluster except the line's last, in visual order.
+            let mut shifts = Vec::with_capacity(line.glyphs.len());
+            let mut shift = 0.0_f32;
+            let mut previous: Option<usize> = None;
+            for glyph in &line.glyphs {
+                if let Some(before) = previous.filter(|&before| before != glyph.cluster) {
+                    shift += states[before].tracking;
+                }
+                previous = Some(glyph.cluster);
+                shifts.push(shift);
+            }
+            let offset = line_start(layout, line.rtl, line.width + shift, request);
+            for (glyph, shift) in line.glyphs.iter().zip(&shifts) {
+                let left = glyph.x + shift + offset;
+                let extent = tracked.extents[glyph.cluster].get_or_insert((left, left));
+                *extent = (extent.0.min(left), extent.1.max(left + glyph.advance));
+                tracked.sizes[glyph.cluster] = glyph.size;
+            }
+            tracked.shifts.push(shifts);
+            tracked.lines.push((offset, shift));
+        }
+        tracked
+    }
+}
+
+/// How far each group on `line` moves, in visual order, as the groups before it grow by their
+/// clusters' advance scales about their pivots; and how much the line grew in all.
+fn push_line(
+    line: &super::LaidLine,
+    extents: &[Option<(f32, f32)>],
+    groups: &[usize],
+    pivots: &[[f32; 2]],
+    states: &[ClusterState],
+) -> (HashMap<usize, f32>, f32) {
+    let mut order = Vec::<usize>::new();
+    let mut spans = HashMap::<usize, [f32; 4]>::new();
+    let mut seen = std::collections::HashSet::new();
+    for glyph in &line.glyphs {
+        let cluster = glyph.cluster;
+        let Some((left, right)) = extents[cluster].filter(|_| seen.insert(cluster)) else {
+            continue;
+        };
+        let group = groups[cluster];
+        let scale = states[cluster].advance_scale;
+        let mapped = if scale - 1.0 == 0.0 {
+            (left, right)
+        } else {
+            let pivot = pivots[group][0];
+            (
+                pivot + (left - pivot) * scale,
+                pivot + (right - pivot) * scale,
+            )
+        };
+        let span = spans.entry(group).or_insert_with(|| {
+            order.push(group);
+            [left, right, mapped.0, mapped.1]
+        });
+        *span = [
+            span[0].min(left),
+            span[1].max(right),
+            span[2].min(mapped.0),
+            span[3].max(mapped.1),
+        ];
+    }
+    let mut pushed = 0.0_f32;
+    let mut moves = HashMap::<usize, f32>::new();
+    for group in order {
+        let [left, right, mapped_left, mapped_right] = spans[&group];
+        moves.insert(group, pushed + (left - mapped_left));
+        pushed += (left - mapped_left) + (mapped_right - right);
+    }
+    (moves, pushed)
+}
+
+/// Each cluster's group under the request's grouping, numbered from 0.
+fn group_ids(
+    layout: &Layout,
+    shaping: &super::runs::Shaping,
+    request: &TextRasterRequest,
+) -> Vec<usize> {
+    let count = layout.clusters.len();
+    match request.animator_grouping {
+        ClusterGrouping::Character => (0..count).collect(),
+        ClusterGrouping::Line => layout.clusters.iter().map(|cluster| cluster.line).collect(),
+        ClusterGrouping::All => vec![0; count],
+        ClusterGrouping::Word => {
+            let clusters = text_layout(layout, shaping, request).clusters;
+            let words = clusters
+                .iter()
+                .filter_map(|cluster| cluster.word)
+                .max()
+                .map_or(0, |last| last as usize + 1);
+            clusters
+                .iter()
+                .enumerate()
+                .map(|(index, cluster)| cluster.word.map_or(words + index, |word| word as usize))
+                .collect()
+        }
+    }
+}
+
+/// A group's box: the union of its clusters' advances by their em boxes.
+#[derive(Copy, Clone, Debug, Default)]
+struct GroupBox {
+    /// `[left, right, top, bottom]`, once a cluster is added.
+    bounds: Option<[f32; 4]>,
+    /// Its one line's baseline and largest size, while it lies on one line.
+    line: Option<(usize, f32, f32)>,
+    clusters: usize,
+}
+
+impl GroupBox {
+    fn add(&mut self, (left, right): (f32, f32), line: usize, baseline: f32, size: f32) {
+        let (top, bottom) = (baseline - 0.8 * size, baseline + 0.2 * size);
+        self.bounds = Some(self.bounds.map_or([left, right, top, bottom], |held| {
+            [
+                held[0].min(left),
+                held[1].max(right),
+                held[2].min(top),
+                held[3].max(bottom),
+            ]
+        }));
+        self.line = match self.line {
+            None if self.clusters == 0 => Some((line, baseline, size)),
+            Some((held, baseline, largest)) if held == line => {
+                Some((line, baseline, largest.max(size)))
+            }
+            _ => None,
+        };
+        self.clusters += 1;
+    }
+
+    /// The point at fractions `[x, y]` of the box. On one line every em box shares the baseline,
+    /// so the box is the largest one's.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a point between two f32 values"
+    )]
+    fn pivot(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        let Some([left, right, top, bottom]) = self.bounds else {
+            return [0.0; 2];
+        };
+        let across =
+            (f64::from(left) * f64::from(1.0 - x) + f64::from(right) * f64::from(x)) as f32;
+        let down = match self.line {
+            Some((_, baseline, size)) => baseline - size * (0.8 - y),
+            None => top + (bottom - top) * y,
+        };
+        [across, down]
     }
 }
 

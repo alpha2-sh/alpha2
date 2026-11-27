@@ -36,6 +36,17 @@ All notable changes to this project are documented in this file.
   `offset`, as SVG `stroke-dasharray`) drawn inside the box and hidden where another line's box
   covers it. A number padding draws the same box as in 0.7.x; hosts and engines of 0.7.x refuse
   documents that use the new fields.
+- Text animators: `advance_follows_scale` makes a character's advance follow its animator's
+  horizontal scale, pushing the rest of its line apart (After Effects' Scale with Tracking,
+  computed exactly), the line re-aligned and never re-broken; a scale below 1 pulls the others
+  in. Text styles, caption style patches and layout nodes (`text_animator_grouping`,
+  `text_animator_pivot`) gain `animator_grouping` (`character`, the default, `word`, `line`,
+  `all`, as After Effects' Anchor Point Grouping) and `animator_pivot` (`{ x, y }` fractions of
+  each group's box, as CSS `transform-origin`; `{ x: 0.5, y: 0.8 }` is the baseline's centre).
+  A text with a pushing animator wraps, fits and clamps at its width over the largest factor its
+  animators can widen an advance by, so its lines fit at their largest moment; text and layout
+  measurements report it as `advanceHeadroom`. `WasmTextRasterizer.rasterize` takes
+  `advanceHeadroom`, `animatorGrouping`, `animatorPivot` and a cluster state's `advanceScale`.
 - `WasmTextMeasurer.layoutText`, Python `TextMeasurer.text_layout` and Rust
   `alpha2_layout::text_layout`: where a text generator's lines, words and grapheme clusters lie
   (boxes, em boxes, baselines, ink and font sizes, in canvas fractions), at the fitted size and

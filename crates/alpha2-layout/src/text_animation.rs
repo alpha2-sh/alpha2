@@ -278,6 +278,9 @@ fn text_states(
                 for (axis, target) in state.scale.iter_mut().zip(scale) {
                     *axis *= 1.0 + weight * (target - 1.0);
                 }
+                if animator.advance_follows_scale {
+                    state.advance_scale *= 1.0 + weight * (scale[0] - 1.0);
+                }
             }
             if let Some(rotation) = animator.rotation_degrees {
                 *degrees += weight * rotation;
@@ -308,6 +311,7 @@ fn text_states(
         state.opacity = state.opacity.clamp(0.0, 1.0);
         // Scales of several animators multiply; the product keeps one animator's limit.
         state.scale = state.scale.map(|axis| axis.min(MAX_CLUSTER_SCALE));
+        state.advance_scale = state.advance_scale.min(MAX_CLUSTER_SCALE);
         identity &= state.is_identity();
         let mixes = [state.fill, state.stroke].map(|mix| {
             mix.map_or([1.0, 0.0, 0.0, 0.0, 0.0], |mix| {
@@ -322,6 +326,9 @@ fn text_states(
             .chain(mixes.into_iter().flatten())
         {
             feed(value);
+        }
+        if state.advance_scale.to_bits() != 1.0_f32.to_bits() {
+            feed(state.advance_scale);
         }
     }
     (states, if identity { 0 } else { hash.max(1) })

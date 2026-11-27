@@ -38550,5 +38550,362 @@
         ]
       }
     }
+  },
+  {
+    "name": "text-animator-advance-follows-scale-without-scale",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs has invalid captions"
+    ],
+    "error": "track subs has invalid captions",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "animators": [
+                  {
+                    "selector": {
+                      "type": "range"
+                    },
+                    "properties": {
+                      "opacity": {
+                        "mode": "constant",
+                        "value": 0.5
+                      },
+                      "advance_follows_scale": true
+                    }
+                  }
+                ]
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi there"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-animator-pivot-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs has invalid captions"
+    ],
+    "error": "track subs has invalid captions",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "animators": [
+                  {
+                    "selector": {
+                      "type": "range",
+                      "based_on": "words"
+                    },
+                    "properties": {
+                      "scale": {
+                        "mode": "constant",
+                        "value": {
+                          "x": 1.4,
+                          "y": 1.4
+                        }
+                      },
+                      "advance_follows_scale": true
+                    }
+                  }
+                ],
+                "animator_pivot": {
+                  "x": 0.5,
+                  "y": 1.5
+                }
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi there"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-animator-grouping-unknown",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": [
+      "project.timeline.tracks[0].captions.style.animator_grouping must be one of \"character\", \"word\", \"line\", \"all\""
+    ],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "animators": [
+                  {
+                    "selector": {
+                      "type": "range",
+                      "based_on": "words"
+                    },
+                    "properties": {
+                      "scale": {
+                        "mode": "constant",
+                        "value": {
+                          "x": 1.4,
+                          "y": 1.4
+                        }
+                      },
+                      "advance_follows_scale": true
+                    }
+                  }
+                ],
+                "animator_grouping": "sentence"
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi there"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-animator-grouping-and-pivot-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "style": {
+                "animators": [
+                  {
+                    "selector": {
+                      "type": "range",
+                      "based_on": "words"
+                    },
+                    "properties": {
+                      "scale": {
+                        "mode": "constant",
+                        "value": {
+                          "x": 1.4,
+                          "y": 1.4
+                        }
+                      },
+                      "advance_follows_scale": true
+                    }
+                  }
+                ],
+                "animator_grouping": "word",
+                "animator_pivot": {
+                  "x": 0.5,
+                  "y": 1
+                }
+              },
+              "cues": [
+                {
+                  "timeline_range": {
+                    "start": 0,
+                    "end": 4000
+                  },
+                  "text": "hi there"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-text-animator-grouping-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "mode": "constant",
+                    "value": "Range"
+                  },
+                  "text_animators": [
+                    {
+                      "selector": {
+                        "type": "range",
+                        "based_on": "words"
+                      },
+                      "properties": {
+                        "scale": {
+                          "mode": "constant",
+                          "value": {
+                            "x": 1.4,
+                            "y": 1.4
+                          }
+                        },
+                        "advance_follows_scale": true
+                      }
+                    }
+                  ],
+                  "text_animator_grouping": "word",
+                  "text_animator_pivot": {
+                    "x": 0.5,
+                    "y": 0.8
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
   }
 ]

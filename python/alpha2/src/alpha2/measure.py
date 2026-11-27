@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
 
 from . import _native
 from .builder import Time, to_ticks
@@ -65,6 +65,9 @@ class TextBounds(TypedDict):
     """The pixels it covers, or ``None`` when it draws nothing."""
     lineCount: int
     baselines: Baselines
+    advanceHeadroom: NotRequired[float]
+    """The most its animators can widen its advances, when they reserve some: its lines break at
+    its ``max_width`` over this."""
 
 
 class NodeBounds(TypedDict):
@@ -82,6 +85,8 @@ class NodeBounds(TypedDict):
     baselines: Baselines | None
     """A text node's baselines: its content box's top plus its text's. ``None`` for other nodes
     and empty text."""
+    advanceHeadroom: NotRequired[float]
+    """The most a text node's animators can widen its advances, when they reserve some."""
 
 
 class LayoutBounds(TypedDict):

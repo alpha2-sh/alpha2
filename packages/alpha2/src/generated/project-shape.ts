@@ -203,6 +203,14 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
+    AnimatorGrouping: {
+      oneOf: [
+        { const: "character", type: "string" },
+        { const: "word", type: "string" },
+        { const: "line", type: "string" },
+        { const: "all", type: "string" },
+      ],
+    },
     AudioEffect: {
       oneOf: [
         {
@@ -1765,6 +1773,12 @@ export const PROJECT_SHAPE: unknown = {
         text_align: {
           anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }],
         },
+        text_animator_grouping: {
+          anyOf: [{ $ref: "#/$defs/AnimatorGrouping" }, { type: "null" }],
+        },
+        text_animator_pivot: {
+          anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }],
+        },
         text_animators: {
           items: { $ref: "#/$defs/TextAnimator" },
           maxItems: 8,
@@ -2818,6 +2832,7 @@ export const PROJECT_SHAPE: unknown = {
     TextAnimatorProperties: {
       additionalProperties: false,
       properties: {
+        advance_follows_scale: { type: "boolean" },
         fill: { anyOf: [{ $ref: "#/$defs/Keyframed_Rgba" }, { type: "null" }] },
         offset: {
           anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }],
@@ -3018,6 +3033,8 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         align: { $ref: "#/$defs/TextAlign", default: "center" },
         anchor: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 1 } },
+        animator_grouping: { $ref: "#/$defs/AnimatorGrouping" },
+        animator_pivot: { $ref: "#/$defs/Vec2" },
         animators: {
           items: { $ref: "#/$defs/TextAnimator" },
           maxItems: 8,
@@ -3075,6 +3092,10 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         align: { anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }] },
         anchor: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
+        animator_grouping: {
+          anyOf: [{ $ref: "#/$defs/AnimatorGrouping" }, { type: "null" }],
+        },
+        animator_pivot: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
         animators: {
           items: { $ref: "#/$defs/TextAnimator" },
           maxItems: 8,

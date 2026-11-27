@@ -44,7 +44,8 @@ fn rect(rect: CanvasRect) -> serde_json::Value {
 /// Measures the text generator `generator_json` on a `width` by `height` canvas
 /// ([`crate::measure_text`]).
 ///
-/// Returns JSON `{ layout, content, ink, lineCount, baselines, fontSize, truncated, overflow }`.
+/// Returns JSON `{ layout, content, ink, lineCount, baselines, fontSize, truncated, overflow }`,
+/// and `advanceHeadroom` (see [`crate::TextBounds::advance_headroom`]) when it is not 1.
 /// Rectangles are `{ left, top, right, bottom }` in fractions of the canvas, `ink` is `null`
 /// when the text draws nothing, and `baselines` is `{ first, last }` in fractions of the canvas
 /// height. `fontSize` is the size drawn after `font_size_fit`, a fraction of the canvas's
@@ -81,7 +82,7 @@ pub fn measure_text_json(
         size,
     )
     .map_err(MeasureError::Text)?;
-    Ok(serde_json::json!({
+    let mut measured = serde_json::json!({
         "layout": rect(bounds.layout),
         "content": rect(bounds.content),
         "ink": bounds.ink.map(rect),
@@ -90,8 +91,16 @@ pub fn measure_text_json(
         "fontSize": bounds.font_size,
         "truncated": bounds.truncated,
         "overflow": bounds.overflow,
-    })
-    .to_string())
+    });
+    with_headroom(&mut measured, Some(bounds.advance_headroom));
+    Ok(measured.to_string())
+}
+
+/// Adds `advanceHeadroom` to `measured` when animators reserve some.
+fn with_headroom(measured: &mut serde_json::Value, headroom: Option<f32>) {
+    if let Some(headroom) = headroom.filter(|headroom| *headroom > 1.0) {
+        measured["advanceHeadroom"] = serde_json::json!(headroom);
+    }
 }
 
 /// The unit a report counts a text's positions in: each binding's string unit.
@@ -203,7 +212,8 @@ pub fn text_layout_json(
 /// picture at picture time `time` ([`crate::measure_layout`]).
 ///
 /// Returns JSON `{ nodes }`, each node in preorder as
-/// `{ at, border, content, overflow, lineCount, baselines, fontSize, truncated }` with boxes in
+/// `{ at, border, content, overflow, lineCount, baselines, fontSize, truncated }`, and
+/// `advanceHeadroom` for a text node whose animators reserve some, with boxes in
 /// fractions of the picture. `lineCount` and `fontSize` (the size drawn, a fraction of the
 /// picture's shorter side) are `null` for non-text nodes, and `baselines` (`{ first, last }`,
 /// fractions of the picture height) also for empty text. `truncated` says `line_clamp` cut the
@@ -257,7 +267,7 @@ pub fn measure_layout_json(
         .nodes
         .into_iter()
         .map(|node| {
-            serde_json::json!({
+            let mut measured = serde_json::json!({
                 "at": node.at,
                 "border": rect(node.border),
                 "content": rect(node.content),
@@ -266,7 +276,9 @@ pub fn measure_layout_json(
                 "baselines": node.baselines.map(baselines),
                 "fontSize": node.font_size,
                 "truncated": node.truncated,
-            })
+            });
+            with_headroom(&mut measured, node.advance_headroom);
+            measured
         })
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "nodes": nodes }).to_string())

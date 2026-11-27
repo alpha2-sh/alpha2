@@ -47,6 +47,26 @@ pub(crate) struct TextRequestWire {
     letter_spacing: f32,
     #[serde(default = "default_font_weight")]
     font_weight: u16,
+    #[serde(default = "full")]
+    advance_headroom: f32,
+    #[serde(default)]
+    animator_grouping: GroupingWire,
+    #[serde(default = "centre")]
+    animator_pivot: [f32; 2],
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GroupingWire {
+    #[default]
+    Character,
+    Word,
+    Line,
+    All,
+}
+
+const fn centre() -> [f32; 2] {
+    [0.5, 0.5]
 }
 
 /// A cluster's state; omitted fields take their identity value. Offset and tracking are in
@@ -69,6 +89,8 @@ pub(crate) struct StateWire {
     stroke: Option<MixWire>,
     #[serde(default)]
     tracking: f32,
+    #[serde(default = "full")]
+    advance_scale: f32,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -102,6 +124,7 @@ impl StateWire {
             fill: mix(self.fill),
             stroke: mix(self.stroke),
             tracking: self.tracking,
+            advance_scale: self.advance_scale,
         }
     }
 }
@@ -414,6 +437,14 @@ impl TextRequestWire {
                 ellipsis: clamp.ellipsis,
             }),
             spans: Vec::new(),
+            advance_headroom: self.advance_headroom,
+            animator_grouping: match self.animator_grouping {
+                GroupingWire::Character => alpha2_text::ClusterGrouping::Character,
+                GroupingWire::Word => alpha2_text::ClusterGrouping::Word,
+                GroupingWire::Line => alpha2_text::ClusterGrouping::Line,
+                GroupingWire::All => alpha2_text::ClusterGrouping::All,
+            },
+            animator_pivot: self.animator_pivot,
         };
         let mut start = 0;
         for run in runs {

@@ -3295,6 +3295,8 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
     (style.shadows === undefined || validTextShadows(style.shadows)) &&
     (style.animators === undefined ||
       validTextAnimators(style.animators, false)) &&
+    (style.animator_pivot === undefined ||
+      validAnimatorPivot(style.animator_pivot)) &&
     (background == null || validTextBackground(background))
   );
 }
@@ -3549,8 +3551,16 @@ function validAnimatorProperties(properties: unknown): boolean {
       properties.tracking,
       MIN_LETTER_SPACING,
       MAX_LETTER_SPACING,
-    )
+    ) &&
+    (properties.advance_follows_scale !== true || present(properties.scale))
   );
+}
+
+/** Mirrors `valid_animator_pivot`: each fraction of a group's box in `[0, 1]`. */
+function validAnimatorPivot(pivot: unknown): boolean {
+  const fraction = (value: unknown) =>
+    finiteNumber(value) && value >= 0 && value <= 1;
+  return isRecord(pivot) && fraction(pivot.x) && fraction(pivot.y);
 }
 
 function validTextFill(fill: unknown): boolean {
@@ -4424,6 +4434,12 @@ function layoutStyleIssue(
     !validTextAnimators(node.text_animators, true)
   ) {
     return outOfRange("text_animators");
+  }
+  if (
+    present(node.text_animator_pivot) &&
+    !validAnimatorPivot(node.text_animator_pivot)
+  ) {
+    return outOfRange("text_animator_pivot");
   }
   return undefined;
 }

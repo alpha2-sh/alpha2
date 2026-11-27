@@ -87,6 +87,11 @@ export interface NodeBounds {
   readonly fontSize: number | null;
   /** `line_clamp` cut the text's lines. */
   readonly truncated: boolean;
+  /**
+   * The most the text's animators can widen its advances, when they reserve some: its lines break
+   * at its content width over this.
+   */
+  readonly advanceHeadroom?: number;
 }
 
 /** First and last alphabetic baselines, as fractions of the picture height. */

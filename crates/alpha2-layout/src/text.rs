@@ -46,6 +46,9 @@ pub struct TextBounds {
     pub truncated: bool,
     /// Whether the drawn text still splits a word or is taller than `max_height`.
     pub overflow: bool,
+    /// The most the text's animators can widen its advances; its lines break at `max_width`
+    /// over this ([`alpha2_eval::advance_headroom`]).
+    pub advance_headroom: f32,
 }
 
 /// A text at a time since its holder started (a caption cue's start, a text generator's picture
@@ -240,6 +243,9 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         font_weight,
         clamp,
         spans,
+        advance_headroom,
+        animator_grouping,
+        animator_pivot,
     } = request;
     feed(text.as_bytes());
     feed(&[0xff]);
@@ -285,6 +291,41 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         feed(&[0xff, u8::from(clamp.ellipsis.is_some())]);
     }
     feed_spans(feed, spans);
+    if *advance_headroom > 1.0 {
+        feed(&[0xf8]);
+        feed(&advance_headroom.to_bits().to_le_bytes());
+    }
+    feed_motion(feed, *animator_grouping, *animator_pivot);
+}
+
+/// Feeds a grouping and pivot other than the default's.
+fn feed_motion(
+    feed: &mut impl FnMut(&[u8]),
+    grouping: alpha2_text::ClusterGrouping,
+    pivot: [f32; 2],
+) {
+    if grouping != alpha2_text::ClusterGrouping::Character
+        || pivot.map(f32::to_bits) != [0.5_f32.to_bits(); 2]
+    {
+        feed(&[0xf7]);
+        feed(&[grouping as u8]);
+        for value in pivot {
+            feed(&value.to_bits().to_le_bytes());
+        }
+    }
+}
+
+/// The grouping of `grouping` in the text host's terms.
+#[must_use]
+pub const fn cluster_grouping(
+    grouping: alpha2_model::AnimatorGrouping,
+) -> alpha2_text::ClusterGrouping {
+    match grouping {
+        alpha2_model::AnimatorGrouping::Character => alpha2_text::ClusterGrouping::Character,
+        alpha2_model::AnimatorGrouping::Word => alpha2_text::ClusterGrouping::Word,
+        alpha2_model::AnimatorGrouping::Line => alpha2_text::ClusterGrouping::Line,
+        alpha2_model::AnimatorGrouping::All => alpha2_text::ClusterGrouping::All,
+    }
 }
 
 fn feed_spans(feed: &mut impl FnMut(&[u8]), spans: &[alpha2_text::TextSpan]) {
@@ -450,6 +491,8 @@ pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 
         background,
         // `animated_text_key` adds the sampled animators.
         animators: _,
+        animator_grouping,
+        animator_pivot,
     } = style;
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut feed = |bytes: &[u8]| {
@@ -516,6 +559,16 @@ pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 
     if text.content.has_run_styles() {
         feed_spans(&mut feed, &text_spans(text, style, 1.0));
     }
+    let headroom = advance_headroom(text, style);
+    if headroom > 1.0 {
+        feed(&[0xf8]);
+        feed(&headroom.to_bits().to_le_bytes());
+    }
+    feed_motion(
+        &mut feed,
+        cluster_grouping(*animator_grouping),
+        [animator_pivot.x, animator_pivot.y],
+    );
     feed(&size.width().to_le_bytes());
     feed(&size.height().to_le_bytes());
     hash.max(1)
@@ -552,6 +605,7 @@ pub fn measure_text(
         font_size: placed.font_size,
         truncated: measure.truncated,
         overflow: boxed.overflow,
+        advance_headroom: placed.request.advance_headroom,
     })
 }
 
@@ -647,7 +701,7 @@ fn style_lines(
 ) -> crate::fit::BoxedLines {
     crate::fit::boxed_lines(
         shaped,
-        request.max_width,
+        request.wrap_width(),
         box_height(style, size),
         style.line_clamp.as_ref().and_then(|clamp| clamp.max_lines),
         style.line_clamp.is_some(),
@@ -740,6 +794,19 @@ pub fn text_request_at(
             .as_ref()
             .map(|clamp| crate::fit::text_clamp(clamp, box_height(style, size))),
         spans,
+        advance_headroom: advance_headroom(text, style),
+        animator_grouping: cluster_grouping(style.animator_grouping),
+        animator_pivot: [style.animator_pivot.x, style.animator_pivot.y],
+    }
+}
+
+/// The most `style`'s animators can widen an advance of `text` ([`alpha2_eval::advance_headroom`]).
+#[must_use]
+pub fn advance_headroom(text: &TextAt<'_>, style: &TextStyle) -> f32 {
+    if style.animators.is_empty() {
+        1.0
+    } else {
+        alpha2_eval::advance_headroom(&style.animators, text.content.runs())
     }
 }
 

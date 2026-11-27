@@ -25,7 +25,7 @@ Every node of the tree is one kind of box. A box is a container when it has `chi
 | Flex item | `flex_grow`, `flex_shrink`, `flex_basis` | In a flex container only. |
 | Grid item | `grid_column`, `grid_row`, `justify_self` | In a grid only. |
 | Text style | `font_family`, `font_size`, `font_weight`, `fill`, `line_height`, `letter_spacing`, `text_align`, `strokes`, `shadows` | On any box; inherited. See [Text](#text). |
-| Own text | `font_size_fit`, `line_clamp`, `text_animators` | The box's own text only; not inherited. See [Fitting and clamping](#fitting-and-clamping). |
+| Own text | `font_size_fit`, `line_clamp`, `text_animators`, `text_animator_grouping`, `text_animator_pivot` | The box's own text only; not inherited. See [Fitting and clamping](#fitting-and-clamping). |
 | Drawn after layout | `opacity`, `translate`, `scale`, `rotation_degrees` | About the border box's centre; they never move other boxes. A box with any of them, or with hidden overflow, is drawn as one group: its opacity is group opacity. |
 
 The root is the picture: its border box is the canvas, so it takes no size, margin or item field. Place its content with its own `justify_content`, `align_items` and `padding`, as with Remotion's `AbsoluteFill`.
@@ -99,7 +99,7 @@ A text box's own `font_size_fit` and `line_clamp` keep its text inside its conte
 
 `font_size_fit` has no CSS standard (the CSS Working Group's `text-fit` sketch fits widths only). `{ "min": 0.02, "max": 0.1 }` draws the text at the largest font size from `min` to `max` at which it fits its box: no line breaks inside a word, the lines fit the content height, and there are no more lines than `line_clamp.max_lines`. `max` defaults to the box's `font_size`, so the text only shrinks; `min` wins over a smaller `max`. Both take a number or `"<n>px"`. Sizes are tried by bisection on steps of 1/8192 of the shorter side between them, so every platform picks the same one. Text that fits at no size draws at `min`; its clamp, if any, then cuts it, and measuring reports it.
 
-The box is laid out at `font_size` first; the fit never changes the box's size. A fit fills a box whose size is set (`width` and `height`, `flex_grow`, `stretch`, a grid area); in a box whose height is `auto`, it can only shrink the text to fit the width or the line count. An animated `font_size` is fitted again at each frame. Text animators never change the fit. Caption cues are fitted one by one.
+The box is laid out at `font_size` first; the fit never changes the box's size. A fit fills a box whose size is set (`width` and `height`, `flex_grow`, `stretch`, a grid area); in a box whose height is `auto`, it can only shrink the text to fit the width or the line count. An animated `font_size` is fitted again at each frame. Text animators never change the fit, except one whose `advance_follows_scale` makes a scaled character push the rest of its line apart: the text then wraps at its width over the largest factor its animators can widen an advance by (each pushing animator's largest horizontal scale times its largest selection, overshooting keyframe curves included), and its automatic width is as much wider, so the line fits its box at its largest moment. Lines never re-break while it plays. Caption cues are fitted one by one.
 
 ```json
 {

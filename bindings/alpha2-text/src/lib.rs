@@ -33,7 +33,9 @@ mod paint;
 mod runs;
 mod unicode_tables;
 
-pub use animated::{ClusterInfo, ClusterState, ColorMix, LineInfo, MAX_CLUSTER_SCALE, TextLayout};
+pub use animated::{
+    ClusterGrouping, ClusterInfo, ClusterState, ColorMix, LineInfo, MAX_CLUSTER_SCALE, TextLayout,
+};
 pub use gradient::{TextGradient, TextGradientKind, TextGradientStop, TextSpread};
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
@@ -146,6 +148,36 @@ pub struct TextRasterRequest {
     /// overlap, on character boundaries, at most [`MAX_TEXT_SPANS`]. Text outside every span
     /// takes the request's values; an empty list draws as the request alone.
     pub spans: Vec<TextSpan>,
+    /// The most an animation can widen a cluster's advance ([`ClusterState::advance_scale`]),
+    /// in `[1, MAX_CLUSTER_SCALE]`: lines wrap at `max_width` over it and align in `max_width`, so
+    /// a line pushed apart that far still fits. 1 wraps at `max_width`.
+    pub advance_headroom: f32,
+    /// The units whose clusters an animated raster scales and turns about one pivot.
+    pub animator_grouping: ClusterGrouping,
+    /// Where in each group's box (its clusters' advances by their em boxes) the pivot lies,
+    /// fractions from its left and top in `[0, 1]`; `[0.5, 0.5]` is its centre.
+    pub animator_pivot: [f32; 2],
+}
+
+impl TextRasterRequest {
+    /// The width lines break at: `max_width` over [`Self::advance_headroom`], non-positive for
+    /// none.
+    #[must_use]
+    pub fn wrap_width(&self) -> f32 {
+        wrap_width(self.max_width, self.advance_headroom)
+    }
+}
+
+/// The width lines of a text `max_width` wide (non-positive for any width) break at when
+/// animation can widen its advances by `advance_headroom`
+/// ([`TextRasterRequest::advance_headroom`]).
+#[must_use]
+pub fn wrap_width(max_width: f32, advance_headroom: f32) -> f32 {
+    if max_width > 0.0 && advance_headroom > 1.0 {
+        max_width / advance_headroom
+    } else {
+        max_width
+    }
 }
 
 /// Which faces of a family a span prefers, as CSS `font-style`.
@@ -1236,7 +1268,7 @@ impl TextRasterizer {
                 .iter()
                 .flatten()
                 .flat_map(|shaped: &ShapedParagraph<'_>| {
-                    break_lines(&shaped.clusters, request.max_width)
+                    break_lines(&shaped.clusters, request.wrap_width())
                         .into_iter()
                         .map(|range| line_size(&shaped.clusters[range], strut))
                 })
@@ -1260,7 +1292,7 @@ impl TextRasterizer {
                 .get_mut(index)
                 .and_then(Option::take)
                 .unwrap_or_else(|| shape(index));
-            let ranges = break_lines(&shaped.clusters, request.max_width);
+            let ranges = break_lines(&shaped.clusters, request.wrap_width());
             let mut clamped = false;
             for (at, range) in ranges.iter().enumerate() {
                 let at_line = (first, lines.len());
@@ -1289,7 +1321,7 @@ impl TextRasterizer {
                         shaped.place_cut(
                             range.clone(),
                             &mark,
-                            request.max_width,
+                            request.wrap_width(),
                             at_line,
                             &mut clusters,
                         )
@@ -2974,6 +3006,11 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
                 })
         })
         && runs::valid_spans(request)
+        && (1.0..=MAX_CLUSTER_SCALE).contains(&request.advance_headroom)
+        && request
+            .animator_pivot
+            .iter()
+            .all(|fraction| (0.0..=1.0).contains(fraction))
     {
         Ok(())
     } else {

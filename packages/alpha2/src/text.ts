@@ -178,6 +178,18 @@ export interface WasmTextRequest {
     readonly maxHeight?: number;
     readonly ellipsis?: string | null;
   };
+  /**
+   * The most an animation widens an advance, 1 (the default) to 10: lines wrap at `maxWidth` over
+   * it and align in `maxWidth`, so a line pushed that far apart still fits.
+   */
+  readonly advanceHeadroom?: number;
+  /** The units whose clusters scale and turn about one pivot (default `character`). */
+  readonly animatorGrouping?: "character" | "word" | "line" | "all";
+  /**
+   * Where in each group's box (its clusters' advances by their em boxes) the pivot lies, fractions
+   * from its left and top (default `[0.5, 0.5]`).
+   */
+  readonly animatorPivot?: readonly [number, number];
   /** One animation state applied to every cluster. Tracking never re-wraps lines. */
   readonly clusterState?: WasmClusterState;
   /** One animation state per cluster, in logical order. */
@@ -220,6 +232,11 @@ export interface WasmClusterState {
   readonly fill?: WasmColorMix;
   readonly stroke?: WasmColorMix;
   readonly tracking?: number;
+  /**
+   * How much the advance widens (default 1), up to 10: mapped about its group's pivot, a group's
+   * advances push the groups after it along their line, which is re-aligned.
+   */
+  readonly advanceScale?: number;
 }
 
 /** See {@link WasmClusterState}. */

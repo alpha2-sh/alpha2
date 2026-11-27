@@ -569,6 +569,28 @@ pub struct TextAnimatorProperties {
     /// it. Lines are not re-broken.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracking: Option<Animated<f32>>,
+    /// Whether the character's advance follows this animator's horizontal scale, pushing the
+    /// characters after it along its line, which is re-aligned; lines are not re-broken, and the
+    /// text wraps with room for the largest scale this can reach. Needs `scale`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub advance_follows_scale: bool,
+}
+
+/// The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+/// Grouping.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AnimatorGrouping {
+    /// Each grapheme cluster about its own pivot.
+    #[default]
+    Character,
+    /// Each UAX #29 word holding a letter or digit; a cluster in no word is its own group.
+    Word,
+    /// Each line.
+    Line,
+    /// The whole text.
+    All,
 }
 
 impl TextAnimatorProperties {
@@ -624,6 +646,7 @@ impl TextAnimatorProperties {
                     crate::LETTER_SPACING_RANGE.contains(&value)
                 })
             })
+            && (!self.advance_follows_scale || self.scale.is_some())
     }
 }
 

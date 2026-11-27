@@ -140,10 +140,10 @@ pub use text::{
     TextInsets, TextShadow, TextStroke, TextStyle,
 };
 pub use text_animation::{
-    ANIMATOR_SCALE_RANGE, MAX_ANIMATOR_OFFSET, MAX_CLASS_NAME_BYTES, MAX_RANGE_INDEX,
-    MAX_RUN_CLASSES, MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS, RANGE_PERCENT, RangeShape, RangeUnits,
-    RunState, RunTime, TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextRunStyle,
-    TextSelector, TextUnit, valid_class_name,
+    ANIMATOR_SCALE_RANGE, AnimatorGrouping, MAX_ANIMATOR_OFFSET, MAX_CLASS_NAME_BYTES,
+    MAX_RANGE_INDEX, MAX_RUN_CLASSES, MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS, RANGE_PERCENT, RangeShape,
+    RangeUnits, RunState, RunTime, TextAnimator, TextAnimatorProperties, TextContent, TextRun,
+    TextRunStyle, TextSelector, TextUnit, valid_class_name,
 };
 pub use time_map::{LOOP_FADE_SECONDS, LoopMode, MAX_LOOP_PASSES, TimeMap, loop_passes};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};

@@ -107,6 +107,9 @@ pub struct NodeBounds {
     /// A text node's first and last baselines as fractions of the picture height. `None` for
     /// other nodes and empty text.
     pub baselines: Option<Baselines>,
+    /// The most a text node's animators can widen its advances; its lines break at its content
+    /// width over this. `None` for other nodes.
+    pub advance_headroom: Option<f32>,
 }
 
 /// The text host request for a layout's text at `font_size` pixels, wrapped at `max_width`
@@ -152,6 +155,9 @@ pub(crate) fn text_request(
         font_weight: text.font_weight,
         clamp,
         spans,
+        advance_headroom: text.advance_headroom,
+        animator_grouping: crate::text::cluster_grouping(text.animator_grouping),
+        animator_pivot: [text.animator_pivot.x, text.animator_pivot.y],
     }
 }
 
@@ -165,7 +171,7 @@ pub(crate) fn node_lines(
 ) -> BoxedLines {
     boxed_lines(
         shaped,
-        wrap(width),
+        alpha2_text::wrap_width(wrap(width), text.advance_headroom),
         height + LAYOUT_WRAP_SLACK,
         text.line_clamp.as_ref().and_then(|clamp| clamp.max_lines),
         text.line_clamp.is_some(),
@@ -398,11 +404,20 @@ pub fn measure_layout(
     };
     let mut paths = Vec::new();
     root.walk(|at, _| paths.push(at.to_owned()));
+    let mut texts = Vec::new();
+    text_nodes(&evaluated.root, &mut 0, &mut texts);
+    let mut headrooms = vec![None; resolved.nodes.len()];
+    for (index, text) in texts {
+        if let Some(slot) = headrooms.get_mut(index) {
+            *slot = Some(text.map_or(1.0, |text| text.advance_headroom));
+        }
+    }
     Ok(LayoutBounds {
         nodes: paths
             .into_iter()
             .zip(&resolved.nodes)
-            .map(|(at, node)| NodeBounds {
+            .zip(headrooms)
+            .map(|((at, node), advance_headroom)| NodeBounds {
                 at,
                 border: rect(node.border),
                 content: rect(node.content),
@@ -414,6 +429,7 @@ pub fn measure_layout(
                     first: first / height,
                     last: last / height,
                 }),
+                advance_headroom,
             })
             .collect(),
     })

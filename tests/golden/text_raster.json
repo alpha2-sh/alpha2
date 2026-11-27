@@ -1068,6 +1068,132 @@
         "lineHeight": 1.3,
         "text": "Rounded boxes\nwith dashed borders"
       }
+    },
+    {
+      "contentVersion": 61,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.65625,
+        "firstBaseline": 28.80000114440918,
+        "height": 99,
+        "layoutHeight": 76.80000305175781,
+        "layoutWidth": 300.0,
+        "layoutX": 3.0,
+        "layoutY": 11.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "a55af4b02808e4db",
+        "width": 306
+      },
+      "name": "animated-push-word",
+      "request": {
+        "advanceHeadroom": 1.5,
+        "align": "center",
+        "animatorGrouping": "word",
+        "animatorPivot": [
+          0.5,
+          0.8
+        ],
+        "clusterStates": [
+          {},
+          {},
+          {},
+          {},
+          {},
+          {},
+          {
+            "advanceScale": 1.5,
+            "scale": [
+              1.5,
+              1.5
+            ]
+          },
+          {
+            "advanceScale": 1.5,
+            "scale": [
+              1.5,
+              1.5
+            ]
+          },
+          {
+            "advanceScale": 1.5,
+            "scale": [
+              1.5,
+              1.5
+            ]
+          },
+          {
+            "advanceScale": 1.5,
+            "scale": [
+              1.5,
+              1.5
+            ]
+          },
+          {},
+          {},
+          {},
+          {},
+          {}
+        ],
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 32,
+        "lineHeight": 1.2,
+        "maxWidth": 300,
+        "strokes": [
+          {
+            "color": [
+              0,
+              0,
+              0,
+              255
+            ],
+            "width": 2
+          }
+        ],
+        "text": "Every word pops"
+      }
+    },
+    {
+      "contentVersion": 62,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.65625,
+        "firstBaseline": 28.80000114440918,
+        "height": 53,
+        "layoutHeight": 38.400001525878906,
+        "layoutWidth": 300.0,
+        "layoutX": 5.0,
+        "layoutY": 7.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "5b9ceb67126aedf3",
+        "width": 310
+      },
+      "name": "animated-word-group-rotate",
+      "request": {
+        "align": "start",
+        "animatorGrouping": "word",
+        "clusterState": {
+          "rotation": 0.3,
+          "scale": [
+            1.1,
+            1.1
+          ]
+        },
+        "fill": [
+          255,
+          220,
+          120,
+          255
+        ],
+        "fontSize": 32,
+        "lineHeight": 1.2,
+        "maxWidth": 300,
+        "text": "Turn by word"
+      }
     }
   ],
   "fonts": [

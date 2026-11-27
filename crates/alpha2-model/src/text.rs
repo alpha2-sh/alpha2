@@ -163,11 +163,46 @@ pub struct TextStyle {
     pub background: Option<TextBackground>,
     /// Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].
     /// Keyframes are in the holder's time (since a caption cue's start, or a text generator's
-    /// picture time). They never change line layout.
+    /// picture time). They never re-break lines while they play; an animator whose advance
+    /// follows its scale makes the text wrap with room for its largest scale.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TEXT_ANIMATORS }>")]
     #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_ANIMATORS)))]
     pub animators: Vec<TextAnimator>,
+    /// The units whose characters the animators scale and turn about one pivot.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub animator_grouping: crate::AnimatorGrouping,
+    /// Where in each group's box (the union of its characters' advances by their em boxes) the
+    /// pivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`
+    /// percentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre
+    /// on one line. Not animated.
+    #[serde(
+        default = "default_animator_pivot",
+        skip_serializing_if = "is_default_animator_pivot"
+    )]
+    pub animator_pivot: Vec2,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+/// The centre of a group's box.
+pub(crate) const fn default_animator_pivot() -> Vec2 {
+    Vec2::new(0.5, 0.5)
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+pub(crate) fn is_default_animator_pivot(pivot: &Vec2) -> bool {
+    *pivot == default_animator_pivot()
+}
+
+/// Whether `pivot` lies in a group's box.
+pub(crate) fn valid_animator_pivot(pivot: Vec2) -> bool {
+    (0.0..=1.0).contains(&pivot.x) && (0.0..=1.0).contains(&pivot.y)
 }
 
 impl Default for TextStyle {
@@ -193,6 +228,8 @@ impl Default for TextStyle {
             shadows: Vec::new(),
             background: None,
             animators: Vec::new(),
+            animator_grouping: crate::AnimatorGrouping::Character,
+            animator_pivot: default_animator_pivot(),
         }
     }
 }
@@ -670,6 +707,7 @@ impl TextStyle {
             && valid_strokes(&self.strokes)
             && valid_shadows(&self.shadows)
             && crate::text_animation::valid_animators(&self.animators, false)
+            && valid_animator_pivot(self.animator_pivot)
             && self
                 .background
                 .as_ref()

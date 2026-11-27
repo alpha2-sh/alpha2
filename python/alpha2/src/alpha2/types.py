@@ -386,6 +386,9 @@ ALIGN_CONTENT_VALUES: tuple[AlignContent, ...] = ("start", "center", "end", "spa
 ALIGN_ITEMS_VALUES: tuple[AlignItems, ...] = ("start", "center", "end", "stretch")
 """Every `AlignItems`, in the model's order."""
 
+ANIMATOR_GROUPING_VALUES: tuple[AnimatorGrouping, ...] = ("character", "word", "line", "all")
+"""Every `AnimatorGrouping`, in the model's order."""
+
 BLEND_SPACE_VALUES: tuple[BlendSpace, ...] = ("linear_light", "srgb_encoded")
 """Every `BlendSpace`, in the model's order."""
 
@@ -617,6 +620,12 @@ Its JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. Wit
 the value travels the cubic Bezier through this keyframe's `out_tangent` and the next's
 `in_tangent`, at the speed its timing curve sets along the arc length. Without them it
 moves in a straight line.
+"""
+
+
+AnimatorGrouping: TypeAlias = Literal["character", "word", "line", "all"]
+"""The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+Grouping.
 """
 
 
@@ -1820,10 +1829,19 @@ class LayoutNode(TypedDict):
     """
     text_align: NotRequired[TextAlign | None]
     """How lines align within the content width. Inherited; the root's is `start`."""
+    text_animator_grouping: NotRequired[AnimatorGrouping | None]
+    """The units whose characters `text_animators` scale and turn about one pivot, as a text
+    style's `animator_grouping`. Not inherited.
+    """
+    text_animator_pivot: NotRequired[Vec2 | None]
+    """Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not
+    inherited.
+    """
     text_animators: NotRequired[list[TextAnimator]]
     """Per-character motion of the box's own text, Range selectors only (layout text has no
-    runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited; never
-    changes layout.
+    runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited. They
+    never change layout, except that one whose advance follows its scale makes the text wrap,
+    and measure as wide, with room for its largest scale.
     """
     translate: NotRequired[Keyframed[LayoutOffset] | None]
     """Offset of the box and everything in it after layout: the object, or one or two lengths as
@@ -2960,6 +2978,11 @@ class TextAnimatorProperties(TypedDict):
     out does nothing.
     """
 
+    advance_follows_scale: NotRequired[bool]
+    """Whether the character's advance follows this animator's horizontal scale, pushing the
+    characters after it along its line, which is re-aligned; lines are not re-broken, and the
+    text wraps with room for the largest scale this can reach. Needs `scale`.
+    """
     fill: NotRequired[Keyframed[Rgba] | None]
     """The fill color a fully selected character takes; a gradient fill is mixed toward it."""
     offset: NotRequired[Animated[Vec2] | None]
@@ -3220,10 +3243,19 @@ class TextStyle(TypedDict):
 
     Default: `{"x":0.5,"y":1}`.
     """
+    animator_grouping: NotRequired[AnimatorGrouping]
+    """The units whose characters the animators scale and turn about one pivot."""
+    animator_pivot: NotRequired[Vec2]
+    """Where in each group's box (the union of its characters' advances by their em boxes) the
+    pivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`
+    percentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre
+    on one line. Not animated.
+    """
     animators: NotRequired[list[TextAnimator]]
     """Per-character motion and color, applied in order, at most `MAX_TEXT_ANIMATORS`.
     Keyframes are in the holder's time (since a caption cue's start, or a text generator's
-    picture time). They never change line layout.
+    picture time). They never re-break lines while they play; an animator whose advance
+    follows its scale makes the text wrap with room for its largest scale.
     """
     background: NotRequired[TextBackground | None]
     """A box behind each line.
@@ -3322,6 +3354,10 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::align`."""
     anchor: NotRequired[Vec2 | None]
     """See `TextStyle::anchor`."""
+    animator_grouping: NotRequired[AnimatorGrouping | None]
+    """See `TextStyle::animator_grouping`."""
+    animator_pivot: NotRequired[Vec2 | None]
+    """See `TextStyle::animator_pivot`."""
     animators: NotRequired[list[TextAnimator] | None]
     """See `TextStyle::animators`."""
     background: NotRequired[TextBackground | None]

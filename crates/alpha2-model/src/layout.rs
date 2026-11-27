@@ -285,12 +285,21 @@ pub struct LayoutNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_clamp: Option<crate::LineClamp>,
     /// Per-character motion of the box's own text, Range selectors only (layout text has no
-    /// runs). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never
-    /// changes layout.
+    /// runs). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited. They
+    /// never change layout, except that one whose advance follows its scale makes the text wrap,
+    /// and measure as wide, with room for its largest scale.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TEXT_ANIMATORS }>")]
     #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_ANIMATORS)))]
     pub text_animators: Vec<crate::TextAnimator>,
+    /// The units whose characters `text_animators` scale and turn about one pivot, as a text
+    /// style's `animator_grouping`. Not inherited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_animator_grouping: Option<crate::AnimatorGrouping>,
+    /// Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not
+    /// inherited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_animator_pivot: Option<crate::Vec2>,
 
     /// Opacity of the box and everything in it as one group, in `0..=1`. Applied after layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1055,6 +1064,12 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
     }
     if !crate::text_animation::valid_animators(&node.text_animators, true) {
         return out_of_range("text_animators");
+    }
+    if !node
+        .text_animator_pivot
+        .is_none_or(crate::text::valid_animator_pivot)
+    {
+        return out_of_range("text_animator_pivot");
     }
     if let Some(fit) = &node.font_size_fit {
         let font_size = |value: LayoutSize| {

@@ -390,6 +390,14 @@ export const ALIGN_ITEMS_VALUES: readonly AlignItems[] = [
   "stretch",
 ];
 
+/** Every {@link AnimatorGrouping}, in the model's order. */
+export const ANIMATOR_GROUPING_VALUES: readonly AnimatorGrouping[] = [
+  "character",
+  "word",
+  "line",
+  "all",
+];
+
 /** Every {@link BlendSpace}, in the model's order. */
 export const BLEND_SPACE_VALUES: readonly BlendSpace[] = [
   "linear_light",
@@ -837,6 +845,12 @@ export type AnimatedPoint =
        */
       readonly via?: DataVia | null;
     };
+
+/**
+ * The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+ * Grouping.
+ */
+export type AnimatorGrouping = "character" | "word" | "line" | "all";
 
 /**
  * A serializable single-input audio effect applied to a clip or track bus.
@@ -2458,9 +2472,20 @@ export interface LayoutNode {
    */
   readonly text_align?: TextAlign | null;
   /**
+   * The units whose characters `text_animators` scale and turn about one pivot, as a text
+   * style's `animator_grouping`. Not inherited.
+   */
+  readonly text_animator_grouping?: AnimatorGrouping | null;
+  /**
+   * Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not
+   * inherited.
+   */
+  readonly text_animator_pivot?: Vec2 | null;
+  /**
    * Per-character motion of the box's own text, Range selectors only (layout text has no
-   * runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited; never
-   * changes layout.
+   * runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited. They
+   * never change layout, except that one whose advance follows its scale makes the text wrap,
+   * and measure as wide, with room for its largest scale.
    */
   readonly text_animators?: readonly TextAnimator[];
   /**
@@ -3900,6 +3925,12 @@ export interface TextAnimator {
  */
 export interface TextAnimatorProperties {
   /**
+   * Whether the character's advance follows this animator's horizontal scale, pushing the
+   * characters after it along its line, which is re-aligned; lines are not re-broken, and the
+   * text wraps with room for the largest scale this can reach. Needs `scale`.
+   */
+  readonly advance_follows_scale?: boolean;
+  /**
    * The fill color a fully selected character takes; a gradient fill is mixed toward it.
    */
   readonly fill?: Keyframed<Rgba> | null;
@@ -4243,9 +4274,21 @@ export interface TextStyle {
    */
   readonly anchor?: Vec2;
   /**
+   * The units whose characters the animators scale and turn about one pivot.
+   */
+  readonly animator_grouping?: AnimatorGrouping;
+  /**
+   * Where in each group's box (the union of its characters' advances by their em boxes) the
+   * pivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`
+   * percentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre
+   * on one line. Not animated.
+   */
+  readonly animator_pivot?: Vec2;
+  /**
    * Per-character motion and color, applied in order, at most `MAX_TEXT_ANIMATORS`.
    * Keyframes are in the holder's time (since a caption cue's start, or a text generator's
-   * picture time). They never change line layout.
+   * picture time). They never re-break lines while they play; an animator whose advance
+   * follows its scale makes the text wrap with room for its largest scale.
    */
   readonly animators?: readonly TextAnimator[];
   /**
@@ -4368,6 +4411,14 @@ export interface TextStylePatch {
    * See `TextStyle::anchor`.
    */
   readonly anchor?: Vec2 | null;
+  /**
+   * See `TextStyle::animator_grouping`.
+   */
+  readonly animator_grouping?: AnimatorGrouping | null;
+  /**
+   * See `TextStyle::animator_pivot`.
+   */
+  readonly animator_pivot?: Vec2 | null;
   /**
    * See `TextStyle::animators`.
    */

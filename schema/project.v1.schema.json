@@ -534,6 +534,31 @@
         }
       ]
     },
+    "AnimatorGrouping": {
+      "description": "The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point\nGrouping.",
+      "oneOf": [
+        {
+          "const": "character",
+          "description": "Each grapheme cluster about its own pivot.",
+          "type": "string"
+        },
+        {
+          "const": "word",
+          "description": "Each UAX #29 word holding a letter or digit; a cluster in no word is its own group.",
+          "type": "string"
+        },
+        {
+          "const": "line",
+          "description": "Each line.",
+          "type": "string"
+        },
+        {
+          "const": "all",
+          "description": "The whole text.",
+          "type": "string"
+        }
+      ]
+    },
     "AudioEffect": {
       "description": "A serializable single-input audio effect applied to a clip or track bus.\n\nSidechain ducking takes a second input, so it is authored per track through [`Ducking`].",
       "oneOf": [
@@ -4216,8 +4241,30 @@
           ],
           "description": "How lines align within the content width. Inherited; the root's is `start`."
         },
+        "text_animator_grouping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnimatorGrouping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The units whose characters `text_animators` scale and turn about one pivot, as a text\nstyle's `animator_grouping`. Not inherited."
+        },
+        "text_animator_pivot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not\ninherited."
+        },
         "text_animators": {
-          "description": "Per-character motion of the box's own text, Range selectors only (layout text has no\nruns). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never\nchanges layout.",
+          "description": "Per-character motion of the box's own text, Range selectors only (layout text has no\nruns). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited. They\nnever change layout, except that one whose advance follows its scale makes the text wrap,\nand measure as wide, with room for its largest scale.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
@@ -6667,6 +6714,10 @@
       "additionalProperties": false,
       "description": "What an animator does to each character, in proportion to its selection. A property left\nout does nothing.",
       "properties": {
+        "advance_follows_scale": {
+          "description": "Whether the character's advance follows this animator's horizontal scale, pushing the\ncharacters after it along its line, which is re-aligned; lines are not re-broken, and the\ntext wraps with room for the largest scale this can reach. Needs `scale`.",
+          "type": "boolean"
+        },
         "fill": {
           "anyOf": [
             {
@@ -7214,8 +7265,16 @@
           },
           "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre. Each coordinate within [`MAX_TEXT_POSITION`]."
         },
+        "animator_grouping": {
+          "$ref": "#/$defs/AnimatorGrouping",
+          "description": "The units whose characters the animators scale and turn about one pivot."
+        },
+        "animator_pivot": {
+          "$ref": "#/$defs/Vec2",
+          "description": "Where in each group's box (the union of its characters' advances by their em boxes) the\npivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`\npercentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre\non one line. Not animated."
+        },
         "animators": {
-          "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never change line layout.",
+          "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never re-break lines while they play; an animator whose advance\nfollows its scale makes the text wrap with room for its largest scale.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
@@ -7380,6 +7439,28 @@
             }
           ],
           "description": "See [`TextStyle::anchor`]."
+        },
+        "animator_grouping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnimatorGrouping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::animator_grouping`]."
+        },
+        "animator_pivot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::animator_pivot`]."
         },
         "animators": {
           "description": "See [`TextStyle::animators`].",

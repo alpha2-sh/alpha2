@@ -50,6 +50,9 @@ fn request(text: &str, size: f32) -> TextRasterRequest {
         font_weight: 400,
         clamp: None,
         spans: Vec::new(),
+        advance_headroom: 1.0,
+        animator_grouping: ClusterGrouping::Character,
+        animator_pivot: [0.5, 0.5],
     }
 }
 

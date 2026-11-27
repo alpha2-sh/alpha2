@@ -71,6 +71,9 @@ fn shaped(rasterizer: &TextRasterizer, content: &str, pixels: f32) -> ShapedText
             font_weight: 400,
             clamp: None,
             spans: Vec::new(),
+            advance_headroom: 1.0,
+            animator_grouping: alpha2_text::ClusterGrouping::Character,
+            animator_pivot: [0.5, 0.5],
         })
         .expect("shapes")
 }
@@ -896,4 +899,43 @@ fn a_layout_text_run_breaks_inside_the_span() {
         wrapped >= 4,
         "the large span wraps between its own words: {wrapped}"
     );
+}
+
+#[test]
+fn a_layout_text_measures_its_width_with_headroom() {
+    let rasterizer = fixture();
+    let picture = size(1000, 1000);
+    let card = |animators: serde_json::Value| {
+        let mut child = text("Pop", 0.04);
+        child["text_animators"] = animators;
+        node(json!({
+            "flex_direction": "row",
+            "align_items": "start",
+            "children": [child],
+        }))
+    };
+    let pop = json!([{
+        "selector": { "type": "range" },
+        "properties": {
+            "scale": constant(json!({ "x": 2, "y": 2 })),
+            "advance_follows_scale": true,
+        },
+    }]);
+    let width = |root: &LayoutNode| {
+        let bounds = measure_layout(&rasterizer, root, MediaTime::ZERO, picture, (1000, 1000))
+            .expect("measures");
+        let content = bounds.nodes[1].content;
+        (
+            (content.right - content.left) * 1000.0,
+            bounds.nodes[1].advance_headroom,
+        )
+    };
+    let (still, still_headroom) = width(&card(json!([])));
+    let (pushed, headroom) = width(&card(pop));
+    assert_eq!((still_headroom, headroom), (Some(1.0), Some(2.0)));
+    assert!((pushed - 2.0 * still).abs() <= 1.0, "{still} -> {pushed}");
+    let evaluated = LayoutPlan::new(&card(json!([])), (1000, 1000)).evaluate(MediaTime::ZERO);
+    let resolved = resolved(&rasterizer, &card(json!([])), picture);
+    let (_, requests) = layout_texts(&evaluated, &resolved, picture);
+    assert_eq!(requests[0].1.request.advance_headroom, 1.0);
 }
