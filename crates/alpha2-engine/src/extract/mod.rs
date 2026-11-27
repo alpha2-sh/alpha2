@@ -146,6 +146,6 @@ pub use pixels::{
 };
 pub use session::{
     AudioInput, Delivery, Emit, ExtractSession, FrameFrom, Need, PassProgress, RequestError,
-    RunContext, SessionError, Step, SuppliedAudio, SuppliedFrame, VideoInput,
+    RunContext, SessionError, Stage, Step, SuppliedAudio, SuppliedFrame, VideoInput,
 };
-pub use wire::{client_context_json, emit_from_json};
+pub use wire::{client_context_json, emit_from_json, progress_json};
