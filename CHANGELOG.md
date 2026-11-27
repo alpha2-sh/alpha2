@@ -54,9 +54,6 @@ All notable changes to this project are documented in this file.
   beside `hostVersion`. Packages and the host still work together only within one release; the
   host protocol document and the `alpha2`, `@alpha2-sh/node` and `@alpha2-sh/editor` READMEs now
   state that policy.
-
-### Changed
-
 - **Breaking:** an extraction's progress says which part of the run it is in and how far each pass
   has read by time. Every report has `stage` (`begin`, `pass` or `end`) and the pass's `covered`
   and `span` in ticks, so a pass over source frames, whose `total` is `null`, has a fraction too. A
