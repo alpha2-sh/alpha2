@@ -181,6 +181,10 @@ const { project, assets, loudness, warnings } = compileCompose(compose, spec, { 
 
 Each module's declarations document its API.
 
+## Releases
+
+`alpha2`, `@alpha2-sh/editor`, `@alpha2-sh/react`, `@alpha2-sh/node`, the Python package and `alpha2-host` work together only when they are the same release; before 1.0 no release is compatible with another, and the packages pin each other exactly. The capability report names the engine's release and the project schema it reads (`release`, `projectSchemaVersion`). Documents are checked against the running release: every object of the project format refuses fields it does not know, `schema_version` stays `1` until 1.0, and no release converts the documents of another, so a document written for one release can be refused by the next with `INVALID_INPUT` naming the field. Each release's CHANGELOG marks what it breaks. An application that updates its parts separately keeps them on one release ([Releases](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md#releases)).
+
 ## License
 
 MIT, copyright Alpha2 contributors. The package includes [`THIRD_PARTY_NOTICES.md`](https://github.com/alpha2-sh/alpha2/blob/main/THIRD_PARTY_NOTICES.md) for the components built into it, and `wasm/rust-crate-licenses.md` with the licenses of the Rust crates the wasm modules are compiled from.

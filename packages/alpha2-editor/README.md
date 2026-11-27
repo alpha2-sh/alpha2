@@ -162,6 +162,10 @@ The application owns the session: unmounting the provider does not dispose it.
 
 `@alpha2-sh/editor/native-client` (`createNativeClient({ baseUrl })`) exports a document on an HTTP export service that the application runs, for example on top of [`@alpha2-sh/node`](https://github.com/alpha2-sh/alpha2/blob/main/packages/alpha2-node/README.md). It uploads the document's media (`bridge.nativeAssets`) and follows the job to a downloadable file. Media imported from a reference with a `path` is not uploaded: the render request carries it in `paths` (`{ [kind]: { [id]: path } }`, the kinds and ids of the upload URLs), for a service on the same machine to read in place of an upload. A service that takes `paths` should accept them only from pages it trusts and only under directories it allows. A job the service no longer has (an expired lease, a restarted service) is allocated and uploaded again by the next attempt, and an error status is classified by `failureClassOfHttpStatus` from `alpha2/export-failure`: a body past the service's limit (413) fails at once as `RESOURCE_LIMIT`, and 429 or 503 retries as `RESOURCE_BUSY` after `Retry-After`.
 
+## Releases
+
+This package, its `alpha2` peer and `alpha2-host` work together only when they are the same release; before 1.0 no release is compatible with another, so the peer is pinned to this package's own version. `bridge.capabilities` names the engine's `release` (once a preview is bound) and its `projectSchemaVersion`. Documents are checked against the running release: every object of the project format refuses fields it does not know, `schema_version` stays `1` until 1.0, and no release converts the documents of another, so a document written for one release can be refused by the next with `INVALID_INPUT` naming the field. Each release's CHANGELOG marks what it breaks. Open a stored document with the release that will render it, and export natively with the host of that release ([Releases](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md#releases)).
+
 ## License
 
 MIT, copyright Alpha2 contributors.

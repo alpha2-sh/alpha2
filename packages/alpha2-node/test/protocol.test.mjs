@@ -3308,6 +3308,14 @@ send({ type: "state", state: "ready", reason: "started", details: ${JSON.stringi
 requests((request) => respond(request, { ok: true, result: { output: request.output } }));
 `;
 
+const SCHEMA_VERSION_HOST = (
+  projectSchemaVersion,
+) => `import { requests, respond, send } from ${IO};
+const named = { release: ${JSON.stringify(CLIENT_VERSION)}, projectSchemaVersion: ${projectSchemaVersion} };
+send({ type: "state", state: "ready", reason: "started", details: { hostVersion: named.release, projectSchemaVersion: named.projectSchemaVersion } });
+requests((request) => respond(request, { ok: true, result: { status: "ready", capabilities: { schema: "alpha2-capabilities", version: 3, ...named }, effectCatalog: {} } }));
+`;
+
 async function refusal(client) {
   return client.exportProject(exportRequest("out.mp4")).then(
     () => assert.fail("the export resolved"),
@@ -3739,6 +3747,22 @@ const SCENARIO_DRIVERS = {
         assert.ok(error.message.includes(hostPath), error.message);
       if (scenario.expect.hostEnded) await assertHostsEnded(pids);
     }
+  },
+  async "schema-version"(scenario) {
+    const root = await scratch("alpha2-node-schema-version-");
+    const hostPath = await fakeHost(
+      root,
+      SCHEMA_VERSION_HOST(scenario.given.projectSchemaVersion),
+    );
+    const { capabilities } = await new Alpha2NodeClient({
+      hostPath,
+    }).getCapabilities();
+    assert.equal(
+      capabilities.projectSchemaVersion,
+      scenario.expect.projectSchemaVersion,
+    );
+    if (scenario.expect.releaseIsTheClients)
+      assert.equal(capabilities.release, CLIENT_VERSION);
   },
   async "start-timeout"(scenario) {
     const root = await scratch("alpha2-node-start-timeout-");

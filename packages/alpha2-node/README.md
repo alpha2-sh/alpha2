@@ -159,6 +159,10 @@ A host decides when a new process would serve better, for example once its memor
 
 Idle hosts do not keep Node.js running. `await client.close()` ends a client's hosts; later requests start new ones. The module-level `exportProject(request, options)`, `still`, `stills` and `getCapabilities(options)` share one client, and its hosts, per host binary, `concurrency`, `hostStartTimeoutMs` and `cacheDirectory`.
 
+## Releases
+
+This package and `alpha2-host` work together only when they are the same release, and so do the other alpha2 packages; before 1.0 no release is compatible with another. The client refuses a host of another release, or one that names none, with `HOST_VERSION_MISMATCH` and ends it. An application whose parts update separately (a desktop shell and the web code it loads, a server and its workers) keeps them in step by installing and starting the host of this package's own release: `npx @alpha2-sh/node install` puts it in a directory of the cache named for the release, beside the hosts of other releases, and the client starts that one unless `hostPath` or `ALPHA2_HOST_PATH` names another. `getCapabilities()` reports the host's `release` and `projectSchemaVersion` in `capabilities`. Documents are checked against the running release: every object of the project format refuses fields it does not know, `schema_version` stays `1` until 1.0, and no release converts the documents of another, so a document written for one release can be refused by the next with `INVALID_INPUT` naming the field. Each release's CHANGELOG marks what it breaks. [The host protocol](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md#releases) states the rule for clients in other languages.
+
 ## Electron
 
 Ship the archive's `bin/` and `lib/` outside the ASAR archive, for example as `bin/` and `lib/` in the application's resources directory (`process.resourcesPath`), where the client finds the host in an Electron main process. A host path inside `app.asar` is read from `app.asar.unpacked` instead.

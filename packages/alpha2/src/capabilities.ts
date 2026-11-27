@@ -1,5 +1,5 @@
 /**
- * Runtime capability report (`alpha2-capabilities`, version 2), shared by the native host and the
+ * Runtime capability report (`alpha2-capabilities`, version 3), shared by the native host and the
  * browser bridge.
  */
 
@@ -131,7 +131,14 @@ export interface AdapterChoice {
 /** A runtime's capabilities. `Decode` and `Encode` are runtime-specific. */
 export interface CapabilityReport<Decode = unknown, Encode = unknown> {
   readonly schema: "alpha2-capabilities";
-  readonly version: 2;
+  readonly version: 3;
+  /** The alpha2 release of the engine; packages and the host work together only within one. */
+  readonly release: string;
+  /**
+   * The project `schema_version` the engine reads and writes. Before v1 the release, not this
+   * number, decides which fields a document may hold.
+   */
+  readonly projectSchemaVersion: number;
   readonly runtime: "native" | "browser";
   /** `null` before a browser's engine has started. */
   readonly gpu: GpuCapability | null;

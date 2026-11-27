@@ -25,6 +25,12 @@ All notable changes to this project are documented in this file.
 - An export that pins an encoder taking GPU frames only (`h264_vulkan`, `h264_d3d12va`) on a host
   whose shared device was not made fails with `GPU_OUTPUT_UNAVAILABLE` naming that device and why
   it was not made, instead of `INVALID_INPUT` "video encoder ... is unavailable".
+- **Breaking:** the capability report (`alpha2-capabilities`) is version 3 and names the engine's
+  `release` and the project `schema_version` it reads (`projectSchemaVersion`), in the native host
+  and in the browser. The host's `state` details and `status` result add `projectSchemaVersion`
+  beside `hostVersion`. Packages and the host still work together only within one release; the
+  host protocol document and the `alpha2`, `@alpha2-sh/node` and `@alpha2-sh/editor` READMEs now
+  state that policy.
 
 ### Fixed
 
