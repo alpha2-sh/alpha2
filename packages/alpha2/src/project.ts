@@ -98,6 +98,11 @@ import {
   MAX_LETTER_SPACING,
   MAX_LINE_HEIGHT,
   MAX_TEXT_PADDING,
+  MAX_REVEAL_FEATHER,
+  MAX_HIGHLIGHT_TRANSITION,
+  MAX_TEXT_BORDER_WIDTH,
+  MAX_TEXT_DASH_ENTRY,
+  MAX_TEXT_DASH_OFFSET,
   MAX_ANIMATOR_SCALE,
   MAX_CLASS_NAME_BYTES,
   MAX_RANGE_INDEX,
@@ -105,6 +110,9 @@ import {
   MAX_RUN_CLASSES,
   MAX_TEXT_ANIMATORS,
   MAX_TEXT_RUNS,
+  MAX_TEXT_FONT_SELECTIONS,
+  MIN_FONT_SCALE,
+  MAX_FONT_SCALE,
   MAX_LOOP_PASSES,
   MAX_ANIMATOR_OFFSET,
   MAX_ASPECT_RATIO,
@@ -316,7 +324,8 @@ function invariantProblems(value: unknown): string[] {
     for (const problem of trackProblems(track, catalog, clipIds, false))
       problems.push(problem);
   }
-  for (const problem of matteProblems(tracks)) problems.push(problem);
+  for (const problem of matteProblems(tracks, catalog.sources))
+    problems.push(problem);
   for (const problem of projectDataProblems(project)) problems.push(problem);
   if (catalog.inlined !== undefined) {
     const frame = frameNodesOver(
@@ -439,6 +448,22 @@ function catalogOf(
     }
     const sourceId = text(source.id);
     if (sourceId.length === 0) problems.push("source id must not be empty");
+    if (source.kind === "adjustment") {
+      if (
+        text(source.locator).length > 0 ||
+        source.generator != null ||
+        source.composition != null ||
+        source.color_metadata != null ||
+        source.fingerprint != null ||
+        source.provider != null ||
+        source.has_audio === true
+      ) {
+        problems.push(
+          `source ${sourceId} is not a valid adjustment source: it has only an id and its kind`,
+        );
+      }
+      continue;
+    }
     if (
       source.fingerprint != null &&
       (source.kind === "generated" || !validFingerprint(source.fingerprint))
@@ -481,6 +506,10 @@ function catalogOf(
         problems.push(shapeProblem(`source ${sourceId}`, issue));
       } else if (layout) {
         problems.push(layoutProblem(`source ${sourceId}`, layout));
+      } else if (generatorRunIssue(source.generator) !== undefined) {
+        problems.push(
+          `source ${sourceId} has text run ${generatorRunIssue(source.generator)} with a style out of range`,
+        );
       } else if (
         !validGenerator(source.generator) ||
         text(source.locator).length > 0 ||
@@ -658,6 +687,13 @@ function trackProblems(
     transitions,
   ))
     problems.push(problem);
+  for (const problem of adjustmentTransitionProblems(
+    trackId,
+    clips,
+    transitions,
+    catalog.sources,
+  ))
+    problems.push(problem);
   for (const transition of transitions) {
     if (!isRecord(transition) || !isRecord(transition.effect)) continue;
     const resources = transition.effect.resources;
@@ -737,8 +773,44 @@ function clipProblems(
     const issue = masksIssue(clip.masks);
     if (issue) problems.push(shapeProblem(`clip ${clipId}`, issue));
   }
-  if (clip.matte != null && trackKind !== "video") {
+  if (clip.matte != null && (trackKind !== "video" || isAdjustment(source))) {
     problems.push(`clip ${clipId} has an invalid matte`);
+  }
+  return problems;
+}
+
+const ADJUSTMENT_TRANSITION_ID = "alpha2.transition.fade";
+
+function isAdjustment(source: unknown): boolean {
+  return isRecord(source) && source.kind === "adjustment";
+}
+
+function adjustmentTransitionProblems(
+  trackId: string,
+  clips: readonly Clip[],
+  transitions: readonly ClipTransition[],
+  sources: ReadonlyMap<string, unknown>,
+): string[] {
+  const adjustments = new Set<string>();
+  for (const clip of clips)
+    if (isRecord(clip) && isAdjustment(sources.get(text(clip.source_id))))
+      adjustments.add(text(clip.id));
+  if (adjustments.size === 0) return [];
+  const problems: string[] = [];
+  for (const transition of transitions) {
+    if (
+      !isRecord(transition) ||
+      (isRecord(transition.effect) &&
+        transition.effect.id === ADJUSTMENT_TRANSITION_ID)
+    )
+      continue;
+    const clip = [text(transition.from_clip), text(transition.to_clip)].find(
+      (id) => adjustments.has(id),
+    );
+    if (clip !== undefined)
+      problems.push(
+        `a transition on track ${trackId} names adjustment clip ${clip}, which only fades`,
+      );
   }
   return problems;
 }
@@ -1027,6 +1099,7 @@ function mattesHold(summaries: readonly TrackSummary[]): boolean {
       if (
         target === undefined ||
         target.matte != null ||
+        isAdjustment(summary.catalog.sources.get(text(target.source_id))) ||
         video.some((other) => other.joined.has(source))
       )
         return false;
@@ -1554,6 +1627,23 @@ function insetsRead(value: unknown): unknown {
   ]);
 }
 
+/** Mirrors `TextInsets`'s writer: one number when every side is the same, else the sides. */
+function textInsetsRead(value: unknown): unknown {
+  const sides = textInsetsSides(value);
+  if (sides === undefined) return value;
+  const [top, right, bottom, left] = sides.map((side) => Math.fround(side));
+  if (top === right && top === bottom && top === left) return sides[0];
+  if (
+    isRecord(value) &&
+    Object.keys(value).length === 4 &&
+    SIDE_NAMES.every((side) => value[side] !== undefined)
+  )
+    return value;
+  return Object.fromEntries(
+    SIDE_NAMES.map((side, index) => [side, sides[index]]),
+  );
+}
+
 function offsetRead(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const parsed = parseOffset(value);
@@ -1591,6 +1681,7 @@ const CANONICAL_DEFS: ReadonlySet<string> = (() => {
     "Rgba",
     "Paint",
     "Insets",
+    "TextInsets",
     "LayoutOffset",
     "VisualProperties",
   ]);
@@ -1648,6 +1739,7 @@ function canonicalWalk(node: ShapeNode, value: unknown): unknown {
   if (schema === SHAPE_DEFS.Rgba) return rgbaRead(value);
   if (schema === SHAPE_DEFS.Paint) return paintRead(value);
   if (schema === SHAPE_DEFS.Insets) return insetsRead(value);
+  if (schema === SHAPE_DEFS.TextInsets) return textInsetsRead(value);
   if (schema === SHAPE_DEFS.LayoutOffset) return offsetRead(value);
   const variants = (schema.oneOf ?? schema.anyOf) as ShapeNode[] | undefined;
   if (variants !== undefined) {
@@ -3199,9 +3291,17 @@ function captionsProblem(
         : typeof cue.speaker === "string" && Object.hasOwn(styles, cue.speaker)
           ? cue.speaker
           : undefined;
-    if (patchName === undefined) continue;
-    const merged = patchedStyle(captions.style ?? {}, styles[patchName]);
-    if (!validTextStyle(merged, MAX_CAPTION_FONT_SIZE)) {
+    const merged =
+      patchName === undefined
+        ? isRecord(captions.style)
+          ? captions.style
+          : {}
+        : patchedStyle(captions.style ?? {}, styles[patchName]);
+    if (
+      (patchName !== undefined &&
+        !validTextStyle(merged, MAX_CAPTION_FONT_SIZE)) ||
+      invalidRunStyle(cue.text, fontSelection(merged)) !== undefined
+    ) {
       return `cue ${index} of track ${trackId} has a style out of range once its patch is applied`;
     }
   }
@@ -3258,10 +3358,87 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
     (style.shadows === undefined || validTextShadows(style.shadows)) &&
     (style.animators === undefined ||
       validTextAnimators(style.animators, false)) &&
-    (background == null ||
-      (isRecord(background) &&
-        validRgba(background.color) &&
-        within(background.padding ?? 0, 0, MAX_TEXT_PADDING)))
+    (style.animator_pivot === undefined ||
+      validAnimatorPivot(style.animator_pivot)) &&
+    (background == null || validTextBackground(background)) &&
+    (style.highlight == null || validTextHighlight(style.highlight))
+  );
+}
+
+/** Mirrors `TextHighlight::is_valid`. */
+function validTextHighlight(highlight: unknown): boolean {
+  if (!isRecord(highlight)) return false;
+  const transition = highlight.transition ?? 0;
+  return (
+    validTextBackground({
+      color: highlight.color,
+      padding: highlight.padding,
+      radius: highlight.radius,
+      border: highlight.border,
+    }) &&
+    Number.isInteger(transition) &&
+    (transition as number) >= 0 &&
+    (transition as number) <= MAX_HIGHLIGHT_TRANSITION &&
+    (highlight.easing === undefined || validCurve(highlight.easing))
+  );
+}
+
+/** The four sides of a text box's padding, top first, or `undefined` when unreadable. */
+function textInsetsSides(value: unknown): number[] | undefined {
+  if (value === undefined) return [0, 0, 0, 0];
+  if (finiteNumber(value)) return [value, value, value, value];
+  if (typeof value === "string") {
+    const values = value
+      .split(" ")
+      .filter((token) => token.length > 0)
+      .map(Number);
+    if (values.some((side) => !Number.isFinite(side))) return undefined;
+    const [top, right = top, bottom = top, left = right] = values;
+    return values.length >= 1 && values.length <= 4
+      ? [top, right, bottom, left]
+      : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  const sides = SIDE_NAMES.map((side) => value[side] ?? 0);
+  return sides.every(finiteNumber) ? sides : undefined;
+}
+
+/** Mirrors `TextBackground::is_valid`. */
+function validTextBackground(background: unknown): boolean {
+  if (!isRecord(background) || !validRgba(background.color)) return false;
+  const within = (value: unknown, low: number, high: number) =>
+    finiteNumber(value) && value >= low && value <= high;
+  const sides = textInsetsSides(background.padding);
+  const border = background.border;
+  return (
+    sides !== undefined &&
+    sides.every((side) => within(side, 0, MAX_TEXT_PADDING)) &&
+    within(background.radius ?? 0, 0, MAX_TEXT_PADDING) &&
+    (border == null ||
+      (isRecord(border) &&
+        finiteNumber(border.width) &&
+        Math.fround(border.width) > 0 &&
+        Math.fround(border.width) <= Math.fround(MAX_TEXT_BORDER_WIDTH) &&
+        validRgba(border.color) &&
+        (border.dash == null || validTextDash(border.dash))))
+  );
+}
+
+/** Mirrors `TextDash::is_valid`. */
+function validTextDash(dash: unknown): boolean {
+  if (!isRecord(dash) || !Array.isArray(dash.pattern)) return false;
+  const pattern = dash.pattern as readonly unknown[];
+  const offset = dash.offset ?? 0;
+  return (
+    pattern.length >= 1 &&
+    pattern.length <= MAX_DASH_ENTRIES &&
+    pattern.every(
+      (entry) =>
+        finiteNumber(entry) && entry >= 0 && entry <= MAX_TEXT_DASH_ENTRY,
+    ) &&
+    pattern.some((entry) => (entry as number) > 0) &&
+    finiteNumber(offset) &&
+    Math.abs(offset) <= MAX_TEXT_DASH_OFFSET
   );
 }
 
@@ -3301,6 +3478,80 @@ function validTextContent(text: unknown, encoder: TextEncoder): boolean {
     }
   }
   return bytes > 0 && bytes <= MAX_TEXT_CONTENT_BYTES;
+}
+
+interface FontSelection {
+  readonly family: string | undefined;
+  readonly weight: number;
+  readonly style: string;
+}
+
+function fontSelection(style: Record<string, unknown>): FontSelection {
+  return {
+    family:
+      typeof style.font_family === "string" ? style.font_family : undefined,
+    weight: typeof style.font_weight === "number" ? style.font_weight : 400,
+    style: typeof style.font_style === "string" ? style.font_style : "normal",
+  };
+}
+
+/** Mirrors `TextContent::invalid_run_style`. */
+function invalidRunStyle(
+  text: unknown,
+  base: FontSelection,
+): number | undefined {
+  if (!Array.isArray(text)) return undefined;
+  const selections = new Set<string>();
+  for (const [index, run] of (text as readonly unknown[]).entries()) {
+    const style = isRecord(run) && isRecord(run.style) ? run.style : undefined;
+    if (isRecord(run) && run.style !== undefined && !validRunStyle(run.style))
+      return index;
+    const family =
+      style !== undefined && Object.hasOwn(style, "font_family")
+        ? style.font_family
+        : base.family;
+    const selection = JSON.stringify([
+      typeof family === "string"
+        ? family.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+        : null,
+      style?.font_weight ?? base.weight,
+      style?.font_style ?? base.style,
+    ]);
+    if (!selections.has(selection)) {
+      if (selections.size === MAX_TEXT_FONT_SELECTIONS) return index;
+      selections.add(selection);
+    }
+  }
+  return undefined;
+}
+
+/** Mirrors `TextRunStyle::is_valid`. */
+function validRunStyle(style: unknown): boolean {
+  if (!isRecord(style)) return false;
+  const family = style.font_family;
+  const scale = style.font_scale;
+  return (
+    (family == null ||
+      (typeof family === "string" &&
+        family.length > 0 &&
+        new TextEncoder().encode(family).length <= MAX_FONT_FAMILY_BYTES)) &&
+    (style.font_weight === undefined || validFontWeight(style.font_weight)) &&
+    (scale === undefined ||
+      (isRecord(scale) &&
+        scale.mode !== "data" &&
+        validScalarAnimation(
+          scale,
+          Math.fround(MIN_FONT_SCALE),
+          Math.fround(MAX_FONT_SCALE),
+        ))) &&
+    (style.letter_spacing === undefined ||
+      (finiteNumber(style.letter_spacing) &&
+        style.letter_spacing >= MIN_LETTER_SPACING &&
+        style.letter_spacing <= MAX_LETTER_SPACING)) &&
+    (style.fill === undefined || validTextFill(style.fill)) &&
+    (style.strokes === undefined || validTextStrokes(style.strokes)) &&
+    (style.background_color === undefined || validRgba(style.background_color))
+  );
 }
 
 /** Mirrors `valid_class_name`. */
@@ -3382,8 +3633,27 @@ function validAnimatorProperties(properties: unknown): boolean {
       properties.tracking,
       MIN_LETTER_SPACING,
       MAX_LETTER_SPACING,
-    )
+    ) &&
+    (properties.advance_follows_scale !== true || present(properties.scale)) &&
+    (properties.reveal == null || validTextReveal(properties.reveal))
   );
+}
+
+/** Mirrors `TextReveal::is_valid`. */
+function validTextReveal(reveal: unknown): boolean {
+  return (
+    isRecord(reveal) &&
+    validScalarAnimation(reveal.progress, 0, 1) &&
+    validScalarAnimation(reveal.angle_degrees) &&
+    validScalarAnimation(reveal.feather, 0, MAX_REVEAL_FEATHER)
+  );
+}
+
+/** Mirrors `valid_animator_pivot`: each fraction of a group's box in `[0, 1]`. */
+function validAnimatorPivot(pivot: unknown): boolean {
+  const fraction = (value: unknown) =>
+    finiteNumber(value) && value >= 0 && value <= 1;
+  return isRecord(pivot) && fraction(pivot.x) && fraction(pivot.y);
 }
 
 function validTextFill(fill: unknown): boolean {
@@ -3553,6 +3823,18 @@ function positive(value: unknown): boolean {
   return typeof value === "number" && value > 0;
 }
 
+/** Mirrors the text run check of `Generator::validate`. */
+function generatorRunIssue(generator: unknown): number | undefined {
+  if (
+    !isRecord(generator) ||
+    generator.type !== "text" ||
+    !validGenerator(generator)
+  )
+    return undefined;
+  const style = isRecord(generator.style) ? generator.style : {};
+  return invalidRunStyle(generator.text, fontSelection(style));
+}
+
 function validGenerator(generator: unknown): boolean {
   if (!isRecord(generator)) return false;
   if (generator.type === "fill") return validPaint(generator.paint);
@@ -3627,6 +3909,7 @@ const LAYOUT_PROBLEM = {
   lengthKeyframesDiffer: "has size keyframes that differ in kind",
   paintKeyframesDiffer: "has paint keyframes that differ in kind or stops",
   textKeyframesInterpolate: "has text keyframes that do not hold",
+  textRunNotStatic: "has a run with a class, a time or a keyframed font scale",
 } as const;
 
 // Problems in a shape node's items (`shape` set) are reported as shape problems, like the engine.
@@ -3750,6 +4033,8 @@ function layoutIssue(root: unknown, canvas?: Canvas): LayoutIssue | undefined {
   return layoutNodeIssue(root, "root", 1, counts, {
     shorterSide,
     parent: undefined,
+    family: undefined,
+    weight: 400,
   });
 }
 
@@ -3763,7 +4048,12 @@ function layoutNodeIssue(
     isolated: number;
     shapes: { count: number };
   },
-  context: { shorterSide: number | undefined; parent: string | undefined },
+  context: {
+    shorterSide: number | undefined;
+    parent: string | undefined;
+    family: string | undefined;
+    weight: number;
+  },
 ): LayoutIssue | undefined {
   const issue = (problem: string): LayoutIssue => ({ at, problem });
   const node = isRecord(value) ? value : {};
@@ -3828,8 +4118,16 @@ function layoutNodeIssue(
     layoutGridIssue(node, at) ??
     layoutStyleIssue(node, at, context.shorterSide);
   if (fields) return fields;
+  const family =
+    typeof node.font_family === "string" ? node.font_family : context.family;
+  const weight =
+    typeof node.font_weight === "number" ? node.font_weight : context.weight;
   if (text) {
-    const textIssue = layoutTextIssue(node.text, `${at}.text`);
+    const textIssue = layoutTextIssue(node.text, `${at}.text`, {
+      family,
+      weight,
+      style: "normal",
+    });
     if (textIssue) return textIssue;
   }
   if (shape) {
@@ -3848,7 +4146,7 @@ function layoutNodeIssue(
       `${at}.children[${index}]`,
       depth + 1,
       counts,
-      { shorterSide: context.shorterSide, parent: display },
+      { shorterSide: context.shorterSide, parent: display, family, weight },
     );
     if (childIssue) return childIssue;
   }
@@ -4230,6 +4528,12 @@ function layoutStyleIssue(
   ) {
     return outOfRange("text_animators");
   }
+  if (
+    present(node.text_animator_pivot) &&
+    !validAnimatorPivot(node.text_animator_pivot)
+  ) {
+    return outOfRange("text_animator_pivot");
+  }
   return undefined;
 }
 
@@ -4237,6 +4541,7 @@ function layoutStyleIssue(
 function layoutTextIssue(
   content: unknown,
   at: string,
+  base: FontSelection,
 ): LayoutIssue | undefined {
   const keyframes = layoutAnimatedIssue(content, at, () => true);
   if (keyframes) return keyframes;
@@ -4252,13 +4557,41 @@ function layoutTextIssue(
   ) {
     return { at, problem: LAYOUT_PROBLEM.textKeyframesInterpolate };
   }
-  return layoutAnimatedIssue(
-    content,
-    at,
-    (value) =>
-      typeof value === "string" &&
-      new TextEncoder().encode(value).length <= MAX_TEXT_CONTENT_BYTES,
-  );
+  const values = animationValues<unknown>(content) ?? [];
+  const notStatic = (value: unknown) =>
+    Array.isArray(value) &&
+    value.some(
+      (run: unknown) =>
+        isRecord(run) &&
+        ((Array.isArray(run.class) && run.class.length > 0) ||
+          run.time != null ||
+          (isRecord(run.style) &&
+            isRecord(run.style.font_scale) &&
+            run.style.font_scale.mode !== "constant")),
+    );
+  if (values.some(notStatic)) {
+    return { at, problem: LAYOUT_PROBLEM.textRunNotStatic };
+  }
+  const encoder = new TextEncoder();
+  return layoutAnimatedIssue(content, at, (value) => {
+    if (typeof value === "string")
+      return encoder.encode(value).length <= MAX_TEXT_CONTENT_BYTES;
+    if (!Array.isArray(value)) return false;
+    let bytes = 0;
+    for (const run of value as readonly unknown[]) {
+      if (
+        !isRecord(run) ||
+        typeof run.text !== "string" ||
+        run.text.length === 0
+      )
+        return false;
+      bytes += encoder.encode(run.text).length;
+    }
+    return (
+      bytes <= MAX_TEXT_CONTENT_BYTES &&
+      invalidRunStyle(value, base) === undefined
+    );
+  });
 }
 
 /** Mirrors `validate_shape_items`: the first problem of a content tree in document order. */
@@ -4703,6 +5036,12 @@ function nodeInputs(op: Record<string, unknown>): [string, unknown][] {
         ["input", op.input],
         ["matte", op.matte],
       ];
+    case "key_mix":
+      return [
+        ["backdrop", op.backdrop],
+        ["input", op.input],
+        ["mask", op.mask],
+      ];
     case "merge":
       return (Array.isArray(op.layers) ? op.layers : []).map(
         (layer: unknown, index) => [
@@ -5030,6 +5369,10 @@ function compositionProblems(
           problems.push(
             layoutProblem(`node ${nodeId} of composition ${id}`, layout),
           );
+        } else if (generatorRunIssue(op.generator) !== undefined) {
+          problems.push(
+            `composition ${id} node ${nodeId} has text run ${generatorRunIssue(op.generator)} with a style out of range`,
+          );
         } else if (!validGenerator(op.generator)) {
           invalid();
         }
@@ -5048,6 +5391,9 @@ function compositionProblems(
         break;
       case "transform":
         if (!validVisual(op.transform)) invalid();
+        break;
+      case "key_mix":
+        if (!unit(op.opacity)) invalid();
         break;
       case "merge": {
         const layers = Array.isArray(op.layers) ? op.layers : [];
@@ -5186,7 +5532,10 @@ function masksIssue(masks: unknown): ShapeIssue | undefined {
 }
 
 // A matte names another visual clip that has no matte and is in no transition.
-function matteProblems(tracks: readonly Track[]): string[] {
+function matteProblems(
+  tracks: readonly Track[],
+  sources: ReadonlyMap<string, unknown>,
+): string[] {
   const visual = new Map<string, Record<string, unknown>>();
   const inTransition = new Set<string>();
   for (const track of tracks) {
@@ -5211,6 +5560,7 @@ function matteProblems(tracks: readonly Track[]): string[] {
       source === id ||
       matteClip === undefined ||
       matteClip.matte != null ||
+      isAdjustment(sources.get(text(matteClip.source_id))) ||
       inTransition.has(source)
     ) {
       problems.push(`clip ${id} has an invalid matte`);
@@ -5347,6 +5697,13 @@ export type LintIssue =
       readonly kind: "empty_text_animator";
       readonly owner: LintOwner;
       /** Such as `style.animators[0]`, or `root.children[1].text_animators[0]` in a layout. */
+      readonly at: string;
+    }
+  /** A highlight over a text with no timed run (a caption track: none in any cue), which draws nothing. */
+  | {
+      readonly kind: "highlight_without_timed_runs";
+      readonly owner: LintOwner;
+      /** Such as `style.highlight` or `styles.loud.highlight`. */
       readonly at: string;
     };
 

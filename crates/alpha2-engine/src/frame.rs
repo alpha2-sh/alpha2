@@ -14,7 +14,8 @@ use alpha2_model::{
 use alpha2_render::{
     BlendMode, CacheIntent, Color, CpuImage, CpuRenderer, EffectCatalog, EffectId, EffectInputs,
     EffectParams, EffectResources, EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID,
-    GraphError, GraphLayer, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
+    GraphError, GraphLayer, KEY_MIX_BACKDROP, KEY_MIX_EFFECT_ID, KEY_MIX_MASK, KEY_MIX_OPACITY,
+    KEY_MIX_UNMASKED_EFFECT_ID, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
     MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamType, ParamValue, PendingSourceWork,
     PlaneTarget, RenderCacheKey, RenderControls, RenderError, RenderGraph, RenderNodeId,
     RenderNodeKind, RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID,
@@ -1018,33 +1019,8 @@ fn frame_graph<'a>(
         alpha2_model::BlendSpace::LinearLight => alpha2_render::BlendSpace::LinearLight,
         alpha2_model::BlendSpace::SrgbEncoded => alpha2_render::BlendSpace::SrgbEncoded,
     });
-    let mut nodes = HashMap::with_capacity(available.len());
-    let mut inputs = Vec::with_capacity(available.len() + frame.transitions.len());
-    // Each matte's coverage is drawn once however many clips it mattes.
-    let mut coverages = HashMap::new();
     let runtime = frame_runtime(frame, size);
-    for (clip, textures) in available {
-        if clip.is_matte {
-            continue;
-        }
-        let mut layer = clip_layer(renderer, &mut graph, clip, textures, frame.time, runtime)?;
-        if let Some(matte) = clip.matte {
-            layer = apply_matte(
-                renderer,
-                &mut graph,
-                layer,
-                matte,
-                available,
-                (frame.time, runtime),
-                &mut coverages,
-            )?;
-        }
-        nodes.insert(clip.clip_id, inputs.len());
-        inputs.push(FrameInput {
-            kind: FrameInputKind::Layer(layer),
-            uses_backdrop: clip.blend_mode != ClipBlendMode::Normal,
-        });
-    }
+    let (mut nodes, mut inputs) = clip_inputs(renderer, &mut graph, frame, available, runtime)?;
     let background = background_color(frame.background);
     let suppressed = fold_transitions(frame, available, &mut nodes, &mut inputs)?;
     let mut layers = Vec::with_capacity(available.len() + captions.len());
@@ -1059,9 +1035,27 @@ fn frame_graph<'a>(
             continue;
         }
         let index = *nodes.get(clip.clip_id).ok_or(RenderError::InvalidGraph)?;
-        if let FrameInputKind::Layer(layer) = inputs[index].kind {
-            layers.push(layer);
-            continue;
+        match inputs[index].kind {
+            FrameInputKind::Layer(layer) => {
+                layers.push(layer);
+                continue;
+            }
+            FrameInputKind::Adjustment { .. } if changes_nothing(clip) => continue,
+            FrameInputKind::Adjustment { .. } => {
+                let backdrop = graph
+                    .add_composite_over(std::mem::take(&mut layers), background)
+                    .map_err(GraphError::into_render_error)?;
+                let scene = adjusted_scene(
+                    renderer,
+                    &mut graph,
+                    (clip, textures),
+                    backdrop,
+                    (frame.time, runtime),
+                )?;
+                layers.push(identity_layer(scene));
+                continue;
+            }
+            FrameInputKind::Transition { .. } => {}
         }
         // Normal transitions operate on isolated, transformed layers. Artistic modes need the
         // same backdrop on both sides: transition their composed scenes, then replace that
@@ -1077,9 +1071,11 @@ fn frame_graph<'a>(
             &mut graph,
             &inputs,
             index,
-            backdrop,
-            uses_backdrop.then_some(background),
-            runtime,
+            &Backdrop {
+                layers: backdrop,
+                background: uses_backdrop.then_some(background),
+            },
+            (available, frame.time, runtime),
             renderer,
         )?;
         if uses_backdrop {
@@ -1100,6 +1096,57 @@ fn frame_graph<'a>(
         .set_cache_intent(output, CacheIntent::Auto)
         .map_err(GraphError::into_render_error)?;
     Ok(graph)
+}
+
+type ClipInputs<'a> = (
+    HashMap<&'a alpha2_model::ClipId, usize>,
+    Vec<FrameInput<'a>>,
+);
+
+fn clip_inputs<'a>(
+    renderer: &dyn EffectCatalog,
+    graph: &mut RenderGraph<'a>,
+    frame: &'a FrameDesc<'a>,
+    available: &[(&'a ActiveClip<'a>, ClipFrames<'a>)],
+    runtime: EffectRuntime,
+) -> Result<ClipInputs<'a>, RenderError> {
+    let mut nodes = HashMap::with_capacity(available.len());
+    let mut inputs = Vec::with_capacity(available.len() + frame.transitions.len());
+    // Each matte's coverage is drawn once however many clips it mattes.
+    let mut coverages = HashMap::new();
+    for (position, (clip, textures)) in available.iter().enumerate() {
+        if clip.is_matte {
+            continue;
+        }
+        if clip.adjustment {
+            nodes.insert(clip.clip_id, inputs.len());
+            inputs.push(FrameInput {
+                kind: FrameInputKind::Adjustment {
+                    available: position,
+                },
+                uses_backdrop: true,
+            });
+            continue;
+        }
+        let mut layer = clip_layer(renderer, graph, clip, textures, frame.time, runtime)?;
+        if let Some(matte) = clip.matte {
+            layer = apply_matte(
+                renderer,
+                graph,
+                layer,
+                matte,
+                available,
+                (frame.time, runtime),
+                &mut coverages,
+            )?;
+        }
+        nodes.insert(clip.clip_id, inputs.len());
+        inputs.push(FrameInput {
+            kind: FrameInputKind::Layer(layer),
+            uses_backdrop: clip.blend_mode != ClipBlendMode::Normal,
+        });
+    }
+    Ok((nodes, inputs))
 }
 
 /// Adds a node per transition of `frame`, each replacing its `to` clip's node, and returns the
@@ -1237,6 +1284,82 @@ fn apply_matte<'a, 'c>(
     Ok(layer)
 }
 
+fn changes_nothing(clip: &ActiveClip<'_>) -> bool {
+    clip.composition.is_none_or(|composition| {
+        let plan = composition.plan();
+        plan.steps
+            .get(plan.output)
+            .is_some_and(|step| step.op == StepOp::Clip)
+    }) || clip.visual.is_none_or(|visual| visual.opacity <= 0.0)
+}
+
+fn adjusted_scene<'a>(
+    renderer: &dyn EffectCatalog,
+    graph: &mut RenderGraph<'a>,
+    (clip, textures): (&'a ActiveClip<'a>, &ClipFrames<'a>),
+    backdrop: RenderNodeId,
+    (time, runtime): (MediaTime, EffectRuntime),
+) -> Result<RenderNodeId, RenderError> {
+    let visual = clip.visual.ok_or(RenderError::InvalidVisual)?;
+    let composition = clip.composition.ok_or(RenderError::InvalidGraph)?;
+    let mut adjusted = plan_node(
+        renderer,
+        graph,
+        composition,
+        &textures.media,
+        ClipStep::Backdrop(backdrop),
+        runtime,
+    )?;
+    if clip.blend_mode != ClipBlendMode::Normal {
+        adjusted = graph
+            .add_composite(vec![
+                identity_layer(backdrop),
+                GraphLayer {
+                    blend_mode: blend_mode(clip.blend_mode),
+                    ..identity_layer(adjusted)
+                },
+            ])
+            .map_err(GraphError::into_render_error)?;
+    }
+    let placement = LayerTransform {
+        opacity: 1.0,
+        ..layer_transform(visual)
+    };
+    let mask = if clip.masks.is_empty() && placement == identity_layer(backdrop).visual {
+        None
+    } else {
+        let frame = generator_node(graph, &OPAQUE_WHITE, runtime);
+        let cut = mask_node(graph, frame, clip.masks, time, runtime, &clip.data)?;
+        Some(
+            graph
+                .add_composite(vec![GraphLayer {
+                    visual: placement,
+                    ..identity_layer(cut)
+                }])
+                .map_err(GraphError::into_render_error)?,
+        )
+    };
+    let opacity = visual.opacity.clamp(0.0, 1.0);
+    let scene = if mask.is_none() && opacity >= 1.0 {
+        adjusted
+    } else {
+        key_mix_node(graph, adjusted, backdrop, mask, opacity, runtime)?
+    };
+    let intent = cache_intent(clip.cache);
+    if intent == CacheIntent::Bypass || graph.node_kind(scene) != Some(RenderNodeKind::Source) {
+        graph
+            .set_cache_intent(scene, intent)
+            .map_err(GraphError::into_render_error)?;
+    }
+    Ok(scene)
+}
+
+static OPAQUE_WHITE: Generator = Generator::Fill {
+    paint: alpha2_model::Paint::Solid {
+        color: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+    },
+};
+
 fn background_color(background: Option<Rgb>) -> Color {
     background.map_or(Color::rgba(0.0, 0.0, 0.0, 0.0), |background| {
         Color::rgba(
@@ -1268,7 +1391,7 @@ fn clip_layer<'a>(
             graph,
             composition,
             &textures.media,
-            Some((clip, textures)),
+            ClipStep::Picture(clip, textures),
             runtime,
         )?,
     };
@@ -1313,7 +1436,7 @@ fn clip_picture<'a>(
             graph,
             source,
             &textures.source_media,
-            None,
+            ClipStep::Unbound,
             runtime,
         );
     }
@@ -1363,14 +1486,21 @@ fn generator_node(
     )
 }
 
+#[derive(Clone, Copy)]
+enum ClipStep<'c, 'a> {
+    Unbound,
+    Picture(&'a ActiveClip<'a>, &'c ClipFrames<'a>),
+    Backdrop(RenderNodeId),
+}
+
 /// Draws a compiled composition's steps in order, each sampled at the composition time plus its
-/// offset. Clip steps draw `clip`'s picture.
+/// offset. Clip steps draw what `clip` says.
 fn plan_node<'a>(
     renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
     composition: ActiveComposition<'a>,
     media: &[Option<StepFrame<'a>>],
-    clip: Option<(&'a ActiveClip<'a>, &ClipFrames<'a>)>,
+    clip: ClipStep<'_, 'a>,
     runtime: EffectRuntime,
 ) -> Result<RenderNodeId, RenderError> {
     let plan = composition.plan();
@@ -1385,14 +1515,13 @@ fn plan_node<'a>(
         };
         let node = match &step.op {
             // Every clip step draws the same picture.
-            StepOp::Clip => {
-                if let Some(node) = picture {
-                    node
-                } else {
-                    let (clip, textures) = clip.ok_or(RenderError::InvalidGraph)?;
+            StepOp::Clip => match (picture, clip) {
+                (Some(node), _) | (None, ClipStep::Backdrop(node)) => node,
+                (None, ClipStep::Picture(clip, textures)) => {
                     *picture.insert(clip_picture(renderer, graph, clip, textures, runtime)?)
                 }
-            }
+                (None, ClipStep::Unbound) => return Err(RenderError::InvalidGraph),
+            },
             StepOp::Media { .. } => match media.get(index).and_then(Option::as_ref) {
                 Some(StepFrame::Media(frame)) => frame.add_to(graph),
                 _ => return Err(RenderError::InvalidGraph),
@@ -1543,8 +1672,50 @@ fn step_node<'a>(
         StepOp::ShapeMask { input: from, masks } => {
             mask_node(graph, input(*from)?, masks, time, runtime, &context)?
         }
+        StepOp::KeyMix {
+            backdrop,
+            input: from,
+            mask,
+            opacity,
+        } => key_mix_node(
+            graph,
+            input(*from)?,
+            input(*backdrop)?,
+            mask.map(input).transpose()?,
+            sample_scalar(opacity, time, &context).clamp(0.0, 1.0),
+            runtime,
+        )?,
     };
     Ok(node)
+}
+
+fn key_mix_node(
+    graph: &mut RenderGraph<'_>,
+    picture: RenderNodeId,
+    backdrop: RenderNodeId,
+    mask: Option<RenderNodeId>,
+    opacity: f32,
+    runtime: EffectRuntime,
+) -> Result<RenderNodeId, RenderError> {
+    let mut inputs = EffectInputs::new();
+    inputs.insert(KEY_MIX_BACKDROP, backdrop);
+    let effect = match mask {
+        Some(mask) => {
+            inputs.insert(KEY_MIX_MASK, mask);
+            KEY_MIX_EFFECT_ID
+        }
+        None => KEY_MIX_UNMASKED_EFFECT_ID,
+    };
+    graph
+        .add_effect_with_inputs(
+            EffectId::from_static(effect, 1),
+            picture,
+            inputs,
+            EffectParams::new().with(KEY_MIX_OPACITY, ParamValue::Float(opacity)),
+            EffectResources::new(),
+            timeless(runtime),
+        )
+        .map_err(GraphError::into_render_error)
 }
 
 /// Graph width over height, for motion along spatial curves.
@@ -1726,6 +1897,9 @@ fn matte_node(
 #[derive(Copy, Clone)]
 enum FrameInputKind<'a> {
     Layer(GraphLayer),
+    Adjustment {
+        available: usize,
+    },
     Transition {
         from: usize,
         to: usize,
@@ -1733,19 +1907,45 @@ enum FrameInputKind<'a> {
     },
 }
 
+struct Backdrop<'l> {
+    layers: &'l [GraphLayer],
+    background: Option<Color>,
+}
+
+impl Backdrop<'_> {
+    fn with(
+        &self,
+        graph: &mut RenderGraph<'_>,
+        layer: Option<GraphLayer>,
+    ) -> Result<RenderNodeId, RenderError> {
+        let mut layers = Vec::with_capacity(self.layers.len() + 1);
+        layers.extend_from_slice(self.layers);
+        layers.extend(layer);
+        match self.background {
+            Some(background) => graph.add_composite_over(layers, background),
+            None => graph.add_composite(layers),
+        }
+        .map_err(GraphError::into_render_error)
+    }
+}
+
 fn compile_frame_input<'a>(
     graph: &mut RenderGraph<'a>,
     inputs: &[FrameInput<'a>],
     index: usize,
-    backdrop: &[GraphLayer],
-    background: Option<Color>,
-    runtime: EffectRuntime,
+    backdrop: &Backdrop<'_>,
+    (available, time, runtime): (
+        &[(&'a ActiveClip<'a>, ClipFrames<'a>)],
+        MediaTime,
+        EffectRuntime,
+    ),
     renderer: &dyn EffectCatalog,
 ) -> Result<RenderNodeId, RenderError> {
     if index >= inputs.len() {
         return Err(RenderError::InvalidGraph);
     }
     let mut compiled = vec![None; inputs.len()];
+    let mut beneath = None;
     let mut pending = vec![(index, false)];
     while let Some((current, expanded)) = pending.pop() {
         if compiled[current].is_some() {
@@ -1753,14 +1953,21 @@ fn compile_frame_input<'a>(
         }
         match inputs[current].kind {
             FrameInputKind::Layer(layer) => {
-                let mut layers = Vec::with_capacity(backdrop.len() + 1);
-                layers.extend_from_slice(backdrop);
-                layers.push(layer);
-                let composite = match background {
-                    Some(background) => graph.add_composite_over(layers, background),
-                    None => graph.add_composite(layers),
+                compiled[current] = Some(backdrop.with(graph, Some(layer))?);
+            }
+            FrameInputKind::Adjustment {
+                available: position,
+            } => {
+                let (clip, textures) = available.get(position).ok_or(RenderError::InvalidGraph)?;
+                let scene = match beneath {
+                    Some(scene) => scene,
+                    None => *beneath.insert(backdrop.with(graph, None)?),
                 };
-                compiled[current] = Some(composite.map_err(GraphError::into_render_error)?);
+                compiled[current] = Some(if changes_nothing(clip) {
+                    scene
+                } else {
+                    adjusted_scene(renderer, graph, (clip, textures), scene, (time, runtime))?
+                });
             }
             FrameInputKind::Transition {
                 from,

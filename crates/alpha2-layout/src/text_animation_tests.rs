@@ -1,6 +1,6 @@
 use super::*;
 use alpha2_eval::SampledAnimator;
-use alpha2_model::{RunTime, TextRun};
+use alpha2_model::{RunTime, TextAnimator, TextRun, TextSelector};
 use alpha2_text::{ClusterInfo, LineInfo};
 
 /// `count` one-byte clusters on one line, 10 px each, every fourth a space between words.
@@ -15,6 +15,8 @@ fn row(count: usize) -> TextLayout {
             x: index as f32 * 10.0,
             advance: 10.0,
             baseline: 16.0,
+            font_size: 20.0,
+            ink: None,
             ellipsis: false,
         })
         .collect();
@@ -26,6 +28,8 @@ fn row(count: usize) -> TextLayout {
             #[allow(clippy::cast_precision_loss)]
             width: count as f32 * 10.0,
             baseline: 16.0,
+            size: 20.0,
+            box_top: 0.0,
         }],
         font_size: 20.0,
     }
@@ -164,6 +168,7 @@ fn timed_runs() -> Vec<TextRun> {
             start: MediaTime(start),
             end: MediaTime(end),
         }),
+        style: None,
     };
     vec![
         run("abc ", 0, 1_000, &["first"]),
@@ -267,6 +272,8 @@ fn animator(selector: SampledSelector) -> SampledAnimator {
         fill: None,
         stroke: None,
         tracking: None,
+        advance_follows_scale: false,
+        reveal: None,
     }
 }
 
@@ -367,6 +374,8 @@ fn cut_row(count: usize) -> TextLayout {
         x: at as f32 * 10.0,
         advance: 10.0,
         baseline: 16.0,
+        font_size: 20.0,
+        ink: None,
         ellipsis: true,
     });
     layout.lines[0].clusters.end += 1;
@@ -406,4 +415,350 @@ fn an_ellipsis_counts_as_no_unit_and_takes_the_state_before_it() {
         20.0,
     );
     assert_eq!(states, [ClusterState::IDENTITY]);
+}
+
+#[test]
+fn advance_scale_multiplies_only_pushing_animators() {
+    let layout = row(4);
+    let all = range(RangeShape::Square, RangeUnits::Percent, 0.0, 100.0);
+    let half = SampledSelector::Range {
+        based_on: TextUnit::Characters,
+        units: RangeUnits::Percent,
+        start: 0.0,
+        end: 100.0,
+        offset: 0.0,
+        shape: RangeShape::Square,
+        amount: 0.5,
+    };
+    let scaled = |selector: SampledSelector, x: f32, push: bool| SampledAnimator {
+        scale: Some([x, 3.0]),
+        advance_follows_scale: push,
+        ..animator(selector)
+    };
+    let (states, hash) = cluster_states(
+        &layout,
+        &[],
+        &[
+            scaled(all.clone(), 2.0, true),
+            scaled(half, 3.0, true),
+            scaled(all.clone(), 2.0, false),
+        ],
+        MediaTime::ZERO,
+        20.0,
+    );
+    assert_eq!(states[0].advance_scale, 2.0 * 2.0, "1 + 0.5 (3 - 1) is 2");
+    assert_eq!(
+        states[0].scale[0],
+        2.0 * 2.0 * 2.0,
+        "the drawn scale takes every animator"
+    );
+    let (plain, plain_hash) = cluster_states(
+        &layout,
+        &[],
+        &[scaled(all, 2.0, false)],
+        MediaTime::ZERO,
+        20.0,
+    );
+    assert_eq!(plain[0].advance_scale, 1.0);
+    assert_ne!(hash, plain_hash);
+}
+
+fn pushing_animator(
+    selector: TextSelector,
+    scale: alpha2_model::Animated<alpha2_model::Vec2>,
+) -> TextAnimator {
+    TextAnimator {
+        selector,
+        properties: alpha2_model::TextAnimatorProperties {
+            scale: Some(scale),
+            advance_follows_scale: true,
+            ..alpha2_model::TextAnimatorProperties::default()
+        },
+    }
+}
+
+fn every(amount: f32) -> TextSelector {
+    TextSelector::Range {
+        based_on: TextUnit::Characters,
+        units: RangeUnits::Percent,
+        start: alpha2_model::Animated::Constant { value: 0.0 },
+        end: alpha2_model::Animated::Constant { value: 100.0 },
+        offset: alpha2_model::Animated::Constant { value: 0.0 },
+        shape: RangeShape::Square,
+        amount: alpha2_model::Animated::Constant { value: amount },
+    }
+}
+
+fn constant_scale(x: f32) -> alpha2_model::Animated<alpha2_model::Vec2> {
+    alpha2_model::Animated::Constant {
+        value: alpha2_model::Vec2::new(x, 1.0),
+    }
+}
+
+fn scale_keys(
+    values: &[f32],
+    interpolation: alpha2_model::Interpolation,
+) -> alpha2_model::Animated<alpha2_model::Vec2> {
+    alpha2_model::Animated::Keyframes {
+        keyframes: values
+            .iter()
+            .enumerate()
+            .map(|(index, x)| alpha2_model::Keyframe {
+                time: MediaTime::from_ticks(i64::try_from(index).expect("small") * 1_000),
+                value: alpha2_model::Vec2::new(*x, *x),
+                interpolation,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn headroom_is_the_product_of_each_pushing_animators_maximum() {
+    let headroom = alpha2_eval::advance_headroom(
+        &[
+            pushing_animator(every(1.0), constant_scale(1.5)),
+            pushing_animator(every(0.5), constant_scale(3.0)),
+            pushing_animator(every(1.0), constant_scale(0.5)),
+            TextAnimator {
+                properties: alpha2_model::TextAnimatorProperties {
+                    advance_follows_scale: false,
+                    ..pushing_animator(every(1.0), constant_scale(4.0)).properties
+                },
+                selector: every(1.0),
+            },
+            pushing_animator(
+                every(1.0),
+                scale_keys(&[1.0, 1.25, 1.1], alpha2_model::Interpolation::Linear),
+            ),
+        ],
+        &[],
+    );
+    assert_eq!(
+        headroom,
+        1.5 * 2.0 * 1.25,
+        "1.5; 1 + 0.5 (3 - 1); no shrink, no animator that does not push; the largest key"
+    );
+    assert_eq!(alpha2_eval::advance_headroom(&[], &[]), 1.0);
+}
+
+#[test]
+fn an_overshooting_curve_reserves_its_overshoot() {
+    let back_out = alpha2_model::Interpolation::CubicBezier(alpha2_model::CubicBezier::new(
+        0.34, 1.56, 0.64, 1.0,
+    ));
+    let headroom = alpha2_eval::advance_headroom(
+        &[pushing_animator(
+            every(1.0),
+            scale_keys(&[1.0, 1.5], back_out),
+        )],
+        &[],
+    );
+    let curve = alpha2_model::CubicBezier::new(0.34, 1.56, 0.64, 1.0);
+    let peak = (1..1_000)
+        .map(|step| curve.apply(f64::from(step) / 1_000.0))
+        .fold(0.0_f64, f64::max);
+    #[expect(clippy::cast_possible_truncation, reason = "a scale near 1.5")]
+    let sampled = (1.0 + 0.5 * peak) as f32;
+    assert!(headroom > 1.5, "{headroom}");
+    assert!(
+        headroom >= sampled && headroom - sampled < 1e-3,
+        "{headroom} vs {sampled}"
+    );
+    let held = alpha2_eval::advance_headroom(
+        &[pushing_animator(
+            every(1.0),
+            scale_keys(&[1.2, 2.0], alpha2_model::Interpolation::Hold),
+        )],
+        &[],
+    );
+    assert_eq!(held, 2.0, "every keyframe counts, reached by a hold or not");
+}
+
+#[test]
+fn a_timing_selector_without_timed_runs_reserves_nothing() {
+    let timing = TextSelector::Timing {
+        state: RunState::Active,
+        ramp: MediaTime::ZERO,
+        sweep: false,
+    };
+    let animators = [pushing_animator(timing, constant_scale(1.4))];
+    let untimed = TextRun {
+        text: "plain".into(),
+        ..TextRun::default()
+    };
+    assert_eq!(
+        alpha2_eval::advance_headroom(&animators, std::slice::from_ref(&untimed)),
+        1.0
+    );
+    let timed = TextRun {
+        time: Some(RunTime {
+            start: MediaTime::ZERO,
+            end: MediaTime::from_ticks(1_000),
+        }),
+        ..untimed
+    };
+    assert_eq!(alpha2_eval::advance_headroom(&animators, &[timed]), 1.4);
+    let class = [pushing_animator(
+        TextSelector::Class {
+            class: "key".into(),
+        },
+        constant_scale(1.4),
+    )];
+    assert_eq!(alpha2_eval::advance_headroom(&class, &[]), 1.0);
+}
+
+#[test]
+fn headroom_holds_at_the_cluster_scale_limit() {
+    let headroom = alpha2_eval::advance_headroom(
+        &[
+            pushing_animator(every(1.0), constant_scale(10.0)),
+            pushing_animator(every(1.0), constant_scale(10.0)),
+        ],
+        &[],
+    );
+    assert_eq!(headroom, alpha2_text::MAX_CLUSTER_SCALE);
+}
+
+fn revealing(selector: SampledSelector, progress: f32) -> SampledAnimator {
+    SampledAnimator {
+        reveal: Some(alpha2_eval::SampledReveal {
+            progress,
+            angle_degrees: 90.0,
+            feather: 0.25,
+        }),
+        ..animator(selector)
+    }
+}
+
+#[test]
+fn reveal_progress_follows_the_selection() {
+    let layout = row(4);
+    let ramp = range(RangeShape::RampUp, RangeUnits::Index, 0.0, 4.0);
+    let weights = selection(&ramp, &layout, &[], MediaTime::ZERO);
+    let (states, hash) =
+        cluster_states(&layout, &[], &[revealing(ramp, 0.2)], MediaTime::ZERO, 20.0);
+    for (state, weight) in states.iter().zip(weights) {
+        let progress = 1.0 + weight * (0.2 - 1.0);
+        match state.reveals[0] {
+            Some(edge) => {
+                assert!((edge.progress - progress).abs() < 1e-6);
+                assert!(edge.direction[0].abs() < 1e-6 && (edge.direction[1] - 1.0).abs() < 1e-6);
+                assert_eq!(edge.feather, 5.0, "a quarter of 20 pixels");
+            }
+            None => assert_eq!(weight, 0.0, "an unselected cluster is whole"),
+        }
+    }
+    assert_ne!(hash, 0);
+}
+
+#[test]
+fn an_all_revealed_text_hashes_as_identity() {
+    let layout = row(4);
+    let all = range(RangeShape::Square, RangeUnits::Percent, 0.0, 100.0);
+    let (states, hash) =
+        cluster_states(&layout, &[], &[revealing(all, 1.0)], MediaTime::ZERO, 20.0);
+    assert_eq!(hash, 0);
+    assert!(states.iter().all(ClusterState::is_identity));
+}
+
+fn timed(words: &[(&str, i64, i64)]) -> Vec<TextRun> {
+    words
+        .iter()
+        .map(|&(text, start, end)| TextRun {
+            text: text.into(),
+            time: Some(RunTime {
+                start: MediaTime::from_ticks(start),
+                end: MediaTime::from_ticks(end),
+            }),
+            ..TextRun::default()
+        })
+        .collect()
+}
+
+fn highlight(transition: i64, gap: alpha2_model::HighlightGap) -> alpha2_model::TextHighlight {
+    alpha2_model::TextHighlight {
+        color: alpha2_model::Rgba::new(1.0, 1.0, 0.0, 1.0),
+        padding: alpha2_model::TextInsets::default(),
+        radius: 0.0,
+        border: None,
+        transition: MediaTime::from_ticks(transition),
+        easing: alpha2_model::Easing::Linear,
+        gap,
+    }
+}
+
+fn steps_at(
+    runs: &[TextRun],
+    ticks: i64,
+    look: &alpha2_model::TextHighlight,
+) -> Vec<(std::ops::Range<usize>, f32)> {
+    highlight_steps(runs, MediaTime::from_ticks(ticks), look)
+}
+
+#[test]
+fn the_highlight_takes_the_latest_started_run() {
+    let runs = timed(&[("one ", 0, 100), ("two ", 100, 200), ("three", 100, 300)]);
+    let jump = highlight(0, alpha2_model::HighlightGap::Hold);
+    assert_eq!(steps_at(&runs, -1, &jump), []);
+    assert_eq!(steps_at(&runs, 50, &jump), [(0..4, 1.0)]);
+    assert_eq!(
+        steps_at(&runs, 150, &jump),
+        [(8..13, 1.0)],
+        "a tie goes to the later run"
+    );
+}
+
+#[test]
+fn the_highlight_eases_over_its_transition() {
+    let runs = timed(&[("one ", 0, 100), ("two", 100, 200)]);
+    let mut slide = highlight(40, alpha2_model::HighlightGap::Hold);
+    assert_eq!(steps_at(&runs, 110, &slide), [(0..4, 1.0), (4..7, 0.25)]);
+    assert_eq!(steps_at(&runs, 140, &slide), [(4..7, 1.0)]);
+    slide.easing =
+        alpha2_model::Easing::CubicBezier(alpha2_model::CubicBezier::new(0.42, 0.0, 1.0, 1.0));
+    let eased = steps_at(&runs, 120, &slide)[1].1;
+    assert!(
+        eased < 0.5,
+        "ease-in is slower than linear at the middle: {eased}"
+    );
+}
+
+#[test]
+fn an_interrupted_transition_starts_where_the_box_is() {
+    let runs = timed(&[("a ", 0, 100), ("b ", 100, 110), ("c", 110, 200)]);
+    let slide = highlight(40, alpha2_model::HighlightGap::Hold);
+    assert_eq!(
+        steps_at(&runs, 120, &slide),
+        [(0..2, 1.0), (2..4, 0.5), (4..5, 0.25)],
+        "c slides from where the slide to b has got to"
+    );
+}
+
+#[test]
+fn a_held_highlight_stays_through_a_pause() {
+    let runs = timed(&[("one ", 0, 100), ("two", 200, 300)]);
+    let hold = highlight(0, alpha2_model::HighlightGap::Hold);
+    assert_eq!(steps_at(&runs, 150, &hold), [(0..4, 1.0)]);
+    assert_eq!(
+        steps_at(&runs, 400, &hold),
+        [(4..7, 1.0)],
+        "and after the last run ends"
+    );
+}
+
+#[test]
+fn a_hidden_highlight_appears_after_a_pause_without_sliding() {
+    let runs = timed(&[("one ", 0, 100), ("two ", 200, 300), ("six", 300, 400)]);
+    let hide = highlight(40, alpha2_model::HighlightGap::Hide);
+    assert_eq!(steps_at(&runs, 150, &hide), [], "hidden in the pause");
+    assert_eq!(
+        steps_at(&runs, 210, &hide),
+        [(4..8, 1.0)],
+        "no slide after a pause"
+    );
+    assert_eq!(
+        steps_at(&runs, 310, &hide),
+        [(4..8, 1.0), (8..11, 0.25)],
+        "back to back runs slide"
+    );
 }

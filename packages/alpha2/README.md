@@ -39,7 +39,7 @@ engine.renderAt(0n); // draws the frame at time 0 on the canvas
 - `createForHtmlCanvas` draws on a page canvas; a worker passes an `OffscreenCanvas` to `createForCanvas`. Either renders with WebGPU, or with WebGL2 when the browser has no WebGPU. The WebGPU device is opened before the canvas is bound, so a failure leaves the canvas free for another context. `{ softwareAdapter: "refuse" }` refuses software adapters (SwiftShader, llvmpipe, WARP, a WebGPU fallback adapter) and rejects `GPU_INIT_FAILED` when the browser offers nothing else.
 - With neither (Chrome with acceleration off, a blocklisted GPU), `WebEffectRegistry.createCpu(canvas)` makes the engine's CPU renderer: the same calls, drawn in wasm on one thread, the preview put on the canvas's 2D context. It draws exactly what the native CPU renderer draws, refuses runtime WGSL effects with `EFFECT_ERROR`, and needs no canvas to export. `createRenderer(binding, canvas, mode)` in `alpha2/renderer-choice` makes the renderer a mode asks for (`"auto"` draws on a hardware GPU, else on the CPU renderer, as the native host's `auto` does) and says which it made. `detectBrowserCapabilities()` reports which renderer `"auto"` gets on the calling thread (`renderer`), probing WebGL2 on an `OffscreenCanvas`, as render hosts draw; a worker host's answer comes from `WorkerRenderBackend.detectCapabilities()`.
 - A project is the engine's JSON document. `alpha2/project` has its TypeScript types, tick conversions and `validateProject`, which reports what the engine would refuse before the document is sent; `alpha2/builder` writes one with times in seconds. `loadProject` checks the document again and throws what it refuses.
-- `renderAt(ticks)` returns JSON that names the sources it had no frame for (`missingSources`, `missingFrames`). The engine decides which frame of each source a time needs: `frameNeeds(ticks)` lists them with the exact source time, and the application decodes and uploads those (`uploadVideoFrame` for a `VideoFrame`, `uploadRgbaFrame` for pixels at a source time, `uploadRgbaImage` for a still). `FrameSupply` in `alpha2/frame-supply` does this for a decoder per clip, and keeps the uploads within a byte budget.
+- `renderAt(ticks)` returns JSON that names the sources it had no frame for (`missingSources`, `missingFrames`). The engine decides which frame of each source a time needs: `frameNeeds(ticks)` lists them with the exact source time, and the application decodes and uploads those (`uploadVideoFrame` for a `VideoFrame`, `uploadRgbaFrame` for pixels at a source time, `uploadRgbaImage` for a still). `FrameSupply` in `alpha2/frame-supply` does this for a decoder per clip, and keeps the uploads within a byte budget. The upload methods supply the frames of the media sources a project declares; they are not a way to draw. The engine's promises (the same project and files give the same frames and export bytes, and its caches reuse a frame only while its inputs are unchanged) hold for frames that are the source's decoded media. For pixels an application draws itself and uploads under a source, there is none: the engine cannot know what they depend on, and the native host, which reads every input from files, never sees them. Graphics the engine cannot draw from the project come in as media, such as an image sequence or a video with alpha.
 
 ## Export
 
@@ -77,7 +77,7 @@ For preview, `alpha2/audio-timeline` moves the mixed blocks to the audio thread 
 
 ## Extract data
 
-`runExtractor` in `alpha2/extract` runs an extractor of your own over a source or the timeline and resolves with data sets ready to put in `project.data`. The browser decodes the source in software (mediabunny), the engine's session in wasm presents and checks every step, and each value is validated as the project validates data:
+`runExtractor` in `alpha2/extract` runs an extractor of your own over a source or the timeline and resolves with data sets ready to put in `project.data`. The browser decodes the source with mediabunny, in software where its software decoder reads the source and with the browser's own choice of decoder otherwise (`result.sourceDecode` says which); the engine's session in wasm presents and checks every step, and each value is validated as the project validates data:
 
 ```js
 import { runExtractor } from "alpha2/extract";
@@ -108,6 +108,8 @@ const { dataSets } = await runExtractor(
   },
 );
 ```
+
+A source no decoder gives a first frame of is refused with `DECODE_UNAVAILABLE` (its `facts` name the codec and the browser's error), frames without planes with `PLANAR_DECODE_UNAVAILABLE`, and a frame the browser cannot read back with `FRAME_UNREADABLE`.
 
 A timeline input needs `timelineFrame(time, width, height)`, such as the CPU renderer's `readRgbaAt`, and an audio input `audioBinding: wasm`. `loadPlugin(manifest, sha256)` in `alpha2/plugins` loads an [extractor plugin](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md)'s wasm artifact, checked against its pinned hashes, with `onProgress` as its files arrive and `supplied` filling its resource slots (a `File`, or a directory handle or a directory picker's files); run `plugin.extractor(params)`, which records `made_by.plugin` with the slot files it read. `transferablePlugin(plugin)` is a value `postMessage` copies to a worker, where `restorePlugin` makes the plugin again without fetching or compiling it. `parsePluginManifest(text)` checks a manifest by the same rules without fetching anything, for an interface that shows a plugin before it is installed, with `about` and the outputs' `label`s. `applyEdit` in `alpha2/apply-edit` then applies data to the project, such as `remove_ranges` over silences.
 
@@ -149,13 +151,13 @@ const { project, assets, loudness, warnings } = compileCompose(compose, spec, { 
 | `alpha2/extract`, `alpha2/plugins` | `runExtractor`: extractors of your own over a source or the timeline, decoded in the browser; `loadPlugin`: [extractor plugins](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md) run sandboxed; `parsePluginManifest` and the `MAX_PLUGIN_*` limits. |
 | `alpha2/extractor` | The extractor contract every surface shares (`Extractor`, `ExtractorDescriptor`, `ExtractRun`, `ExtractResult`), types only, without a media library. |
 | `alpha2/compose`, `alpha2/compose-wasm` | Compose specs and templates (`loadCompose`, `composeRequirements`, `compileCompose`, `bindTemplate`, `templateDataSchema`, `lintTemplate`, `builtinTemplates`), and the wasm module they load. See [Compose](#compose). |
-| `alpha2/captions` | SRT and WebVTT import into caption tracks. |
+| `alpha2/captions` | SRT and WebVTT import into caption tracks; `<b>`, `<i>` and `<u>` become bold, italic and underlined runs. |
 | `alpha2/geometry` | Shape geometry for editors, from the engine's own code: item bounds, hit tests, nearest points, path lengths, trims, resampling, convert to path, motion paths. |
 | `alpha2/layout` | Layout generators: `measureLayout` (where every box lies and what overflows, laid out with the engine's fonts, pixels those of the project canvas) and a builder from CSS-like props, flexbox and grid. See [docs/layout.md](https://github.com/alpha2-sh/alpha2/blob/main/docs/layout.md). |
 | `alpha2/effects` | Effect definitions and the built-in catalog's types; `RuntimeEffectRegistry`, a typed wrapper for registering WGSL effects and effect resources at run time. |
 | `alpha2/extensions`, `alpha2/extensions-wasm`, `alpha2/extensions-pdf-wasm` | SVG, animated image, Lottie, OpenEXR, image sequence, LaTeX and PDF sources, from their own WebAssembly modules (`loadExtensions`). After an abort a module restarts asynchronously; `ready()` resolves once it takes calls again. |
 | `alpha2/wasm-module` | `WasmModule`, which loads a wasm-bindgen module once per realm and restarts it asynchronously. |
-| `alpha2/text` | Text rasterizers: `WasmTextRasterizer` (the engine's, the same pixels as a native export) and `OffscreenTextRasterizer` (the browser's). |
+| `alpha2/text` | Text rasterizers: `WasmTextRasterizer` (the engine's, the same pixels as a native export, including styled runs, shaped boxes, highlights and pushed or revealed animation) and `OffscreenTextRasterizer` (the browser's). |
 | `alpha2/assets` | Media identity, proxies and conform reports. |
 | `alpha2/frame-supply` | `FrameSupply`: decodes and uploads the frames a time needs. |
 | `alpha2/media` | Decoder contracts, `WebCodecsVideoDecoder`, `DecoderRefillCoordinator`. |
@@ -178,6 +180,10 @@ const { project, assets, loudness, warnings } = compileCompose(compose, spec, { 
 | `alpha2` | `alpha2/assets`, `audio`, `audio-timeline`, `audio-worker`, `audio-worklet`, `compose`, `containers`, `effects`, `exporter`, `export-metrics`, `extensions`, `frame-supply`, `gpu-recovery`, `hdr-frames`, `loudness`, `media`, `player`, `project`, `rate-control`, `renderer-choice`, `robustness`, `text`, `waveform` and `worker` in one import. |
 
 Each module's declarations document its API.
+
+## Releases
+
+`alpha2`, `@alpha2-sh/editor`, `@alpha2-sh/react`, `@alpha2-sh/node`, the Python package and `alpha2-host` work together only when they are the same release; before 1.0 no release is compatible with another, and the packages pin each other exactly. The capability report names the engine's release and the project schema it reads (`release`, `projectSchemaVersion`). Documents are checked against the running release: every object of the project format refuses fields it does not know, `schema_version` stays `1` until 1.0, and no release converts the documents of another, so a document written for one release can be refused by the next with `INVALID_INPUT` naming the field. Each release's CHANGELOG marks what it breaks. An application that updates its parts separately keeps them on one release ([Releases](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md#releases)).
 
 ## License
 

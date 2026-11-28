@@ -13,7 +13,12 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TextRequestWire {
-    text: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    runs: Option<Vec<RunWire>>,
+    #[serde(default)]
+    clamp: Option<ClampWire>,
     font_size: f32,
     #[serde(default)]
     max_width: f32,
@@ -42,12 +47,34 @@ pub(crate) struct TextRequestWire {
     letter_spacing: f32,
     #[serde(default = "default_font_weight")]
     font_weight: u16,
+    #[serde(default = "full")]
+    advance_headroom: f32,
+    #[serde(default)]
+    animator_grouping: GroupingWire,
+    #[serde(default = "centre")]
+    animator_pivot: [f32; 2],
+    #[serde(default)]
+    highlight: Option<HighlightWire>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GroupingWire {
+    #[default]
+    Character,
+    Word,
+    Line,
+    All,
+}
+
+const fn centre() -> [f32; 2] {
+    [0.5, 0.5]
 }
 
 /// A cluster's state; omitted fields take their identity value. Offset and tracking are in
 /// pixels, rotation in clockwise radians, color mixes as `keep` and premultiplied linear-light
 /// `add`.
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct StateWire {
     #[serde(default)]
@@ -64,6 +91,21 @@ pub(crate) struct StateWire {
     stroke: Option<MixWire>,
     #[serde(default)]
     tracking: f32,
+    #[serde(default = "full")]
+    advance_scale: f32,
+    #[serde(default)]
+    reveals: Vec<RevealWire>,
+}
+
+/// A reveal edge: the unit vector it travels along, its progress in `[0, 1]` and its feather
+/// in pixels.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevealWire {
+    direction: [f32; 2],
+    progress: f32,
+    #[serde(default)]
+    feather: f32,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -97,8 +139,90 @@ impl StateWire {
             fill: mix(self.fill),
             stroke: mix(self.stroke),
             tracking: self.tracking,
+            advance_scale: self.advance_scale,
+            reveals: std::array::from_fn(|index| {
+                self.reveals.get(index).map(|edge| alpha2_text::RevealEdge {
+                    direction: edge.direction,
+                    progress: edge.progress,
+                    feather: edge.feather,
+                })
+            }),
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RunWire {
+    text: String,
+    #[serde(default)]
+    font_family: Option<String>,
+    #[serde(default)]
+    font_weight: Option<u16>,
+    #[serde(default)]
+    font_style: Option<FontStyleWire>,
+    #[serde(default)]
+    font_size: Option<f32>,
+    #[serde(default)]
+    letter_spacing: Option<f32>,
+    #[serde(default)]
+    fill: Option<FillWire>,
+    #[serde(default)]
+    strokes: Option<Vec<StrokeWire>>,
+    #[serde(default)]
+    background_color: Option<[u8; 4]>,
+    #[serde(default)]
+    underline: Option<bool>,
+    #[serde(default)]
+    line_through: Option<bool>,
+}
+
+impl RunWire {
+    const fn is_plain(&self) -> bool {
+        self.font_family.is_none()
+            && self.font_weight.is_none()
+            && self.font_style.is_none()
+            && self.font_size.is_none()
+            && self.letter_spacing.is_none()
+            && self.fill.is_none()
+            && self.strokes.is_none()
+            && self.background_color.is_none()
+            && self.underline.is_none()
+            && self.line_through.is_none()
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum FontStyleWire {
+    Normal,
+    Italic,
+    Oblique,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClampWire {
+    #[serde(default)]
+    max_lines: Option<u32>,
+    #[serde(default)]
+    max_height: f32,
+    #[serde(default = "default_ellipsis")]
+    ellipsis: Option<String>,
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn default_ellipsis() -> Option<String> {
+    Some("\u{2026}".into())
+}
+
+fn strokes(list: Vec<StrokeWire>) -> Vec<alpha2_text::TextStroke> {
+    list.into_iter()
+        .map(|stroke| alpha2_text::TextStroke {
+            color: stroke.color,
+            width: stroke.width,
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -214,7 +338,129 @@ impl FillWire {
 #[serde(deny_unknown_fields)]
 struct BackgroundWire {
     color: [u8; 4],
-    padding: f32,
+    padding: PaddingWire,
+    #[serde(default)]
+    radius: f32,
+    #[serde(default)]
+    border: Option<BorderWire>,
+    #[serde(default)]
+    extent: ExtentWire,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ExtentWire {
+    #[default]
+    Line,
+    Revealed,
+    Block,
+}
+
+/// A highlight's look and its steps, each a run of the request's `runs` and its progress.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HighlightWire {
+    color: [u8; 4],
+    padding: PaddingWire,
+    #[serde(default)]
+    radius: f32,
+    #[serde(default)]
+    border: Option<BorderWire>,
+    steps: Vec<StepWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StepWire {
+    run: usize,
+    progress: f32,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(untagged)]
+enum PaddingWire {
+    All(f32),
+    Sides([f32; 4]),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BorderWire {
+    width: f32,
+    color: [u8; 4],
+    #[serde(default)]
+    dash: Option<DashWire>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DashWire {
+    pattern: Vec<f32>,
+    #[serde(default)]
+    offset: f32,
+}
+
+impl BackgroundWire {
+    fn into_background(self) -> alpha2_text::TextBackground {
+        alpha2_text::TextBackground {
+            extent: match self.extent {
+                ExtentWire::Line => alpha2_text::BoxExtent::Line,
+                ExtentWire::Revealed => alpha2_text::BoxExtent::Revealed,
+                ExtentWire::Block => alpha2_text::BoxExtent::Block,
+            },
+            ..box_look(self.color, self.padding, self.radius, self.border)
+        }
+    }
+}
+
+/// A box of `color`, `padding`, `radius` and `border` over each line.
+fn box_look(
+    color: [u8; 4],
+    padding: PaddingWire,
+    radius: f32,
+    border: Option<BorderWire>,
+) -> alpha2_text::TextBackground {
+    alpha2_text::TextBackground {
+        color,
+        padding: match padding {
+            PaddingWire::All(padding) => [padding; 4],
+            PaddingWire::Sides(sides) => sides,
+        },
+        radius,
+        border: border.map(|border| alpha2_text::TextBoxBorder {
+            width: border.width,
+            color: border.color,
+            dash: border.dash.map(|dash| alpha2_text::TextBoxDash {
+                pattern: dash.pattern,
+                offset: dash.offset,
+            }),
+        }),
+        extent: alpha2_text::BoxExtent::Line,
+    }
+}
+
+impl HighlightWire {
+    /// The highlight over `runs`' byte ranges; `None` for a step past the last run.
+    fn into_highlight(self, runs: &[RunWire]) -> Option<alpha2_text::TextHighlightRequest> {
+        let mut start = 0;
+        let ranges = runs
+            .iter()
+            .map(|run| {
+                let bytes = start..start + run.text.len();
+                start = bytes.end;
+                bytes
+            })
+            .collect::<Vec<_>>();
+        let steps = self
+            .steps
+            .iter()
+            .map(|step| Some((ranges.get(step.run)?.clone(), step.progress)))
+            .collect::<Option<Vec<_>>>()?;
+        Some(alpha2_text::TextHighlightRequest {
+            look: box_look(self.color, self.padding, self.radius, self.border),
+            steps,
+        })
+    }
 }
 
 const fn default_line_height() -> f32 {
@@ -248,9 +494,25 @@ impl TextRequestWire {
         self.cluster_state.is_some() || self.cluster_states.is_some()
     }
 
-    pub(crate) fn into_request(self, content_version: u64) -> TextRasterRequest {
-        TextRasterRequest {
-            text: self.text,
+    pub(crate) fn into_request(
+        self,
+        content_version: u64,
+    ) -> Result<TextRasterRequest, alpha2_text::TextRasterError> {
+        let (text, runs) = match (self.text, self.runs) {
+            (Some(text), None) => (text, Vec::new()),
+            (None, Some(runs)) => (runs.iter().map(|run| run.text.as_str()).collect(), runs),
+            _ => return Err(alpha2_text::TextRasterError::InvalidRequest),
+        };
+        let highlight = match self.highlight {
+            Some(highlight) => Some(
+                highlight
+                    .into_highlight(&runs)
+                    .ok_or(alpha2_text::TextRasterError::InvalidRequest)?,
+            ),
+            None => None,
+        };
+        let mut request = TextRasterRequest {
+            text,
             font_size: self.font_size,
             max_width: self.max_width,
             line_height: self.line_height,
@@ -266,26 +528,56 @@ impl TextRequestWire {
                 EmojiWire::Replace => EmojiPolicy::Replace,
             },
             content_version,
-            strokes: self
-                .strokes
-                .into_iter()
-                .map(|stroke| alpha2_text::TextStroke {
-                    color: stroke.color,
-                    width: stroke.width,
-                })
-                .collect(),
+            strokes: strokes(self.strokes),
             split_background: self.split_background,
-            background: self
-                .background
-                .map(|background| alpha2_text::TextBackground {
-                    color: background.color,
-                    padding: background.padding,
-                }),
+            background: self.background.map(BackgroundWire::into_background),
             font_family: self.font_family,
             letter_spacing: self.letter_spacing,
             font_weight: self.font_weight,
-            clamp: None,
+            clamp: self.clamp.map(|clamp| alpha2_text::TextClamp {
+                max_lines: clamp.max_lines,
+                max_height: clamp.max_height,
+                ellipsis: clamp.ellipsis,
+            }),
+            spans: Vec::new(),
+            advance_headroom: self.advance_headroom,
+            animator_grouping: match self.animator_grouping {
+                GroupingWire::Character => alpha2_text::ClusterGrouping::Character,
+                GroupingWire::Word => alpha2_text::ClusterGrouping::Word,
+                GroupingWire::Line => alpha2_text::ClusterGrouping::Line,
+                GroupingWire::All => alpha2_text::ClusterGrouping::All,
+            },
+            animator_pivot: self.animator_pivot,
+            highlight,
+        };
+        let mut start = 0;
+        for run in runs {
+            let bytes = start..start + run.text.len();
+            start = bytes.end;
+            if run.is_plain() {
+                continue;
+            }
+            request.spans.push(alpha2_text::TextSpan {
+                bytes,
+                font_family: run.font_family.or_else(|| request.font_family.clone()),
+                font_weight: run.font_weight.unwrap_or(request.font_weight),
+                font_style: match run.font_style {
+                    None | Some(FontStyleWire::Normal) => alpha2_text::FontStyle::Normal,
+                    Some(FontStyleWire::Italic) => alpha2_text::FontStyle::Italic,
+                    Some(FontStyleWire::Oblique) => alpha2_text::FontStyle::Oblique,
+                },
+                font_size: run.font_size.unwrap_or(request.font_size),
+                letter_spacing: run.letter_spacing.unwrap_or(request.letter_spacing),
+                fill: run
+                    .fill
+                    .map_or_else(|| request.fill.clone(), FillWire::into_fill),
+                strokes: run.strokes.map_or_else(|| request.strokes.clone(), strokes),
+                background_color: run.background_color,
+                underline: run.underline.unwrap_or(false),
+                line_through: run.line_through.unwrap_or(false),
+            });
         }
+        Ok(request)
     }
 }
 
@@ -296,13 +588,20 @@ pub(crate) fn animated_request(
     content_version: u64,
     rasterizer: &alpha2_text::TextRasterizer,
 ) -> Result<(TextRasterRequest, Vec<alpha2_text::ClusterState>), alpha2_text::TextRasterError> {
-    let (one, list) = (wire.cluster_state, wire.cluster_states.clone());
+    let (one, list) = (wire.cluster_state.clone(), wire.cluster_states.clone());
+    if one
+        .iter()
+        .chain(list.iter().flatten())
+        .any(|state| state.reveals.len() > alpha2_text::MAX_REVEAL_EDGES)
+    {
+        return Err(alpha2_text::TextRasterError::InvalidRequest);
+    }
     let request = TextRequestWire {
         cluster_state: None,
         cluster_states: None,
         ..wire
     }
-    .into_request(content_version);
+    .into_request(content_version)?;
     let states = if let Some(list) = list {
         list.into_iter().map(StateWire::state).collect()
     } else {
@@ -492,9 +791,9 @@ mod web {
             let wire: TextRequestWire = serde_json::from_str(request_json)
                 .map_err(|error| invalid_input(format!("invalid text request: {error}")))?;
             if !wire.is_animated() {
-                return self
-                    .inner
-                    .rasterize(&wire.into_request(content_version))
+                return wire
+                    .into_request(content_version)
+                    .and_then(|request| self.inner.rasterize(&request))
                     .map(RasterizedText::from)
                     .map_err(|error| typed_error(&error));
             }
@@ -599,6 +898,35 @@ mod web {
             height: u32,
         ) -> Result<String, JsValue> {
             measure_text_json(&self.inner, generator_json, width, height).map_err(measure_error)
+        }
+
+        /// Where each line, word and cluster of the text generator `generator_json` lies on a
+        /// `width` by `height` canvas, as JSON `{ fontSize, layout, lines, words, clusters }`:
+        /// the static layout (no animator states), at the fitted size and after the clamp.
+        ///
+        /// Lines are `{ clusters: [first, end], box, em, baseline }`, words `{ clusters, boxes,
+        /// ink }` (a box per line), clusters `{ range: [start, end], run, word, line, space,
+        /// ellipsis, fontSize, baseline, box, ink }` with `range` in UTF-16 code units of the
+        /// text. Rectangles are `{ left, top, right, bottom }` in canvas fractions before the
+        /// clip's transform; `run`, `word` and `ink` may be `null`.
+        ///
+        /// # Errors
+        /// Rejects an invalid text generator, an empty canvas, and a measurer without fonts.
+        #[wasm_bindgen(js_name = layoutText)]
+        pub fn layout_text(
+            &self,
+            generator_json: &str,
+            width: u32,
+            height: u32,
+        ) -> Result<String, JsValue> {
+            alpha2_layout::json::text_layout_json(
+                &self.inner,
+                generator_json,
+                width,
+                height,
+                alpha2_layout::json::StringUnit::Utf16,
+            )
+            .map_err(measure_error)
         }
 
         /// Where each node of the layout generator `generator_json` (`{ "type": "layout",

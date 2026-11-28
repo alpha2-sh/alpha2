@@ -58,7 +58,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alpha2-assets"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-media",
  "alpha2-model",
@@ -68,7 +68,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-audio"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-compose"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-layout",
  "alpha2-media",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-container"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-eval",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-eval"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-geometry",
  "alpha2-media",
@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-extensions"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-model",
  "alpha2-time",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-geometry"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-model",
  "kurbo",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-gpu"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "log",
  "web-time",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-host-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-assets",
  "alpha2-audio",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-layout"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-eval",
  "alpha2-geometry",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-media"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-time",
  "bytes",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-model"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-os"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "libc",
  "windows-sys",
@@ -292,11 +292,11 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-abi"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "alpha2-render"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-geometry",
  "alpha2-gpu",
@@ -315,14 +315,14 @@ dependencies = [
 
 [[package]]
 name = "alpha2-shaders"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "wesl",
 ]
 
 [[package]]
 name = "alpha2-text"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "alpha2-media",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-time"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
 ]

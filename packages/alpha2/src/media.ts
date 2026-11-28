@@ -917,7 +917,7 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
     )
       this.#useSoftware(this.#openedSoftware);
     try {
-      const frame = await withSoftwareFallback(
+      const frame = await withDecoderFallback(
         () => this.#refillOnce(request, signal),
         this.#software || signal.aborted
           ? undefined
@@ -1823,5 +1823,5 @@ import {
 import {
   decodeFailureOf,
   isDecoderFailure,
-  withSoftwareFallback,
+  withDecoderFallback,
 } from "./decoder-fallback.js";

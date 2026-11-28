@@ -355,6 +355,7 @@ const fn media_kind(kind: MediaKind) -> &'static str {
         MediaKind::Image => "image",
         MediaKind::Generated => "generated",
         MediaKind::Composition => "composition",
+        MediaKind::Adjustment => "adjustment",
     }
 }
 

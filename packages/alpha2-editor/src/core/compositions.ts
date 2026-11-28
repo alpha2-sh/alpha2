@@ -448,6 +448,10 @@ function inputsOf(op: CompositionNode["op"]): string[] {
       return [op.from, op.to].filter((id): id is string => id != null);
     case "matte":
       return [op.input, op.matte].filter((id): id is string => id != null);
+    case "key_mix":
+      return [op.backdrop, op.input, op.mask].filter(
+        (id): id is string => id != null,
+      );
     case "merge":
       return (op.layers ?? [])
         .map((layer) => layer.input)
@@ -544,7 +548,14 @@ function drawn(
  * as `inputs.<name>`, or a merge layer's or group port's index.
  */
 export type InputKey =
-  "input" | "from" | "to" | "matte" | `inputs.${string}` | number;
+  | "input"
+  | "from"
+  | "to"
+  | "matte"
+  | "backdrop"
+  | "mask"
+  | `inputs.${string}`
+  | number;
 
 /** A name an effect node may give a named input, as the model requires. */
 const EFFECT_INPUT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -578,6 +589,8 @@ export function inputKeys(op: CompositionNode["op"]): InputKey[] {
       return ["from", "to"];
     case "matte":
       return ["input", "matte"];
+    case "key_mix":
+      return ["backdrop", "input", "mask"];
     case "merge":
       return (op.layers ?? []).map((_, index) => index);
     case "group":
@@ -587,10 +600,16 @@ export function inputKeys(op: CompositionNode["op"]): InputKey[] {
   }
 }
 
-/** The inputs drawing `node` reads: only its pass-through input (the first) when bypassed. */
+/**
+ * The inputs drawing `node` reads: only its pass-through input (the first) when bypassed, and not
+ * a key mix's unconnected mask.
+ */
 export function neededInputs(node: CompositionNode): InputKey[] {
   const keys = inputKeys(node.op);
-  return node.bypass ? keys.slice(0, 1) : keys;
+  if (node.bypass) return keys.slice(0, 1);
+  return node.op.type === "key_mix" && node.op.mask == null
+    ? keys.filter((key) => key !== "mask")
+    : keys;
 }
 
 /** What each composition's output reads, as alpha2-model's `CompositionReads`. */

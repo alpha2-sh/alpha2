@@ -9,20 +9,23 @@ use crate::assets::ProxyRequest;
 use crate::protocol::HostError;
 
 pub struct RequestInputs<'a> {
-    pub assets: &'a HashMap<String, PathBuf>,
+    pub assets: &'a HashMap<String, alpha2_host_core::requests::MediaLocation>,
     pub proxies: &'a HashMap<String, Vec<ProxyRequest>>,
     pub frames: &'a HashMap<String, Vec<Option<PathBuf>>>,
-    pub resources: &'a HashMap<String, HashMap<String, PathBuf>>,
+    pub resources: &'a HashMap<String, HashMap<String, alpha2_host_core::requests::MediaLocation>>,
     pub effect_assets: &'a HashMap<String, PathBuf>,
     pub font_files: &'a [PathBuf],
+    pub remote_content_hash: alpha2_host_core::requests::RemoteContentHash,
 }
 
 impl RequestInputs<'_> {
     /// Sorted by ID within each kind, so the input a refusal names does not depend on hash order.
     fn named(&self) -> Vec<(String, &Path)> {
         let mut named = Vec::new();
-        for (id, path) in sorted(self.assets) {
-            named.push((format!("the asset {id:?}"), path.as_path()));
+        for (id, location) in sorted(self.assets) {
+            if let Some(path) = location.path() {
+                named.push((format!("the asset {id:?}"), path));
+            }
         }
         for (id, proxies) in sorted(self.proxies) {
             for proxy in proxies {
@@ -35,11 +38,10 @@ impl RequestInputs<'_> {
             }
         }
         for (id, resources) in sorted(self.resources) {
-            for (locator, path) in sorted(resources) {
-                named.push((
-                    format!("the resource {locator:?} of {id:?}"),
-                    path.as_path(),
-                ));
+            for (locator, location) in sorted(resources) {
+                if let Some(path) = location.path() {
+                    named.push((format!("the resource {locator:?} of {id:?}"), path));
+                }
             }
         }
         for (id, path) in sorted(self.effect_assets) {

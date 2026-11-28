@@ -1,4 +1,4 @@
-use super::{MeasureError, measure_layout_json, measure_text_json};
+use super::{MeasureError, StringUnit, measure_layout_json, measure_text_json, text_layout_json};
 use crate::PictureSize;
 use alpha2_text::{TextFont, TextRasterError, TextRasterizer};
 use alpha2_time::MediaTime;
@@ -30,7 +30,7 @@ fn a_text_generator_measures_as_the_engine_measures_it() {
     .expect("JSON");
     let bounds = crate::measure_text(
         &rasterizer,
-        "Title",
+        &crate::TextAt::from("Title"),
         &alpha2_model::TextStyle {
             font_size: 0.1,
             ..alpha2_model::TextStyle::default()
@@ -317,4 +317,186 @@ fn values_at_their_bounds_measure_to_finite_numbers() {
         serde_json::from_str(&measure_text_json(&rasterizer, text, width, height).expect("valid"))
             .expect("JSON");
     assert!(numbers_only(&text), "{text}");
+}
+
+fn reporter() -> TextRasterizer {
+    let bytes = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture font");
+    TextRasterizer::new(vec![fixture(bytes)]).expect("font")
+}
+
+fn report(generator: &serde_json::Value, unit: StringUnit) -> serde_json::Value {
+    serde_json::from_str(
+        &text_layout_json(&reporter(), &generator.to_string(), 960, 540, unit).expect("reports"),
+    )
+    .expect("JSON")
+}
+
+#[test]
+fn text_layout_reports_lines_words_and_clusters() {
+    let generator = serde_json::json!({ "type": "text", "text": "Hello, brave\nworld",
+        "style": { "font_size": 0.1 } });
+    let layout = report(&generator, StringUnit::Utf8);
+    let lines = layout["lines"].as_array().expect("lines");
+    let words = layout["words"].as_array().expect("words");
+    let clusters = layout["clusters"].as_array().expect("clusters");
+    assert_eq!((lines.len(), words.len(), clusters.len()), (2, 3, 17));
+    assert_eq!(lines[0]["clusters"], serde_json::json!([0, 12]));
+    assert_eq!(words[1]["clusters"], serde_json::json!([7, 12]));
+    assert_eq!(clusters[5]["range"], serde_json::json!([5, 6]));
+    assert_eq!(clusters[6]["space"], true);
+    assert_eq!(clusters[6]["ink"], serde_json::Value::Null);
+    assert_eq!(
+        clusters[5]["word"],
+        serde_json::Value::Null,
+        "the comma is in no word"
+    );
+    assert_eq!(
+        clusters[0]["run"],
+        serde_json::Value::Null,
+        "a plain string has no runs"
+    );
+    let measured: serde_json::Value = serde_json::from_str(
+        &measure_text_json(&reporter(), &generator.to_string(), 960, 540).expect("measures"),
+    )
+    .expect("JSON");
+    assert_eq!(layout["layout"], measured["layout"]);
+    assert_eq!(lines[0]["baseline"], measured["baselines"]["first"]);
+    assert_eq!(lines[1]["baseline"], measured["baselines"]["last"]);
+    let number = |value: &serde_json::Value| value.as_f64().expect("a number");
+    let em = &lines[0]["em"];
+    let height = number(&layout["fontSize"]) * 540.0 / 540.0;
+    assert!((number(&em["bottom"]) - number(&em["top"]) - height).abs() < 1e-6);
+    let word = &words[0]["boxes"][0];
+    assert_eq!(word["left"], clusters[0]["box"]["left"]);
+    assert_eq!(word["right"], clusters[4]["box"]["right"]);
+}
+
+#[test]
+fn text_layout_ranges_follow_the_binding_unit() {
+    let generator = serde_json::json!({ "type": "text",
+        "text": [{ "text": "\u{e9}t\u{e9} " }, { "text": "\u{1d11e}a" }] });
+    let ranges = |unit| {
+        report(&generator, unit)["clusters"]
+            .as_array()
+            .expect("clusters")
+            .iter()
+            .map(|cluster| (cluster["range"].clone(), cluster["run"].clone()))
+            .collect::<Vec<_>>()
+    };
+    let pair =
+        |start: u32, end: u32, run: u32| (serde_json::json!([start, end]), serde_json::json!(run));
+    assert_eq!(
+        ranges(StringUnit::Utf8),
+        [
+            pair(0, 2, 0),
+            pair(2, 3, 0),
+            pair(3, 5, 0),
+            pair(5, 6, 0),
+            pair(6, 10, 1),
+            pair(10, 11, 1)
+        ]
+    );
+    assert_eq!(
+        ranges(StringUnit::Utf16),
+        [
+            pair(0, 1, 0),
+            pair(1, 2, 0),
+            pair(2, 3, 0),
+            pair(3, 4, 0),
+            pair(4, 6, 1),
+            pair(6, 7, 1)
+        ]
+    );
+    assert_eq!(
+        ranges(StringUnit::CodePoints),
+        [
+            pair(0, 1, 0),
+            pair(1, 2, 0),
+            pair(2, 3, 0),
+            pair(3, 4, 0),
+            pair(4, 5, 1),
+            pair(5, 6, 1)
+        ]
+    );
+}
+
+#[test]
+fn text_layout_is_the_static_layout() {
+    let plain = serde_json::json!({ "type": "text", "text": "Static words",
+        "style": { "font_size": 0.1 } });
+    let animated = serde_json::json!({ "type": "text", "text": "Static words",
+        "style": { "font_size": 0.1, "animators": [{ "selector": { "type": "range" },
+            "properties": { "tracking": { "mode": "constant", "value": 0.5 },
+                            "opacity": { "mode": "constant", "value": 0 } } }] } });
+    assert_eq!(
+        report(&plain, StringUnit::Utf8),
+        report(&animated, StringUnit::Utf8)
+    );
+}
+
+#[test]
+fn text_layout_reports_the_ellipsis_and_not_the_cut_text() {
+    let generator = serde_json::json!({ "type": "text", "text": "one two three four five six",
+        "style": { "font_size": 0.1, "max_width": 0.3, "line_clamp": { "max_lines": 1 } } });
+    let layout = report(&generator, StringUnit::Utf8);
+    let clusters = layout["clusters"].as_array().expect("clusters");
+    let last = clusters.last().expect("clusters");
+    assert_eq!(last["ellipsis"], true);
+    assert_eq!(last["range"][0], last["range"][1]);
+    assert_eq!(layout["lines"].as_array().expect("lines").len(), 1);
+    assert!(
+        clusters
+            .iter()
+            .all(|cluster| cluster["range"][1].as_u64() <= Some(8)),
+        "the cut words have no clusters"
+    );
+}
+
+/// Pinned text layouts that the wasm and Python measurers must reproduce bit for bit; their
+/// texts are ASCII, so every binding's ranges agree. Set `ALPHA2_UPDATE_GOLDENS=1` to re-pin
+/// after an intended change.
+#[test]
+fn text_layouts_match_the_pinned_answers() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/golden/text_layout.json"
+    );
+    let mut golden: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    let bytes = std::fs::read(format!(
+        "{}/../../{}",
+        env!("CARGO_MANIFEST_DIR"),
+        golden["font"].as_str().expect("font")
+    ))
+    .expect("font");
+    let rasterizer = TextRasterizer::new(vec![fixture(bytes)]).expect("font");
+    let update =
+        std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
+    for case in golden["cases"].as_array_mut().expect("cases") {
+        let number =
+            |key: &str| u32::try_from(case[key].as_u64().expect("a size")).expect("a side");
+        let reported = text_layout_json(
+            &rasterizer,
+            &case["generator"].to_string(),
+            number("width"),
+            number("height"),
+            StringUnit::Utf8,
+        )
+        .expect("reports");
+        if update {
+            case["expected"] = serde_json::Value::String(reported);
+        } else {
+            assert_eq!(
+                case["expected"].as_str(),
+                Some(reported.as_str()),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+    if update {
+        let mut text = serde_json::to_string_pretty(&golden).expect("JSON");
+        text.push('\n');
+        std::fs::write(path, text).expect("golden written");
+    }
 }

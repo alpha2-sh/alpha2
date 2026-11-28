@@ -504,7 +504,7 @@ fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
                 .map(|frame| MediaTime::from_ticks(frame * alpha2_time::TICKS_PER_SECOND / 30))
                 .collect::<Vec<_>>();
             let plan = crate::plan_packet_copy(&crate::PacketCopyRequest {
-                source: &source,
+                source: &alpha2_host_core::remote::SourceLocation::from(&source),
                 frame_times: &frame_times,
                 width: 128,
                 height: 96,

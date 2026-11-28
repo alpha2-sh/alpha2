@@ -1562,6 +1562,62 @@ serve((request) => respond(request, { ok: true, result: { status: "ready", capab
   assert.deepEqual(await startsIn(starts), []);
 });
 
+test("the remoteMedia option becomes the serve flags of every host, and a malformed one starts none", async () => {
+  const root = await scratch("alpha2-node-media-flags-");
+  const starts = join(root, "starts");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+appendFileSync(${JSON.stringify(starts)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+serve((request) => respond(request, { ok: true, result: { status: "ready", capabilities: {}, effectCatalog: {} } }));
+`,
+  );
+  const flagsOf = async (remoteMedia) => {
+    await rm(starts, { force: true });
+    const client = new Alpha2NodeClient({ hostPath, remoteMedia, cwd: root });
+    try {
+      await client.getCapabilities();
+    } finally {
+      await client.close();
+    }
+    return (await startsIn(starts)).map((line) => JSON.parse(line));
+  };
+  assert.deepEqual(await flagsOf(undefined), [[]]);
+  assert.deepEqual(
+    await flagsOf({
+      origins: ["https://media.example", "https://cdn.example:8443"],
+      privateAddresses: "allow",
+    }),
+    [
+      [
+        "--media-origins",
+        "https://media.example,https://cdn.example:8443",
+        "--media-private-addresses",
+        "allow",
+      ],
+    ],
+  );
+  assert.deepEqual(await flagsOf({ origins: "none" }), [
+    ["--media-origins", "none"],
+  ]);
+  await rm(starts, { force: true });
+  for (const remoteMedia of [
+    { origins: [] },
+    { origins: ["http://media.example"] },
+    { origins: "https://media.example" },
+    { privateAddresses: "some" },
+    "listed",
+  ])
+    assert.throws(
+      () => new Alpha2NodeClient({ hostPath, remoteMedia }),
+      (error) =>
+        error.code === "INVALID_INPUT" && /^remoteMedia/.test(error.message),
+      JSON.stringify(remoteMedia),
+    );
+  assert.deepEqual(await startsIn(starts), []);
+});
+
 /** Logs `<operation> <decode mode>`; fails the first capabilities probe if `failFirst`. */
 const PROBED_HOST = (
   log,
@@ -2569,6 +2625,79 @@ test("parseHostMessage reads state messages and a response's host state", () => 
     );
 });
 
+test("parseHostMessage needs an extract progress's stage, pass and covered span", () => {
+  const full = {
+    protocolVersion: 2,
+    type: "progress",
+    requestId: "r",
+    phase: "extract",
+    stage: "pass",
+    pass: 0,
+    completed: 2,
+    total: null,
+    covered: 4_000,
+    span: 40_000,
+  };
+  assert.deepEqual(parseHostMessage(JSON.stringify(full)), full);
+  for (const message of [
+    { ...full, stage: undefined },
+    { ...full, stage: "load" },
+    { ...full, pass: undefined },
+    { ...full, covered: undefined },
+    { ...full, span: -1 },
+    { ...full, covered: 40_001 },
+  ])
+    assert.throws(
+      () => parseHostMessage(JSON.stringify(message)),
+      /invalid progress message/,
+      JSON.stringify(message),
+    );
+});
+
+const ENDING_HOST = `import { respond, send, serve } from ${IO};
+let extract;
+serve((request) => {
+  if (request.operation === "extract") {
+    extract = request;
+    send({ type: "progress", requestId: request.requestId, phase: "extract", stage: "end", pass: 1, completed: 4, total: null, covered: 9, span: 9 });
+    send({ type: "extract.step", requestId: request.requestId, seq: 0, step: "end" });
+    return;
+  }
+  if (request.operation === "extract.ack") {
+    respond(extract, { ok: true, result: { dataSets: [], timings: {} } });
+    return;
+  }
+  respond(request, { ok: true, result: {} });
+});
+`;
+
+test("an extract progress reaches onProgress with its stage and covered span", async () => {
+  const root = await scratch("alpha2-node-extract-progress-");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, ENDING_HOST),
+  });
+  const heard = [];
+  await client.extract(
+    {
+      project: exportRequest().project,
+      request: { extractor: "example.levels", version: 1 },
+      onProgress: (progress) => heard.push(progress),
+    },
+    emittingExtractor(() => {}),
+  );
+  assert.deepEqual(heard, [
+    {
+      phase: "extract",
+      stage: "end",
+      pass: 1,
+      completed: 4,
+      total: null,
+      covered: 9,
+      span: 9,
+    },
+  ]);
+});
+
 test(
   "a host that never writes is HOST_START_TIMEOUT and is killed",
   { timeout: 20_000 },
@@ -3308,6 +3437,14 @@ send({ type: "state", state: "ready", reason: "started", details: ${JSON.stringi
 requests((request) => respond(request, { ok: true, result: { output: request.output } }));
 `;
 
+const SCHEMA_VERSION_HOST = (
+  projectSchemaVersion,
+) => `import { requests, respond, send } from ${IO};
+const named = { release: ${JSON.stringify(CLIENT_VERSION)}, projectSchemaVersion: ${projectSchemaVersion} };
+send({ type: "state", state: "ready", reason: "started", details: { hostVersion: named.release, projectSchemaVersion: named.projectSchemaVersion } });
+requests((request) => respond(request, { ok: true, result: { status: "ready", capabilities: { schema: "alpha2-capabilities", version: 3, ...named }, effectCatalog: {} } }));
+`;
+
 async function refusal(client) {
   return client.exportProject(exportRequest("out.mp4")).then(
     () => assert.fail("the export resolved"),
@@ -3739,6 +3876,22 @@ const SCENARIO_DRIVERS = {
         assert.ok(error.message.includes(hostPath), error.message);
       if (scenario.expect.hostEnded) await assertHostsEnded(pids);
     }
+  },
+  async "schema-version"(scenario) {
+    const root = await scratch("alpha2-node-schema-version-");
+    const hostPath = await fakeHost(
+      root,
+      SCHEMA_VERSION_HOST(scenario.given.projectSchemaVersion),
+    );
+    const { capabilities } = await new Alpha2NodeClient({
+      hostPath,
+    }).getCapabilities();
+    assert.equal(
+      capabilities.projectSchemaVersion,
+      scenario.expect.projectSchemaVersion,
+    );
+    if (scenario.expect.releaseIsTheClients)
+      assert.equal(capabilities.release, CLIENT_VERSION);
   },
   async "start-timeout"(scenario) {
     const root = await scratch("alpha2-node-start-timeout-");

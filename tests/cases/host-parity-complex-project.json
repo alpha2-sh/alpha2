@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "host-parity-complex",
-  "name": "Host parity: video, transition, effects, composition graphs with a group, a composition source, blends, masks, generated sources",
+  "name": "Host parity: video, transition, effects, composition graphs with a group, a composition source, blends, masks, generated sources, an adjustment layer",
   "settings": {
     "width": 96,
     "height": 64,
@@ -57,7 +57,8 @@
         ]
       }
     },
-    { "id": "card", "kind": "composition", "composition": "card-look" }
+    { "id": "card", "kind": "composition", "composition": "card-look" },
+    { "id": "adjust", "kind": "adjustment" }
   ],
   "compositions": [
     {
@@ -241,6 +242,30 @@
         }
       ],
       "output": "vignette"
+    },
+    {
+      "id": "adjust-look",
+      "nodes": [
+        { "id": "clip", "op": { "type": "clip" } },
+        {
+          "id": "blur",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.gaussian-blur",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": { "type": "float", "value": 0.05 }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "blur"
     }
   ],
   "timeline": {
@@ -359,6 +384,46 @@
                   "size": {
                     "mode": "constant",
                     "value": { "x": 0.8, "y": 0.7 }
+                  }
+                },
+                "feather": { "mode": "constant", "value": 0.05 }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "adjust",
+        "name": "Adjustment",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "adjust-clip",
+            "source_id": "adjust",
+            "timeline_range": { "start": 60000, "end": 150000 },
+            "source_range": { "start": 0, "end": 90000 },
+            "composition": { "id": "adjust-look" },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.5, "y": 0.5 }
+              },
+              "anchor": { "x": 0.5, "y": 0.5 },
+              "scale": { "mode": "constant", "value": { "x": 1, "y": 1 } },
+              "rotation_degrees": { "mode": "constant", "value": 0 },
+              "opacity": { "mode": "constant", "value": 0.5 }
+            },
+            "masks": [
+              {
+                "shape": {
+                  "type": "ellipse",
+                  "center": {
+                    "mode": "constant",
+                    "value": { "x": 0.45, "y": 0.5 }
+                  },
+                  "size": {
+                    "mode": "constant",
+                    "value": { "x": 0.6, "y": 0.7 }
                   }
                 },
                 "feather": { "mode": "constant", "value": 0.05 }

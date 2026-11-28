@@ -205,9 +205,22 @@ fn a_shadow_scales_with_the_font_size() {
 fn text_gradient_matches_a_shape_gradient() {
     let _lock = gpu_test_lock();
     let renderer = look_renderer();
-    let gradient = r##"{ "type": "linear_gradient", "start": { "x": 0, "y": 0 }, "end": { "x": 1, "y": 0 },
-        "stops": [ { "offset": 0, "color": "#ff2010" }, { "offset": 0.6, "color": "#20c040" },
-                   { "offset": 1, "color": "#1030ff" } ] }"##;
+    let stops = [
+        "#ff4040", "#f51a6f", "#da04a0", "#b001cd", "#8011ee", "#4f32fe", "#255ffb", "#0a90e5",
+        "#00bfbf", "#0ae590", "#25fb5f", "#4ffe32", "#7fee11", "#b0cd01", "#daa004", "#f56f1a",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(stop, color)| {
+        let offset = f64::from(u8::try_from(stop).expect("sixteen")) / 15.0;
+        format!(r#"{{ "offset": {offset}, "color": "{color}" }}"#)
+    })
+    .collect::<Vec<_>>()
+    .join(", ");
+    let gradient = format!(
+        r#"{{ "type": "linear_gradient", "start": {{ "x": 0, "y": 0 }}, "end": {{ "x": 1, "y": 0 }},
+        "stops": [ {stops} ] }}"#
+    );
     // The layout box spans the canvas width, so its gradient matches the canvas gradient.
     let style = format!(
         r#"{{ "font_size": 0.8, "max_width": 1, "align": "start", "position": {{ "x": 0, "y": 0.5 }},

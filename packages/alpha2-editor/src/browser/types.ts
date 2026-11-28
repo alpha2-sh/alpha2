@@ -442,10 +442,12 @@ export interface BrowserBridge {
   /** How many times the preview was made again after its GPU device or WebGL context was lost. */
   readonly previewRecoveries: number;
   /**
-   * What this page can do; `gpu`, `color` and `renderer` are `null` until a preview is bound.
-   * `features.preview` and `features.export` need no GPU: without one the engine draws on the CPU.
+   * What this page can do; `release`, `gpu`, `color` and `renderer` are `null` until a preview is
+   * bound. `features.preview` and `features.export` need no GPU: without one the engine draws on
+   * the CPU.
    */
-  readonly capabilities: CapabilityReport<null, null> & {
+  readonly capabilities: Omit<CapabilityReport<null, null>, "release"> & {
+    readonly release: string | null;
     readonly renderer: PreviewRenderer | null;
     readonly features: Readonly<
       Record<
@@ -714,8 +716,11 @@ export interface BrowserBridge {
    * (`missing_asset`), for a timeline that draws runtime effects or HDR video this browser cannot
    * read (`unsupported_media`),
    * with the plugin loader's and the extractor's errors (`PLUGIN_*`, `INVALID_INPUT`,
-   * `INVALID_EMIT`, `EXTRACTOR_FAILED`, `DECODE_UNAVAILABLE`), with `cancelled` when `signal`
-   * aborts or the bridge is disposed, and after disposal (`disposed`).
+   * `INVALID_EMIT`, `EXTRACTOR_FAILED`, `DECODE_UNAVAILABLE`, `PLANAR_DECODE_UNAVAILABLE`,
+   * `FRAME_UNREADABLE`), with `cancelled` when `signal` aborts or the bridge is disposed, and
+   * after disposal (`disposed`). A decode refusal (`DECODE_UNAVAILABLE`,
+   * `PLANAR_DECODE_UNAVAILABLE`) carries `facts` (`TrackDecodeFacts` of `alpha2`), on the page and
+   * from the worker alike.
    */
   extract(
     run: import("alpha2/extractor").ExtractRun,

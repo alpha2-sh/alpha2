@@ -414,7 +414,7 @@ fn an_odd_export_size_is_refused_before_an_encoder_opens() {
     let error = host
         .export(
             &project.to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             0,

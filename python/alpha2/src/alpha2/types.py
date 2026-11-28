@@ -154,6 +154,9 @@ MAX_FOLLOW_DEPTH = 8
 MAX_FONT_FAMILY_BYTES = 256
 """Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`."""
 
+MAX_FONT_SCALE = 10
+"""Mirrors `alpha2_model::MAX_FONT_SCALE`."""
+
 MAX_FONT_WEIGHT = 1000
 """Mirrors `alpha2_model::MAX_FONT_WEIGHT`."""
 
@@ -163,7 +166,7 @@ MAX_FRAME_INLINED_NODES = 65536
 MAX_GAIN = 16
 """Mirrors `alpha2_model::MAX_GAIN`."""
 
-MAX_GRADIENT_STOPS = 8
+MAX_GRADIENT_STOPS = 16
 """Mirrors `alpha2_model::MAX_GRADIENT_STOPS`."""
 
 MAX_GRID_TRACKS = 64
@@ -174,6 +177,9 @@ MAX_GROUP_INPUTS = 16
 
 MAX_HDR_PEAK_NITS = 10000
 """Mirrors `alpha2_model::MAX_HDR_PEAK_NITS`."""
+
+MAX_HIGHLIGHT_TRANSITION = 1200000
+"""Mirrors `alpha2_model::MAX_HIGHLIGHT_TRANSITION`."""
 
 MAX_INLINED_NODES = 65536
 """Mirrors `alpha2_model::MAX_INLINED_NODES`."""
@@ -256,6 +262,9 @@ MAX_RANGE_INDEX = 4096
 MAX_RANGE_PERCENT = 200
 """Mirrors `alpha2_model::MAX_RANGE_PERCENT`."""
 
+MAX_REVEAL_FEATHER = 1
+"""Mirrors `alpha2_model::MAX_REVEAL_FEATHER`."""
+
 MAX_RUN_CLASSES = 8
 """Mirrors `alpha2_model::MAX_RUN_CLASSES`."""
 
@@ -286,8 +295,20 @@ MAX_SVG_DOCUMENT_BYTES = 33554432
 MAX_TEXT_ANIMATORS = 8
 """Mirrors `alpha2_model::MAX_TEXT_ANIMATORS`."""
 
+MAX_TEXT_BORDER_WIDTH = 0.5
+"""Mirrors `alpha2_model::MAX_TEXT_BORDER_WIDTH`."""
+
 MAX_TEXT_CONTENT_BYTES = 4096
 """Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`."""
+
+MAX_TEXT_DASH_ENTRY = 4
+"""Mirrors `alpha2_model::MAX_TEXT_DASH_ENTRY`."""
+
+MAX_TEXT_DASH_OFFSET = 16
+"""Mirrors `alpha2_model::MAX_TEXT_DASH_OFFSET`."""
+
+MAX_TEXT_FONT_SELECTIONS = 16
+"""Mirrors `alpha2_model::MAX_TEXT_FONT_SELECTIONS`."""
 
 MAX_TEXT_GENERATOR_FONT_SIZE = 1
 """Mirrors `alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE`."""
@@ -310,7 +331,7 @@ MAX_TEXT_SHADOW_BLUR = 1
 MAX_TEXT_SHADOW_OFFSET = 1
 """Mirrors `alpha2_model::MAX_TEXT_SHADOW_OFFSET`."""
 
-MAX_TEXT_STROKES = 4
+MAX_TEXT_STROKES = 8
 """Mirrors `alpha2_model::MAX_TEXT_STROKES`."""
 
 MAX_TEXT_STROKE_EXTENT = 0.5
@@ -330,6 +351,9 @@ MIN_EQ_FREQUENCY_HZ = 10
 
 MIN_EQ_Q = 0.05
 """Mirrors `alpha2_model::MIN_EQ_Q`."""
+
+MIN_FONT_SCALE = 0.1
+"""Mirrors `alpha2_model::MIN_FONT_SCALE`."""
 
 MIN_FONT_WEIGHT = 1
 """Mirrors `alpha2_model::MIN_FONT_WEIGHT`."""
@@ -367,6 +391,9 @@ ALIGN_CONTENT_VALUES: tuple[AlignContent, ...] = ("start", "center", "end", "spa
 
 ALIGN_ITEMS_VALUES: tuple[AlignItems, ...] = ("start", "center", "end", "stretch")
 """Every `AlignItems`, in the model's order."""
+
+ANIMATOR_GROUPING_VALUES: tuple[AnimatorGrouping, ...] = ("character", "word", "line", "all")
+"""Every `AnimatorGrouping`, in the model's order."""
 
 BLEND_SPACE_VALUES: tuple[BlendSpace, ...] = ("linear_light", "srgb_encoded")
 """Every `BlendSpace`, in the model's order."""
@@ -416,11 +443,17 @@ FLEX_DIRECTION_VALUES: tuple[FlexDirection, ...] = ("row", "column", "row_revers
 FLEX_WRAP_VALUES: tuple[FlexWrap, ...] = ("nowrap", "wrap")
 """Every `FlexWrap`, in the model's order."""
 
+FONT_STYLE_VALUES: tuple[FontStyle, ...] = ("normal", "italic", "oblique")
+"""Every `FontStyle`, in the model's order."""
+
 GRID_AUTO_FLOW_VALUES: tuple[GridAutoFlow, ...] = ("row", "column", "row_dense", "column_dense")
 """Every `GridAutoFlow`, in the model's order."""
 
 HDR_SOURCES_VALUES: tuple[HdrSources, ...] = ("tone_map", "reject")
 """Every `HdrSources`, in the model's order."""
+
+HIGHLIGHT_GAP_VALUES: tuple[HighlightGap, ...] = ("hold", "hide")
+"""Every `HighlightGap`, in the model's order."""
 
 JUSTIFY_CONTENT_VALUES: tuple[JustifyContent, ...] = ("start", "center", "end", "space_between", "space_around", "space_evenly")
 """Every `JustifyContent`, in the model's order."""
@@ -443,7 +476,7 @@ MASK_MODE_VALUES: tuple[MaskMode, ...] = ("add", "subtract", "intersect")
 MATTE_MODE_VALUES: tuple[MatteMode, ...] = ("alpha", "alpha_inverted", "luma", "luma_inverted")
 """Every `MatteMode`, in the model's order."""
 
-MEDIA_KIND_VALUES: tuple[MediaKind, ...] = ("video", "audio", "image", "generated", "composition")
+MEDIA_KIND_VALUES: tuple[MediaKind, ...] = ("video", "audio", "image", "generated", "composition", "adjustment")
 """Every `MediaKind`, in the model's order."""
 
 MISSING_FRAMES_VALUES: tuple[MissingFrames, ...] = ("reject", "hold", "blank")
@@ -472,6 +505,9 @@ SPREAD_VALUES: tuple[Spread, ...] = ("pad", "repeat", "reflect")
 
 TEXT_ALIGN_VALUES: tuple[TextAlign, ...] = ("start", "center", "end")
 """Every `TextAlign`, in the model's order."""
+
+TEXT_BOX_EXTENT_VALUES: tuple[TextBoxExtent, ...] = ("line", "revealed", "block")
+"""Every `TextBoxExtent`, in the model's order."""
 
 TEXT_UNIT_VALUES: tuple[TextUnit, ...] = ("characters", "characters_excluding_spaces", "words", "lines")
 """Every `TextUnit`, in the model's order."""
@@ -596,6 +632,12 @@ Its JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. Wit
 the value travels the cubic Bezier through this keyframe's `out_tangent` and the next's
 `in_tangent`, at the speed its timing curve sets along the arc length. Without them it
 moves in a straight line.
+"""
+
+
+AnimatorGrouping: TypeAlias = Literal["character", "word", "line", "all"]
+"""The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+Grouping.
 """
 
 
@@ -1423,6 +1465,10 @@ class FontSizeFit(TypedDict):
     """Smallest font size, positive. At most the holder's largest font size."""
 
 
+FontStyle: TypeAlias = Literal["normal", "italic", "oblique"]
+"""Which faces of a family text prefers, as CSS `font-style`."""
+
+
 class FrameRate(TypedDict):
     """A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps)."""
 
@@ -1505,6 +1551,10 @@ GridPlacement: TypeAlias = "int | str"
 
 HdrSources: TypeAlias = Literal["tone_map", "reject"]
 """What a project does with HDR sources."""
+
+
+HighlightGap: TypeAlias = Literal["hold", "hide"]
+"""What a highlight does after its run ends, before the next starts."""
 
 
 class InsetsVariant3(TypedDict):
@@ -1787,17 +1837,27 @@ class LayoutNode(TypedDict):
     """Bands around the glyphs, as a text style's `strokes`. Inherited as a whole list; the root
     has none.
     """
-    text: NotRequired[Keyframed[str] | None]
-    """The box's text, wrapped at its content width in the inherited style; `\\n` starts a line.
-    At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty. Keyframes all `hold`.
-    Not with `children` or `shape`.
+    text: NotRequired[Keyframed[TextContent] | None]
+    """The box's text, a string or runs, wrapped at its content width in the inherited style;
+    `\\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty.
+    Keyframes all `hold`. A run takes a `style` with a constant `font_scale` only: no
+    `class`, `time` or keyframes. Not with `children` or `shape`.
     """
     text_align: NotRequired[TextAlign | None]
     """How lines align within the content width. Inherited; the root's is `start`."""
+    text_animator_grouping: NotRequired[AnimatorGrouping | None]
+    """The units whose characters `text_animators` scale and turn about one pivot, as a text
+    style's `animator_grouping`. Not inherited.
+    """
+    text_animator_pivot: NotRequired[Vec2 | None]
+    """Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not
+    inherited.
+    """
     text_animators: NotRequired[list[TextAnimator]]
     """Per-character motion of the box's own text, Range selectors only (layout text has no
-    runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited; never
-    changes layout.
+    runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited. They
+    never change layout, except that one whose advance follows its scale makes the text wrap,
+    and measure as wide, with room for its largest scale.
     """
     translate: NotRequired[Keyframed[LayoutOffset] | None]
     """Offset of the box and everything in it after layout: the object, or one or two lengths as
@@ -1972,7 +2032,7 @@ class MediaFingerprint(TypedDict):
     """The streams the file carries."""
 
 
-MediaKind: TypeAlias = Literal["video", "audio", "image", "generated", "composition"]
+MediaKind: TypeAlias = Literal["video", "audio", "image", "generated", "composition", "adjustment"]
 """The payload domain of a source."""
 
 
@@ -2013,7 +2073,8 @@ class MediaSource(TypedDict):
     """Media payload domain."""
     locator: NotRequired[str]
     """Opaque URI or host locator; the engine does not open it. Required except for
-    `MediaKind::Generated` and `MediaKind::Composition` sources.
+    `MediaKind::Generated`, `MediaKind::Composition` and `MediaKind::Adjustment` sources,
+    which have none.
 
     Default: `""`.
     """
@@ -2057,7 +2118,8 @@ NodeId: TypeAlias = str
 
 class NodeOpClip(TypedDict):
     """The picture of the clip showing the composition: its source at the time-mapped source
-    time, or what its generated source draws.
+    time, or what its generated source draws. For an adjustment clip, the scene composited
+    beneath it.
     """
 
     type: Literal["clip"]
@@ -2160,6 +2222,36 @@ class NodeOpMatte(TypedDict):
     type: Literal["matte"]
 
 
+class NodeOpKeyMix(TypedDict):
+    """The backdrop replaced by the input by `k = opacity x mask alpha`, as
+    `(1 - k) backdrop + k input` on premultiplied values: exactly the backdrop where `k` is 0
+    and the input where it is 1 (Nuke's `KeyMix` with an opacity). Bypassed, it passes the
+    backdrop through.
+    """
+
+    backdrop: NotRequired[NodeId | None]
+    """The picture replaced.
+
+    Default: `null`.
+    """
+    input: NotRequired[NodeId | None]
+    """The picture that replaces it.
+
+    Default: `null`.
+    """
+    mask: NotRequired[NodeId | None]
+    """The image whose alpha is coverage; unconnected, the coverage is `opacity` everywhere.
+
+    Default: `null`.
+    """
+    opacity: NotRequired[Animated[float]]
+    """Scales the coverage, in `0..=1`.
+
+    Default: `{"mode":"constant","value":1}`.
+    """
+    type: Literal["key_mix"]
+
+
 class NodeOpShapeMask(TypedDict):
     """The input kept inside shapes."""
 
@@ -2202,7 +2294,7 @@ class NodeOpGroupInput(TypedDict):
     type: Literal["group_input"]
 
 
-NodeOp: TypeAlias = "NodeOpClip | NodeOpMedia | NodeOpGenerator | NodeOpEffect | NodeOpTransition | NodeOpTransform | NodeOpMerge | NodeOpMatte | NodeOpShapeMask | NodeOpGroup | NodeOpGroupInput"
+NodeOp: TypeAlias = "NodeOpClip | NodeOpMedia | NodeOpGenerator | NodeOpEffect | NodeOpTransition | NodeOpTransform | NodeOpMerge | NodeOpMatte | NodeOpKeyMix | NodeOpShapeMask | NodeOpGroup | NodeOpGroupInput"
 """The operation of a `CompositionNode`.
 
 Animated settings are keyed in composition time (see `ClipComposition`).
@@ -2934,12 +3026,22 @@ class TextAnimatorProperties(TypedDict):
     out does nothing.
     """
 
+    advance_follows_scale: NotRequired[bool]
+    """Whether the character's advance follows this animator's horizontal scale, pushing the
+    characters after it along its line, which is re-aligned; lines are not re-broken, and the
+    text wraps with room for the largest scale this can reach. Needs `scale`.
+    """
     fill: NotRequired[Keyframed[Rgba] | None]
     """The fill color a fully selected character takes; a gradient fill is mixed toward it."""
     offset: NotRequired[Animated[Vec2] | None]
     """Moves the character, in font sizes, +y down."""
     opacity: NotRequired[Animated[float] | None]
     """The opacity a fully selected character takes, in `[0, 1]`."""
+    reveal: NotRequired[TextReveal | None]
+    """Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight
+    edge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows
+    `progress` of itself.
+    """
     rotation_degrees: NotRequired[Animated[float] | None]
     """Turns the character about its centre, clockwise degrees."""
     scale: NotRequired[Animated[Vec2] | None]
@@ -2955,15 +3057,43 @@ class TextAnimatorProperties(TypedDict):
 
 
 class TextBackground(TypedDict):
-    """A box behind each line of text."""
+    """A box behind each line of text, as CSS draws an inline box's background with
+    `box-decoration-break: clone`: each line's box has its own padding, radius and border.
+    """
 
+    border: NotRequired[TextBoxBorder | None]
+    """A line inside the box's edge, as a CSS border. `None` draws none."""
     color: Rgba
     """Box color."""
-    padding: NotRequired[float]
-    """Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.
+    extent: NotRequired[TextBoxExtent]
+    """Which part of each line the box spans."""
+    padding: NotRequired[TextInsets]
+    """Space between the text and the box edge, as fractions of the font size, each side in
+    `[0, 2]`.
 
     Default: `0`.
     """
+    radius: NotRequired[float]
+    """Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is
+    capped at half its shorter side, as CSS `border-radius`. Default 0.
+    """
+
+
+class TextBoxBorder(TypedDict):
+    """The border of a text box, drawn inside the box's edge."""
+
+    color: Rgba
+    """Line color."""
+    dash: NotRequired[TextDash | None]
+    """Dashes along the border's centre line; `None` draws it solid."""
+    width: float
+    """Width as a fraction of the font size, in `(0, 0.5]`."""
+
+
+TextBoxExtent: TypeAlias = Literal["line", "revealed", "block"]
+"""Which part of each line a text's background box spans, where tracking and pushing place its
+characters.
+"""
 
 
 TextContent: TypeAlias = "str | list[TextRun]"
@@ -2973,15 +3103,129 @@ Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]
 """
 
 
+class TextDash(TypedDict):
+    """Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at
+    the end of the top-left corner and run clockwise.
+    """
+
+    offset: NotRequired[float]
+    """How far into the pattern the border starts, in font sizes, in `[-16, 16]`."""
+    pattern: list[float]
+    """Alternating dash and gap lengths, as fractions of the font size: one to
+    `MAX_DASH_ENTRIES` entries in `[0, 4]`, not all zero. An odd count repeats once
+    more to pair up.
+    """
+
+
+class TextHighlight(TypedDict):
+    """A box over the timed run being said, sliding from run to run, drawn over the background
+    boxes and under the glyphs. The run is the timed run that started last; before the first
+    starts there is none.
+    """
+
+    border: NotRequired[TextBoxBorder | None]
+    """A line inside the box's edge, as a background's `border`."""
+    color: Rgba
+    """Box color."""
+    easing: NotRequired[Easing]
+    """The slide's timing curve."""
+    gap: NotRequired[HighlightGap]
+    """What the box does between a run's end and the next run's start."""
+    padding: NotRequired[TextInsets]
+    """Space between the run and the box edge, as a background's `padding`.
+
+    Default: `0`.
+    """
+    radius: NotRequired[float]
+    """Every corner's radius, as a background's `radius`."""
+    transition: NotRequired[MediaTime]
+    """How long the box takes to slide to the next run once it starts, at most
+    `MAX_HIGHLIGHT_TRANSITION`; 0 jumps. A change during a slide starts where the box is.
+    """
+
+
+class TextInsetsVariant3(TypedDict):
+    bottom: NotRequired[float]
+    left: NotRequired[float]
+    right: NotRequired[float]
+    top: NotRequired[float]
+
+
+TextInsets: TypeAlias = "float | str | TextInsetsVariant3"
+"""A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers ("0.1 0.3": top first, clockwise), or the sides object, missing sides 0."""
+
+
+class TextReveal(TypedDict):
+    """A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its
+    advances by its em boxes, outset by its strokes) in the direction `angle_degrees`.
+    """
+
+    angle_degrees: NotRequired[Animated[float]]
+    """The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,
+    90 top to bottom. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    feather: NotRequired[Animated[float]]
+    """The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel
+    antialiased step. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    progress: NotRequired[Animated[float]]
+    """How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit
+    selected by `w` shows `1 + w (progress - 1)`. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+
+
 TextRun = TypedDict(
     "TextRun",
     {
         "class": "NotRequired[list[str]]",
+        "style": "NotRequired[TextRunStyle | None]",
         "text": "str",
         "time": "NotRequired[RunTime | None]",
     },
 )
-TextRun.__doc__ = "A piece of a text that animators' Class and Timing selectors can pick."
+TextRun.__doc__ = "A piece of a text with its own style, that animators' Class and Timing selectors can pick."
+
+
+class TextRunStyle(TypedDict):
+    """A run's changes to its holder's text style, as an inline box's own CSS properties. Each
+    field set replaces the holder's value for the run's characters; a field left out keeps it.
+    A change of family, weight, style, size or letter spacing shapes the run apart and can move
+    line breaks; fill, strokes, background and decorations only paint.
+    """
+
+    background_color: NotRequired[Rgba | None]
+    """A box behind the run on each line, its advances wide and its em box tall, as CSS
+    `background-color` paints an inline box.
+    """
+    fill: NotRequired[Paint | None]
+    """What paints the run's glyphs; gradient positions are in the text's layout box, as the
+    text's fill.
+    """
+    font_family: NotRequired[str | None]
+    """The family, as a text style's `font_family`; `null` draws from the fallback order alone."""
+    font_scale: NotRequired[Animated[float] | None]
+    """The run's size as a multiple of the text's font size, in `[0.1, 10]`, as CSS
+    `font-size: <n>em`. Lines are laid out again when it changes; keyframes are in the
+    holder's time.
+    """
+    font_style: NotRequired[FontStyle | None]
+    """The face style, as a text style's `font_style`."""
+    font_weight: NotRequired[int | None]
+    """The weight in `[1, 1000]`, as a text style's `font_weight`."""
+    letter_spacing: NotRequired[float | None]
+    """Space after each character, as a fraction of the run's size, in `[-0.5, 1]`."""
+    line_through: NotRequired[bool | None]
+    """See `TextStyle::line_through`."""
+    strokes: NotRequired[list[TextStroke] | None]
+    """The run's bands, as a text style's `strokes`, widths in fractions of the run's size."""
+    underline: NotRequired[bool | None]
+    """See `TextStyle::underline`."""
 
 
 class TextSelectorRange(TypedDict):
@@ -3112,10 +3356,19 @@ class TextStyle(TypedDict):
 
     Default: `{"x":0.5,"y":1}`.
     """
+    animator_grouping: NotRequired[AnimatorGrouping]
+    """The units whose characters the animators scale and turn about one pivot."""
+    animator_pivot: NotRequired[Vec2]
+    """Where in each group's box (the union of its characters' advances by their em boxes) the
+    pivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`
+    percentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre
+    on one line. Not animated.
+    """
     animators: NotRequired[list[TextAnimator]]
     """Per-character motion and color, applied in order, at most `MAX_TEXT_ANIMATORS`.
     Keyframes are in the holder's time (since a caption cue's start, or a text generator's
-    picture time). They never change line layout.
+    picture time). They never re-break lines while they play; an animator whose advance
+    follows its scale makes the text wrap with room for its largest scale.
     """
     background: NotRequired[TextBackground | None]
     """A box behind each line.
@@ -3146,6 +3399,11 @@ class TextStyle(TypedDict):
     """The range the font size is fitted in so the text fits its box. `None` draws at the
     font size as set.
     """
+    font_style: NotRequired[FontStyle]
+    """The face style matched before weight, as CSS Fonts 4 matches `font-style`. A face that is
+    neither italic nor oblique is sheared by 14 degrees when one is asked; bitmap glyphs stay
+    upright. Default `normal`.
+    """
     font_weight: NotRequired[int]
     """The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
     `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
@@ -3153,6 +3411,8 @@ class TextStyle(TypedDict):
 
     Default: `400`.
     """
+    highlight: NotRequired[TextHighlight | None]
+    """A box over the timed run being said. Needs timed runs; without them it draws nothing."""
     letter_spacing: NotRequired[float]
     """Space after each character, as a fraction of the font size, in `[-0.5, 1]`, added as CSS
     `letter-spacing` does: none after a line's last character or within cursive scripts such
@@ -3167,6 +3427,10 @@ class TextStyle(TypedDict):
     sizes above the baseline, 0.2 below) is centred in a taller line.
 
     Default: `1.2`.
+    """
+    line_through: NotRequired[bool]
+    """A line through the glyphs, as CSS `text-decoration-line: line-through`, placed by the
+    font.
     """
     max_height: NotRequired[float | None]
     """Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
@@ -3192,6 +3456,8 @@ class TextStyle(TypedDict):
     """Bands around the glyphs, innermost first, each outside the one before. At most
     `MAX_TEXT_STROKES`, widths summing to at most `MAX_TEXT_STROKE_EXTENT`.
     """
+    underline: NotRequired[bool]
+    """A line under the glyphs, as CSS `text-decoration-line: underline`, placed by the font."""
 
 
 class TextStylePatch(TypedDict):
@@ -3203,6 +3469,10 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::align`."""
     anchor: NotRequired[Vec2 | None]
     """See `TextStyle::anchor`."""
+    animator_grouping: NotRequired[AnimatorGrouping | None]
+    """See `TextStyle::animator_grouping`."""
+    animator_pivot: NotRequired[Vec2 | None]
+    """See `TextStyle::animator_pivot`."""
     animators: NotRequired[list[TextAnimator] | None]
     """See `TextStyle::animators`."""
     background: NotRequired[TextBackground | None]
@@ -3215,14 +3485,20 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::font_size`."""
     font_size_fit: NotRequired[FontSizeFit | None]
     """See `TextStyle::font_size_fit`; `null` removes the base's."""
+    font_style: NotRequired[FontStyle | None]
+    """See `TextStyle::font_style`."""
     font_weight: NotRequired[int | None]
     """See `TextStyle::font_weight`."""
+    highlight: NotRequired[TextHighlight | None]
+    """The box over the timed run being said; `null` removes the base's."""
     letter_spacing: NotRequired[float | None]
     """See `TextStyle::letter_spacing`."""
     line_clamp: NotRequired[LineClamp | None]
     """See `TextStyle::line_clamp`; `null` removes the base's."""
     line_height: NotRequired[float | None]
     """See `TextStyle::line_height`."""
+    line_through: NotRequired[bool | None]
+    """See `TextStyle::line_through`."""
     max_height: NotRequired[float | None]
     """See `TextStyle::max_height`; `null` removes the base's."""
     max_width: NotRequired[float | None]
@@ -3233,6 +3509,8 @@ class TextStylePatch(TypedDict):
     """See `TextStyle::shadows`."""
     strokes: NotRequired[list[TextStroke] | None]
     """See `TextStyle::strokes`."""
+    underline: NotRequired[bool | None]
+    """See `TextStyle::underline`."""
 
 
 TextUnit: TypeAlias = Literal["characters", "characters_excluding_spaces", "words", "lines"]

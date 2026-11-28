@@ -13,7 +13,7 @@
 //! Several runs join into one output ([`PacketCopy::join`]) when one MP4 sample description fits
 //! them all and decode times keep increasing across each join.
 
-use std::path::{Path, PathBuf};
+use alpha2_host_core::remote::SourceLocation;
 
 use alpha2_ffmpeg_bridge::DemuxInput;
 use alpha2_media::{
@@ -31,8 +31,8 @@ use crate::mux::{AudioStream, Muxer, VideoStream};
 /// The stream an export copies from and what it must match.
 #[derive(Clone, Debug)]
 pub struct PacketCopyRequest<'a> {
-    /// The source file.
-    pub source: &'a Path,
+    /// The source.
+    pub source: &'a SourceLocation,
     /// Each output frame's source time, in order: what rendering would show.
     pub frame_times: &'a [MediaTime],
     /// The output size, which the stream must already have.
@@ -66,7 +66,7 @@ pub struct PacketCopyAudio {
 /// A copy that can be made, and what it copies.
 #[derive(Clone, Debug)]
 pub struct PacketCopyPlan {
-    source: PathBuf,
+    source: SourceLocation,
     video_stream: usize,
     audio_stream: Option<usize>,
     /// Why audio the request offered to copy is not copied.
@@ -252,7 +252,7 @@ pub fn plan_packet_copy(request: &PacketCopyRequest<'_>) -> Result<PacketCopyPla
 /// Plans the runs of one export, reading each source once and stopping on cancel.
 pub struct PacketCopyPlanner {
     cancel: CancelToken,
-    sources: std::collections::HashMap<PathBuf, SourceFacts>,
+    sources: std::collections::HashMap<SourceLocation, SourceFacts>,
 }
 
 /// What a plan learns of one source file, each part read on first use.
@@ -338,11 +338,11 @@ impl PacketCopyPlanner {
         )
     }
 
-    fn facts(&mut self, source: &Path) -> &mut SourceFacts {
-        self.sources.entry(source.to_owned()).or_default()
+    fn facts(&mut self, source: &SourceLocation) -> &mut SourceFacts {
+        self.sources.entry(source.clone()).or_default()
     }
 
-    fn probe(&mut self, source: &Path) -> Result<crate::ProbeResult, String> {
+    fn probe(&mut self, source: &SourceLocation) -> Result<crate::ProbeResult, String> {
         self.facts(source)
             .probe
             .get_or_insert_with(|| {
@@ -351,7 +351,7 @@ impl PacketCopyPlanner {
             .clone()
     }
 
-    fn video(&mut self, source: &Path, index: usize) -> Result<VideoParameters, String> {
+    fn video(&mut self, source: &SourceLocation, index: usize) -> Result<VideoParameters, String> {
         self.facts(source)
             .video
             .get_or_insert_with(|| video_parameters(source, index))
@@ -360,7 +360,7 @@ impl PacketCopyPlanner {
 
     fn scan(
         &mut self,
-        source: &Path,
+        source: &SourceLocation,
         index: usize,
         audio: Option<usize>,
         codec: NativeVideoCodec,
@@ -581,7 +581,7 @@ fn check_sampling(
 /// # Errors
 /// Names what the render would have changed.
 pub fn check_yuv_transcode(
-    source: &Path,
+    source: &SourceLocation,
     width: u32,
     height: u32,
     encoding: YuvEncoding,
@@ -648,7 +648,7 @@ pub fn same_chroma_siting(source: ChromaLocation, output: ChromaLocation) -> boo
     centred(source) == centred(output)
 }
 
-fn video_parameters(source: &Path, index: usize) -> Result<VideoParameters, String> {
+fn video_parameters(source: &SourceLocation, index: usize) -> Result<VideoParameters, String> {
     let input = open(source)?;
     let stream = input
         .streams()
@@ -762,8 +762,8 @@ fn copyable_audio(
     Ok(index)
 }
 
-fn open(path: &Path) -> Result<DemuxInput, String> {
-    crate::decode::open_input(path).map_err(|error| format!("cannot open the source: {error}"))
+fn open(source: &SourceLocation) -> Result<DemuxInput, String> {
+    crate::decode::open_input(source).map_err(|error| format!("cannot open the source: {error}"))
 }
 
 /// The byte width of each NAL length prefix. Only length-prefixed (MP4) streams are copied; Annex B
@@ -831,7 +831,7 @@ struct AudioSpan {
 /// Reads the source once: every packet of video stream `index` and the timestamps of audio stream
 /// `audio`. Other streams are discarded, and `cancel` is checked between packets.
 fn scan(
-    path: &Path,
+    path: &SourceLocation,
     index: usize,
     codec: NativeVideoCodec,
     length_size: usize,

@@ -266,7 +266,7 @@ fn a_long_provider_open_that_keeps_decoding_is_not_a_stall() {
     for name in ["one", "two"] {
         let path = scratch.join(format!("{name}.png"));
         write_noise_apng(&path, 256, FRAMES);
-        originals.insert(name.to_owned(), path);
+        originals.insert(name.to_owned(), path.into());
     }
     let clip = |id: &str, source: &str| {
         json!({"id": id, "source_id": source,
@@ -387,7 +387,7 @@ fn a_shard_stuck_inside_an_extension_provider_is_reported_there() {
     let providers = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
         &project,
         alpha2_host_core::providers::ProviderFiles {
-            originals: HashMap::from([("animation".to_owned(), path)]),
+            originals: HashMap::from([("animation".to_owned(), path.into())]),
             ..alpha2_host_core::providers::ProviderFiles::default()
         },
         (16, 16),

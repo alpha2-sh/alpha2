@@ -76,7 +76,13 @@ fn every_face_of_a_collection_is_registered_in_its_order() {
         ..alpha2_model::TextStyle::default()
     };
     let ink = |font_weight| {
-        let bounds = measure_text(&rasterizer, "HI", &style(font_weight), size).expect("measures");
+        let bounds = measure_text(
+            &rasterizer,
+            &crate::TextAt::from("HI"),
+            &style(font_weight),
+            size,
+        )
+        .expect("measures");
         bounds.ink.expect("ink")
     };
     assert!(ink(700).right > ink(400).right);

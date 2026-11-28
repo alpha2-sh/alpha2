@@ -177,6 +177,18 @@ class PluginHostPolicy(TypedDict, total=False):
     ``"any"``, or a directory, resolved against the working directory when relative."""
 
 
+class RemoteMediaPolicy(TypedDict, total=False):
+    """Where a :class:`HostClient`'s hosts may read ``https:`` media URLs from, passed to each as
+    ``serve`` flags."""
+
+    origins: Literal["none"] | Sequence[str]
+    """``"none"`` (the host's default) reads no media URL; a list of ``https://host[:port]`` origins
+    allows media URLs, and redirects, only there."""
+    private_addresses: Literal["refuse", "allow"]
+    """``refuse`` (the host's default) connects to no address that is not global unicast (loopback,
+    private, link-local and the like); ``allow`` connects to any."""
+
+
 class LoudnessTarget(TypedDict):
     """Normalizes an export's audio to an integrated loudness under a true-peak ceiling."""
 
@@ -272,6 +284,47 @@ def _check_renderer(field: str, value: object) -> None:
         raise _invalid(f"{field} must be auto, gpu, or cpu")
 
 
+def _origin_list(origins: object) -> str | None:
+    if origins == "none":
+        return "none"
+    if (
+        isinstance(origins, Sequence)
+        and not isinstance(origins, (str, bytes))
+        and len(origins) > 0
+        and all(
+            isinstance(origin, str) and origin.startswith("https://") and "," not in origin
+            for origin in origins
+        )
+    ):
+        return ",".join(origins)
+    return None
+
+
+def _remote_media_flags(policy: object) -> list[str]:
+    if policy is None:
+        return []
+    if not isinstance(policy, Mapping):
+        raise _invalid("remote_media must be a mapping")
+    unknown = set(policy) - {"origins", "private_addresses"}
+    if unknown:
+        raise _invalid(f"remote_media has unknown keys: {', '.join(sorted(map(str, unknown)))}")
+    flags: list[str] = []
+    origins = policy.get("origins")
+    if origins is not None:
+        listed = _origin_list(origins)
+        if listed is None:
+            raise _invalid(
+                'remote_media.origins must be "none" or a non-empty list of https:// origins'
+            )
+        flags += ["--media-origins", listed]
+    private = policy.get("private_addresses")
+    if private is not None:
+        if private not in ("refuse", "allow"):
+            raise _invalid("remote_media.private_addresses must be refuse or allow")
+        flags += ["--media-private-addresses", private]
+    return flags
+
+
 def _plugin_flags(policy: object) -> list[str]:
     """The ``serve`` flags of a :class:`PluginHostPolicy`; ``INVALID_INPUT`` for a malformed one."""
     if policy is None:
@@ -289,20 +342,10 @@ def _plugin_flags(policy: object) -> list[str]:
         flags += ["--plugins", mode]
     origins = policy.get("origins")
     if origins is not None:
-        if origins == "none":
-            flags += ["--plugin-origins", "none"]
-        elif (
-            isinstance(origins, Sequence)
-            and not isinstance(origins, (str, bytes))
-            and len(origins) > 0
-            and all(
-                isinstance(origin, str) and origin.startswith("https://") and "," not in origin
-                for origin in origins
-            )
-        ):
-            flags += ["--plugin-origins", ",".join(origins)]
-        else:
+        listed = _origin_list(origins)
+        if listed is None:
             raise _invalid('plugins.origins must be "none" or a non-empty list of https:// origins')
+        flags += ["--plugin-origins", listed]
     root = policy.get("root")
     if root is not None:
         if not isinstance(root, (str, os.PathLike)) or os.fspath(root) == "":
@@ -449,7 +492,14 @@ def _absolute(text: str) -> str:
     return text if os.path.isabs(text) else os.path.join(os.getcwd(), text)
 
 
-def _path_record(field: str, value: object, what: str) -> dict[str, str]:
+_MEDIA_URL = re.compile(r"https?://", re.IGNORECASE)
+
+
+def _media_record(field: str, value: object, what: str) -> dict[str, str]:
+    return _path_record(field, value, what, urls=True)
+
+
+def _path_record(field: str, value: object, what: str, *, urls: bool = False) -> dict[str, str]:
     if value is None:
         return {}
     if not isinstance(value, Mapping):
@@ -459,7 +509,7 @@ def _path_record(field: str, value: object, what: str) -> dict[str, str]:
         text = os.fspath(path) if isinstance(path, (str, os.PathLike)) else None
         if not isinstance(key, str) or not isinstance(text, str) or not text:
             raise _invalid(f"{what} for {key} must be a non-empty string")
-        record[key] = _absolute(text)
+        record[key] = text if urls and _MEDIA_URL.match(text) else _absolute(text)
     return record
 
 
@@ -533,7 +583,7 @@ def _request_inputs(
         if not isinstance(resources, Mapping):
             raise _invalid("resources must map source ids to their files")
         for source, files in resources.items():
-            resources_payload[source] = _path_record(f"resources.{source}", files, "resource path")
+            resources_payload[source] = _media_record(f"resources.{source}", files, "resource path")
     if effects is not None and (
         isinstance(effects, (str, bytes, Mapping)) or not isinstance(effects, Sequence)
     ):
@@ -556,7 +606,7 @@ def _request_inputs(
             )
     return {
         "project": project,
-        "assets": _path_record("assets", assets, "asset path"),
+        "assets": _media_record("assets", assets, "asset path"),
         "proxies": _proxies_payload(proxies),
         "frames": _frames_payload(frames),
         "resources": resources_payload,
@@ -727,6 +777,8 @@ class HostClient:
 
     ``plugins`` (a :class:`PluginHostPolicy`) is what the client's hosts allow plugins; unset, a
     host runs wasm plugins only, from a local manifest or one on any ``https:`` origin.
+    ``remote_media`` (a :class:`RemoteMediaPolicy`) is where they may read ``https:`` media URLs
+    in ``assets`` and ``resources`` from; unset, they read none.
 
     ``host_start_timeout`` is how many seconds a started host has to report that it is ready
     (``None`` waits forever). A host held before it runs (Gatekeeper, antivirus, App Control) is
@@ -734,8 +786,8 @@ class HostClient:
 
     Raises ``ValueError`` for a ``concurrency`` that is not a positive integer or a
     ``host_start_timeout`` that is not above zero, and :class:`~alpha2.Alpha2HostError` when
-    ``video_decode`` or ``renderer`` is not a mode or ``plugins`` is malformed (``INVALID_INPUT``),
-    or the binary cannot be found.
+    ``video_decode`` or ``renderer`` is not a mode or ``plugins`` or ``remote_media`` is malformed
+    (``INVALID_INPUT``), or the binary cannot be found.
     """
 
     def __init__(
@@ -748,6 +800,7 @@ class HostClient:
         renderer: RendererMode | None = None,
         host_start_timeout: float | None = _host_start.DEFAULT_HOST_START_TIMEOUT,
         plugins: PluginHostPolicy | None = None,
+        remote_media: RemoteMediaPolicy | None = None,
     ) -> None:
         if not _safe_integer(concurrency) or concurrency < 1:
             raise ValueError("concurrency must be a positive integer")
@@ -759,7 +812,7 @@ class HostClient:
             raise ValueError("host_start_timeout must be a number of seconds above zero, or None")
         _check_video_decode("video_decode", video_decode)
         _check_renderer("renderer", renderer)
-        serve_flags = _plugin_flags(plugins)
+        serve_flags = _plugin_flags(plugins) + _remote_media_flags(remote_media)
         self.host_path: Path = resolve_host_binary(host_path, cache_directory=cache_directory)
         # Hosts get it as ALPHA2_HOST_CACHE_DIR, so they find an OpenH264 installed there.
         self.cache_directory: str | None = (
@@ -875,7 +928,7 @@ class HostClient:
             raise Alpha2ProjectValidationError(problems)
         payload = {
             "project": project,
-            "assets": _path_record("assets", assets, "asset path"),
+            "assets": _media_record("assets", assets, "asset path"),
             "proxies": _proxies_payload(proxies),
             "frames": _frames_payload(frames),
             "purpose": purpose,
@@ -2103,7 +2156,12 @@ class _Pool:
                         try:
                             extraction.on_progress(
                                 ExtractProgress(
-                                    message.get("pass", 0), message["completed"], message["total"]
+                                    stage=message["stage"],
+                                    pass_index=message["pass"],
+                                    completed=message["completed"],
+                                    total=message["total"],
+                                    covered=message["covered"],
+                                    span=message["span"],
                                 )
                             )
                         except Exception as cause:  # noqa: BLE001 - reported as the request's failure

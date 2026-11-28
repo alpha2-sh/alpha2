@@ -5,3 +5,4 @@ rustflags = ["-C", "target-feature=+simd128"]
 [env]
 GGML_NATIVE = "OFF"
 GGML_CCACHE = "OFF"
+CMAKE_PROJECT_INCLUDE = { value = "plugins/first-party/transcribe/cmake/whisper.cmake", relative = true }

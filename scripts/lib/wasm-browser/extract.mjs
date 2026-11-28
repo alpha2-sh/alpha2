@@ -1,4 +1,5 @@
-// runExtractor drives the engine's session in wasm over frames the browser decodes in software.
+// runExtractor drives the engine's session in wasm over frames the browser decodes, in software
+// where it can and by its own choice of decoder otherwise.
 
 const prelude = `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -14,9 +15,37 @@ const project = {
 const media = async (name) => (await fetch("/tests/corpus/" + name)).blob();
 `;
 
+const softwareRefused = (softwareListed) => `
+{
+  const Original = globalThis.VideoDecoder;
+  globalThis.softwareRefusals = 0;
+  globalThis.VideoDecoder = new Proxy(Original, {
+    construct(target, [init]) {
+      const decoder = new target(init);
+      const configure = decoder.configure.bind(decoder);
+      decoder.configure = (config) => {
+        if (config.hardwareAcceleration !== "prefer-software") return configure(config);
+        globalThis.softwareRefusals += 1;
+        decoder.decode = () => {};
+        decoder.flush = () => new Promise(() => {});
+        queueMicrotask(() => init.error(new DOMException("Unsupported configuration.", "OperationError")));
+      };
+      return decoder;
+    },
+    get(target, key) {
+      if (key !== "isConfigSupported") return Reflect.get(target, key);
+      return async (config) =>
+        ${softwareListed} || config.hardwareAcceleration !== "prefer-software"
+          ? target.isConfigSupported(config)
+          : { supported: false, config };
+    },
+  });
+}
+`;
+
 // The digest fixture: one scalars sample per frame, the bytes' FNV-1a hash in two halves.
-export function extractDigest() {
-  return `${prelude}
+export function extractDigest(decoderWrapper = "", wrapperRan = "true") {
+  return `${prelude}${decoderWrapper}
 const fnv1a = (bytes) => {
   let hash = 0x811c9dc5;
   for (const byte of bytes) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
@@ -36,12 +65,26 @@ const digest = {
   },
 };
 const pinned = await (await fetch("/tests/golden/extract-recipe.json")).json();
+const expectedProgress = (times, end) => {
+  const report = (stage, completed, covered) =>
+    ({ phase: "extract", stage, pass: 0, completed, total: null, covered, span: end });
+  return [
+    report("begin", 0, 0),
+    report("pass", 0, 0),
+    ...times.map((time, index) => report("pass", index + 1, time)),
+    report("end", times.length, end),
+  ];
+};
+const sorted = (report) => JSON.stringify(report, Object.keys(report ?? {}).sort());
 const found = {};
 const undecodable = {};
+const decoded = {};
+const progressDiffers = {};
 let ok = true;
 // Every pinned file this browser decodes; H.264 always.
 for (const name of Object.keys(pinned)) {
   let result;
+  const heard = [];
   try {
     result = await runExtractor({
     binding: wasm, project, media: { v: await media(name) },
@@ -50,12 +93,15 @@ for (const name of Object.keys(pinned)) {
       input: { from: "source", source_id: "v", range: { start: 0, end: 40000 }, size: 96 },
       outputs: { digest: "frames" },
     },
+    onProgress: (progress) => heard.push(progress),
   }, digest);
   } catch (error) {
-    if (error?.code !== "DECODE_UNAVAILABLE" || name === "h264-bt709-copy.mp4") throw error;
+    const refused = error?.code === "DECODE_UNAVAILABLE" || error?.code === "PLANAR_DECODE_UNAVAILABLE";
+    if (!refused || name === "h264-bt709-copy.mp4") throw error;
     undecodable[name] = error.message;
     continue;
   }
+  decoded[name] = result.sourceDecode?.v;
   const set = /** @type {Extract<import("/packages/alpha2/dist/project.js").DataSet, { kind: "scalars" }>} */ (result.dataSets[0]);
   found[name] = set.times.map((time, index) => [
     time,
@@ -63,10 +109,31 @@ for (const name of Object.keys(pinned)) {
       .toString(16).padStart(8, "0"),
   ]);
   ok &&= JSON.stringify(found[name]) === JSON.stringify(pinned[name]);
+  const expected = expectedProgress(pinned[name].map(([time]) => time), 40000).map(sorted);
+  const differs = expected.findIndex((report, index) => report !== sorted(heard[index]));
+  if (differs >= 0 || heard.length !== expected.length) {
+    ok = false;
+    progressDiffers[name] = differs < 0 ? expected.length : differs;
+  }
 }
-report({ ok: ok && "h264-bt709-copy.mp4" in found, found, undecodable });
+const fellBack = Object.values(decoded).every(
+  (decode) => decode?.hardwareAcceleration === "no-preference" && decode.softwareRefusal !== undefined,
+);
+report({
+  ok: ok && "h264-bt709-copy.mp4" in found${decoderWrapper === "" ? "" : ` && fellBack && ${wrapperRan}`},
+  found,
+  undecodable,
+  decoded,
+  progressDiffers,
+});
 `;
 }
+
+export const extractDigestSoftwareFails = () =>
+  extractDigest(softwareRefused(true), "globalThis.softwareRefusals > 0");
+
+export const extractDigestSoftwareUnlisted = () =>
+  extractDigest(softwareRefused(false), "globalThis.softwareRefusals === 0");
 
 // The scripted fixture emitting a value no data set can hold is refused with the session's error.
 export function extractInvalidEmit() {

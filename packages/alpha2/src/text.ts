@@ -106,7 +106,13 @@ export interface WasmTextBinding {
 
 /** A text layout and raster style for {@link WasmTextRasterizer}. */
 export interface WasmTextRequest {
-  readonly text: string;
+  /** The text; give it or `runs`, not both. */
+  readonly text?: string;
+  /**
+   * The text as runs, joined in order, each drawn with its own values where set and the
+   * request's elsewhere, as CSS inline boxes: a larger run makes its line taller and re-wraps.
+   */
+  readonly runs?: readonly WasmTextRun[];
   readonly contentVersion: bigint;
   /** Logical font size in pixels, up to 2048. */
   readonly fontSize: number;
@@ -132,25 +138,87 @@ export interface WasmTextRequest {
    * draws outlines in the fill, `replace` draws one U+FFFD per emoji grapheme.
    */
   readonly emojiPolicy?: "color" | "monochrome" | "replace";
-  /** Outline bands, innermost first: at most 4, with widths summing to at most 64 pixels. */
+  /** Outline bands, innermost first: at most 8, with widths summing to at most 64 pixels. */
   readonly strokes?: readonly {
     readonly color: WasmTextColor;
     readonly width: number;
   }[];
-  /** A box behind each line, grown by `padding` pixels (at most 256). */
-  readonly background?: {
-    readonly color: WasmTextColor;
-    readonly padding: number;
+  /**
+   * A box behind each line, grown by `padding` pixels (at most 256): one number for every side or
+   * `[top, right, bottom, left]`. `radius` rounds its corners, capped at half its shorter side; a
+   * `border` lies inside it, dashed by `dash` from the end of the top-left corner clockwise, and is
+   * hidden where another line's box covers it. `extent` (default `line`) is `revealed` for a box
+   * from the first to the last revealed cluster of each line, or `block` for one box over the
+   * layout box.
+   */
+  readonly background?: WasmTextBox & {
+    readonly extent?: "line" | "revealed" | "block";
+  };
+  /**
+   * A box over the run being said, drawn over the background and under the glyphs: it starts as
+   * the first step's run's first line fragment and moves toward each next step's by that step's
+   * `progress` (`0..=1`); the last step's other fragments show whole. Steps name runs by index.
+   */
+  readonly highlight?: WasmTextBox & {
+    readonly steps: readonly {
+      readonly run: number;
+      readonly progress: number;
+    }[];
   };
   /**
    * Returns the boxes as their own plane ({@link BrowserTextTexture.background}) so the page can
    * draw a shadow between them and the glyphs.
    */
   readonly splitBackground?: boolean;
+  /**
+   * Cuts lines as CSS `line-clamp`: at most `maxLines`, as many as fit in `maxHeight` pixels
+   * (absent or non-positive for none), at least one. A cut line ends with `ellipsis` (absent for
+   * U+2026, `null` for nothing).
+   */
+  readonly clamp?: {
+    readonly maxLines?: number;
+    readonly maxHeight?: number;
+    readonly ellipsis?: string | null;
+  };
+  /**
+   * The most an animation widens an advance, 1 (the default) to 10: lines wrap at `maxWidth` over
+   * it and align in `maxWidth`, so a line pushed that far apart still fits.
+   */
+  readonly advanceHeadroom?: number;
+  /** The units whose clusters scale and turn about one pivot (default `character`). */
+  readonly animatorGrouping?: "character" | "word" | "line" | "all";
+  /**
+   * Where in each group's box (its clusters' advances by their em boxes) the pivot lies, fractions
+   * from its left and top (default `[0.5, 0.5]`).
+   */
+  readonly animatorPivot?: readonly [number, number];
   /** One animation state applied to every cluster. Tracking never re-wraps lines. */
   readonly clusterState?: WasmClusterState;
   /** One animation state per cluster, in logical order. */
   readonly clusterStates?: readonly WasmClusterState[];
+}
+
+/**
+ * A run of a {@link WasmTextRequest}. Sizes and spacing are pixels. Family, weight, style, size
+ * and spacing shape the run apart; fill, strokes, background and decorations only paint it. A
+ * face without italics is sheared when `fontStyle` asks for one. Decorations take the run's first
+ * face's metrics; the background is the run's em box on each line.
+ */
+export interface WasmTextRun {
+  readonly text: string;
+  readonly fontFamily?: string;
+  readonly fontWeight?: number;
+  readonly fontStyle?: "normal" | "italic" | "oblique";
+  readonly fontSize?: number;
+  readonly letterSpacing?: number;
+  readonly fill?: WasmTextColor | WasmTextGradient;
+  readonly strokes?: readonly {
+    readonly color: WasmTextColor;
+    readonly width: number;
+  }[];
+  readonly backgroundColor?: WasmTextColor;
+  readonly underline?: boolean;
+  readonly lineThrough?: boolean;
 }
 
 /**
@@ -166,6 +234,37 @@ export interface WasmClusterState {
   readonly fill?: WasmColorMix;
   readonly stroke?: WasmColorMix;
   readonly tracking?: number;
+  /**
+   * How much the advance widens (default 1), up to 10: mapped about its group's pivot, a group's
+   * advances push the groups after it along their line, which is re-aligned.
+   */
+  readonly advanceScale?: number;
+  /**
+   * Up to 8 straight edges that wipe the cluster's unit (its group's box, outset by the strokes)
+   * in, their shares multiplied: each travels along the unit vector `direction`, shows `progress`
+   * (`0..=1`) of the unit and is softened over `feather` pixels (default 0, a one-pixel step).
+   */
+  readonly reveals?: readonly {
+    readonly direction: readonly [number, number];
+    readonly progress: number;
+    readonly feather?: number;
+  }[];
+}
+
+/** A text box's look; lengths in pixels. */
+export interface WasmTextBox {
+  readonly color: WasmTextColor;
+  readonly padding: number | readonly [number, number, number, number];
+  readonly radius?: number;
+  readonly border?: {
+    readonly color: WasmTextColor;
+    readonly width: number;
+    /** At most 16 lengths, not all 0; an odd count repeats once more, as SVG. */
+    readonly dash?: {
+      readonly pattern: readonly number[];
+      readonly offset?: number;
+    };
+  };
 }
 
 /** See {@link WasmClusterState}. */

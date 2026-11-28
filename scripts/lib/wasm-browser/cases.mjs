@@ -2,6 +2,8 @@
 
 import {
   extractDigest,
+  extractDigestSoftwareFails,
+  extractDigestSoftwareUnlisted,
   extractInvalidEmit,
   extractTimeline,
   extractTimelineQuality,
@@ -134,6 +136,8 @@ const underSimulation = (names, body, check) =>
 
 export const cases = {
   "extract-digest": extractDigest,
+  "extract-digest-software-fails": extractDigestSoftwareFails,
+  "extract-digest-software-unlisted": extractDigestSoftwareUnlisted,
   "extract-invalid-emit": extractInvalidEmit,
   "extract-unsendable-emit": extractUnsendableEmit,
   "extract-timeline": extractTimeline,

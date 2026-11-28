@@ -248,7 +248,9 @@ fn a_truncated_adts_tail_is_damage_tolerant_decodes_up_to() {
 #[test]
 fn entirely_damaged_video_cannot_succeed_with_empty_output() {
     let healthy = corpus("recovery-mpeg4.mp4");
-    let mut input = crate::decode::open_input(&healthy).unwrap();
+    let mut input =
+        crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(&healthy))
+            .unwrap();
     let mut bytes = fs::read(&healthy).unwrap();
     while let Some(packet) = input.read_packet().unwrap() {
         let start = usize::try_from(packet.pos).unwrap();

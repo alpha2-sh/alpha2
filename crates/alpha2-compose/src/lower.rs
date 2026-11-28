@@ -26,6 +26,7 @@ pub(crate) enum Prim {
     Sequence(SequencePrim),
     Stack(StackPrim),
     Group(Box<GroupPrim>),
+    Adjustment(Box<AdjustmentPrim>),
     Coverage(Box<CoveragePrim>),
     Box(Box<BoxPrim>),
     Visual(Box<Visual>),
@@ -90,6 +91,14 @@ pub(crate) struct GroupPrim {
     pub blend: alpha2_model::ClipBlendMode,
     pub effects: Vec<EffectPrim>,
     pub transform: TransformPrim,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AdjustmentPrim {
+    pub head: Head,
+    pub opacity: AnimPrim<f32>,
+    pub blend: alpha2_model::ClipBlendMode,
+    pub effects: Vec<EffectPrim>,
 }
 
 /// A box layout in the node's area.
@@ -459,6 +468,7 @@ impl Prim {
             Self::Sequence(sequence) => &sequence.head,
             Self::Stack(stack) => &stack.head,
             Self::Group(group) => &group.stack.head,
+            Self::Adjustment(adjustment) => &adjustment.head,
             Self::Coverage(coverage) => &coverage.head,
             Self::Box(node) => &node.head,
             Self::Visual(visual) => &visual.head,
@@ -473,6 +483,7 @@ impl Prim {
             Self::Sequence(sequence) => &mut sequence.head,
             Self::Stack(stack) => &mut stack.head,
             Self::Group(group) => &mut group.stack.head,
+            Self::Adjustment(adjustment) => &mut adjustment.head,
             Self::Coverage(coverage) => &mut coverage.head,
             Self::Box(node) => &mut node.head,
             Self::Visual(visual) => &mut visual.head,
@@ -530,6 +541,7 @@ fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>)
         Node::Shape(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Matte(_)
         | Node::Mask(_)
+        | Node::Adjustment(_)
         | Node::Box(_)
         | Node::Captions(_)
         | Node::Audio(_)
@@ -956,6 +968,33 @@ impl Context<'_> {
             }
             Node::Media(media) => self.lower_media(media, path),
             Node::Group(group) => self.lower_group(group, path),
+            Node::Adjustment(adjustment) => Ok(Prim::Adjustment(Box::new(AdjustmentPrim {
+                head: Self::head(
+                    path,
+                    adjustment.id.as_ref(),
+                    adjustment.at,
+                    adjustment.duration,
+                )?,
+                opacity: adjustment
+                    .opacity
+                    .as_ref()
+                    .map(|opacity| {
+                        Self::anim(&format!("{path}.opacity"), opacity, |value| {
+                            (0.0..=1.0).contains(value)
+                        })
+                    })
+                    .transpose()?
+                    .unwrap_or(AnimPrim::Value(1.0)),
+                blend: adjustment.blend.unwrap_or_default(),
+                effects: adjustment
+                    .effects
+                    .iter()
+                    .enumerate()
+                    .map(|(index, effect)| {
+                        self.lower_effect(effect, &format!("{path}.effects[{index}]"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            }))),
             Node::Shape(shape) => self.lower_shape(shape, path),
             Node::Box(node) => Ok(Prim::Box(Box::new(BoxPrim {
                 head: Self::head(path, node.id.as_ref(), node.at, node.duration)?,
@@ -2089,10 +2128,8 @@ impl Context<'_> {
                 position.unwrap_or(low)
             }
             CaptionStyle::Boxed => {
-                style.background = Some(alpha2_model::TextBackground {
-                    color: self.theme.panel,
-                    padding: 0.3,
-                });
+                style.background =
+                    Some(alpha2_model::TextBackground::padded(self.theme.panel, 0.3));
                 position.unwrap_or(low)
             }
             CaptionStyle::BarBottom => {

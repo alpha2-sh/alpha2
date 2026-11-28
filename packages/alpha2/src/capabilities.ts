@@ -1,5 +1,5 @@
 /**
- * Runtime capability report (`alpha2-capabilities`, version 2), shared by the native host and the
+ * Runtime capability report (`alpha2-capabilities`, version 3), shared by the native host and the
  * browser bridge.
  */
 
@@ -22,6 +22,11 @@ export interface CapabilityFeature {
 
 export interface GpuCapability {
   readonly adapter: string;
+  /**
+   * Whether the adapter rasterizes in software (lavapipe, llvmpipe, WARP, SwiftShader). A native
+   * host renders on one only when `ALPHA2_GPU_ADAPTER` pins it; `false` on the CPU renderer.
+   */
+  readonly softwareAdapter: boolean;
   readonly backend: string;
   readonly driver: string;
   readonly driverInfo: string;
@@ -81,14 +86,20 @@ export type AdapterChoiceReason =
   /** It is the only hardware adapter that renders. */
   | "only-adapter"
   /** No adapter could share a device with the video decoder and encoder. */
-  | "no-shared-device";
+  | "no-shared-device"
+  /**
+   * No hardware adapter renders and no software one is pinned; only in the details of the
+   * `GPU_INIT_FAILED` a `gpu` host fails to start with.
+   */
+  | "no-hardware-adapter";
 
 /** An adapter a native host considered. */
 export interface AdapterCandidate {
   /** Position in the backend's enumeration, as used by `ALPHA2_GPU_ADAPTER=index:<n>`. */
   readonly index: number;
   readonly name: string;
-  readonly backend: "dx12" | "vulkan" | "metal";
+  /** `gl` only in the details of a failed start. */
+  readonly backend: "dx12" | "vulkan" | "metal" | "gl";
   /** DXGI adapter LUID as hex (`0x...`); `null` off Windows. */
   readonly luid: string | null;
   readonly software: boolean;
@@ -120,7 +131,14 @@ export interface AdapterChoice {
 /** A runtime's capabilities. `Decode` and `Encode` are runtime-specific. */
 export interface CapabilityReport<Decode = unknown, Encode = unknown> {
   readonly schema: "alpha2-capabilities";
-  readonly version: 2;
+  readonly version: 3;
+  /** The alpha2 release of the engine; packages and the host work together only within one. */
+  readonly release: string;
+  /**
+   * The project `schema_version` the engine reads and writes. Before v1 the release, not this
+   * number, decides which fields a document may hold.
+   */
+  readonly projectSchemaVersion: number;
   readonly runtime: "native" | "browser";
   /** `null` before a browser's engine has started. */
   readonly gpu: GpuCapability | null;

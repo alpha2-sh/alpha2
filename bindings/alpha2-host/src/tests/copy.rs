@@ -24,7 +24,7 @@ fn progress_never_goes_back_when_the_export_finishes() {
     let mut events = Vec::new();
     host.export(
         &project.to_string(),
-        &HashMap::from([("video".to_owned(), corpus("h264-long-gop.mp4"))]),
+        &crate::tests::sources([("video".to_owned(), corpus("h264-long-gop.mp4"))]),
         &HashMap::new(),
         Vec::new(),
         0,
@@ -154,7 +154,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
         host.strategy = strategy;
         let result = host.export(
             &project.to_string(),
-            &HashMap::from([("video".to_owned(), corpus(source))]),
+            &crate::tests::sources([("video".to_owned(), corpus(source))]),
             &HashMap::new(),
             Vec::new(),
             0,
@@ -340,7 +340,7 @@ fn a_copy_shows_and_sounds_as_the_render_of_its_range() {
         host.strategy = ExportStrategy::RequireCopy;
         let result = host.export(
             &project.to_string(),
-            &HashMap::from([("video".to_owned(), corpus(source))]),
+            &crate::tests::sources([("video".to_owned(), corpus(source))]),
             &HashMap::new(),
             Vec::new(),
             0,
@@ -499,7 +499,7 @@ fn clips_cut_at_idr_pictures_are_copied_back_to_back() {
         host.strategy = strategy;
         let result = host.export(
             &project.to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             0,

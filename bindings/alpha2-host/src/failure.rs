@@ -86,12 +86,15 @@ pub fn phase_tag(message: &str) -> Option<(ExportPhase, Option<u64>)> {
 
 /// Failure classes no protocol code names. `HARDWARE_STALL` is not a class; it makes a stall's
 /// `resource` the GPU ([`hardware_stall`]).
-const EVIDENCE_CLASSES: [&str; 4] = [
+const EVIDENCE_CLASSES: [&str; 5] = [
     "OUT_OF_MEMORY",
     "ALLOCATION_FAILED",
     "VALIDATION_FAILED",
     "HARDWARE_STALL",
+    NO_HARDWARE_ADAPTER,
 ];
+
+pub const NO_HARDWARE_ADAPTER: &str = "NO_HARDWARE_ADAPTER";
 
 /// Only the evidence decides; the words are for whoever reads the message.
 pub fn hardware_stall(hardware: bool, message: String) -> String {
@@ -233,48 +236,30 @@ pub struct FailureClass {
     pub resource: &'static str,
 }
 
-/// Classifies a failure from what is known for certain: the protocol code, typed device
-/// diagnostics, `native` evidence ([`evidence_tag`]), and the host's own markers.
-///
-/// A lost device the device or a GPU call reported wins. A readback's missing canary reads as a
-/// lost device only when nothing typed says otherwise, because the canary is also missing when the
-/// GPU rejected the submission and the device is fine.
-///
-/// Error text is read only for markers emitted verbatim (the readback's own message, C runtime
-/// `ENOMEM`/`ENOSPC` strings); a readback failure is never memory exhaustion unless the device
-/// reported one.
-pub fn classify_failure(
-    host_code: &str,
-    message: &str,
-    native: Option<&str>,
-    phase: ExportPhase,
-    gpu: &GpuDiagnosticSnapshot,
-) -> FailureClass {
-    let lower = message.to_ascii_lowercase();
+fn host_code_class(host_code: &str, native: Option<&str>) -> Option<FailureClass> {
     let class = |code, resource| FailureClass { code, resource };
-    let evidence = gpu.failure_code();
     match host_code {
-        "CANCELLED" => return class("CANCELLED", "unknown"),
+        "CANCELLED" => Some(class("CANCELLED", "unknown")),
         // A wasm plugin past its memory cap or call deadline is a limit too.
-        "RESOURCE_LIMIT" | "PLUGIN_LIMIT" => return class("RESOURCE_LIMIT", "unknown"),
-        "GPU_TIMEOUT" => return class("GPU_TIMEOUT", "gpu"),
+        "RESOURCE_LIMIT" | "PLUGIN_LIMIT" => Some(class("RESOURCE_LIMIT", "unknown")),
+        "GPU_TIMEOUT" => Some(class("GPU_TIMEOUT", "gpu")),
         // Every session is held by other exports; it frees up when they end.
-        "ENCODER_BUSY" => return class("RESOURCE_BUSY", "gpu"),
+        "ENCODER_BUSY" => Some(class("RESOURCE_BUSY", "gpu")),
         // Never started: the host was retiring, and another host runs it.
-        "HOST_RETIRING" => return class("HOST_EXITED", "unknown"),
+        "HOST_RETIRING" => Some(class("HOST_EXITED", "unknown")),
         // The export's own submission stopped the GPU; another attempt on the GPU stops it again.
-        "GPU_DEVICE_HUNG" => return class("DEVICE_HUNG", "gpu"),
+        "GPU_DEVICE_HUNG" => Some(class("DEVICE_HUNG", "gpu")),
         // With a hardware session open the stall waits on the GPU, otherwise most likely on I/O.
         // The stall's evidence says which, never its words.
         "DECODE_STALLED" | "ENCODE_STALLED" => {
-            return class(
+            Some(class(
                 "GPU_TIMEOUT",
                 if native == Some("HARDWARE_STALL") {
                     "gpu"
                 } else {
                     "unknown"
                 },
-            );
+            ))
         }
         "UNSUPPORTED_PROTOCOL"
         | "INVALID_INPUT"
@@ -300,13 +285,49 @@ pub fn classify_failure(
         | "PLUGIN_LOAD_FAILED"
         | "PLUGIN_TRAPPED"
         | "PLUGIN_RESOURCE_INVALID"
+        | "MEDIA_REFUSED"
+        | "MEDIA_TLS_FAILED"
+        | "MEDIA_RANGE_UNSUPPORTED"
+        | "MEDIA_REJECTED"
+        | "MEDIA_CHANGED"
         // Another export is writing the same output; retrying meets it again until that one ends.
-        | "OUTPUT_IN_USE" => return class("INVALID_INPUT", "unknown"),
+        | "OUTPUT_IN_USE" => Some(class("INVALID_INPUT", "unknown")),
         // A slow client, or a plugin's server, may answer in time on another attempt.
-        "EXTRACTOR_TIMEOUT" | "PLUGIN_FETCH_FAILED" => return class("UNKNOWN", "unknown"),
+        "EXTRACTOR_TIMEOUT" | "PLUGIN_FETCH_FAILED" | "MEDIA_UNREACHABLE" => {
+            Some(class("UNKNOWN", "unknown"))
+        }
+        "MEDIA_BUSY" => Some(class("RESOURCE_BUSY", "unknown")),
         // A defect (a caught panic or an internal error), which a fresh host may not meet again.
-        "INTERNAL" => return class("DEFECT", "unknown"),
-        _ => {}
+        "INTERNAL" => Some(class("DEFECT", "unknown")),
+        "GPU_INIT_FAILED" if native == Some(NO_HARDWARE_ADAPTER) => {
+            Some(class("INVALID_INPUT", "gpu"))
+        }
+        _ => None,
+    }
+}
+
+/// Classifies a failure from what is known for certain: the protocol code, typed device
+/// diagnostics, `native` evidence ([`evidence_tag`]), and the host's own markers.
+///
+/// A lost device the device or a GPU call reported wins. A readback's missing canary reads as a
+/// lost device only when nothing typed says otherwise, because the canary is also missing when the
+/// GPU rejected the submission and the device is fine.
+///
+/// Error text is read only for markers emitted verbatim (the readback's own message, C runtime
+/// `ENOMEM`/`ENOSPC` strings); a readback failure is never memory exhaustion unless the device
+/// reported one.
+pub fn classify_failure(
+    host_code: &str,
+    message: &str,
+    native: Option<&str>,
+    phase: ExportPhase,
+    gpu: &GpuDiagnosticSnapshot,
+) -> FailureClass {
+    let lower = message.to_ascii_lowercase();
+    let class = |code, resource| FailureClass { code, resource };
+    let evidence = gpu.failure_code();
+    if let Some(known) = host_code_class(host_code, native) {
+        return known;
     }
     let missing_canary = message.contains(alpha2_render::GPU_WORK_DROPPED_MESSAGE);
     if evidence == Some("DEVICE_LOST") || (host_code == "GPU_DEVICE_LOST" && !missing_canary) {

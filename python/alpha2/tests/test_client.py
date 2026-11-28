@@ -31,6 +31,7 @@ from alpha2 import (
 )
 from alpha2.client import _HOST_SHUTDOWN_TIMEOUT, resolve_host_binary
 from alpha2.errors import failure_class_of_code
+from alpha2.extract import ExtractProgress
 from alpha2.install import host_executable_name
 from alpha2.protocol import describe_exit, windows_policy_blocked
 
@@ -181,6 +182,56 @@ def test_the_plugins_option_becomes_the_serve_flags_and_a_malformed_one_starts_n
             HostClient(host_path=host_path, plugins=refused)  # type: ignore[arg-type]
         assert caught.value.code == "INVALID_INPUT"
         assert caught.value.message.startswith("plugins"), caught.value.message
+    assert lines_in(starts) == []
+
+
+def test_the_remote_media_option_becomes_the_serve_flags_and_a_malformed_one_starts_no_host(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    starts = tmp_path / "starts"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+    record({str(starts)!r}, json.dumps(sys.argv[1:]))
+    request, _ = read_request()
+    send(request, ok=True, result={{"status": "ready", "capabilities": {{}}, "effectCatalog": {{}}}})
+    """,
+    )
+
+    def flags(remote_media: Any) -> list[list[str]]:
+        starts.unlink(missing_ok=True)
+        with HostClient(host_path=host_path, remote_media=remote_media) as client:
+            client.capabilities()
+        return [json.loads(line) for line in lines_in(starts)]
+
+    assert flags(None) == [[]]
+    assert flags(
+        {
+            "origins": ["https://media.example", "https://cdn.example:8443"],
+            "private_addresses": "allow",
+        }
+    ) == [
+        [
+            "--media-origins",
+            "https://media.example,https://cdn.example:8443",
+            "--media-private-addresses",
+            "allow",
+        ]
+    ]
+    assert flags({"origins": "none"}) == [["--media-origins", "none"]]
+    starts.unlink(missing_ok=True)
+    for refused in [
+        {"origins": []},
+        {"origins": ["http://media.example"]},
+        {"origins": "https://media.example"},
+        {"private_addresses": "some"},
+        {"privateAddresses": "allow"},
+        "listed",
+    ]:
+        with pytest.raises(Alpha2HostError) as caught:
+            HostClient(host_path=host_path, remote_media=refused)  # type: ignore[arg-type]
+        assert caught.value.code == "INVALID_INPUT"
+        assert caught.value.message.startswith("remote_media"), caught.value.message
     assert lines_in(starts) == []
 
 
@@ -2529,8 +2580,9 @@ def test_an_exception_from_a_signal_handler_cancels_the_export_before_it_propaga
     assert lines_in(log)[-1] == f"published next.mp4 {pid}"
 
 
-def emit_host(log: Path) -> str:
-    """Asks an extract's extractor for its ``end`` step and answers as the host would."""
+def emit_host(log: Path, progress: dict[str, Any] | None = None) -> str:
+    """Asks an extract's extractor for its ``end`` step and answers as the host would; with
+    ``progress``, reports it first."""
     return f"""
     pid = str(os.getpid())
     record({str(log)!r}, "start " + pid)
@@ -2539,6 +2591,8 @@ def emit_host(log: Path) -> str:
         operation = request["operation"]
         if operation == "extract":
             pending["extract"] = request
+            if {progress!r} is not None:
+                write_message({{"type": "progress", "requestId": request["requestId"], **{progress!r}}})
             write_message({{"type": "extract.step", "requestId": request["requestId"], "seq": 0, "step": "end"}})
         elif operation == "extract.ack":
             extract = pending.pop("extract")
@@ -2624,6 +2678,18 @@ def versioned_host(pids: Path, host_version: str | None) -> str:
     begin()
     write_message({{"type": "state", "state": "ready", "reason": "started", "details": {details!r}}})
     serve(lambda request: send(request, ok=True, result={{"output": request["output"]}}))
+    """
+
+
+def schema_version_host(project_schema_version: int) -> str:
+    named = {"release": alpha2.__version__, "projectSchemaVersion": project_schema_version}
+    details = {"hostVersion": named["release"], "projectSchemaVersion": project_schema_version}
+    capabilities = {"schema": "alpha2-capabilities", "version": 3, **named}
+    result = {"status": "ready", "capabilities": capabilities, "effectCatalog": {}}
+    return f"""
+    begin()
+    write_message({{"type": "state", "state": "ready", "reason": "started", "details": {details!r}}})
+    serve(lambda request: send(request, ok=True, result={result!r}))
     """
 
 
@@ -2985,6 +3051,15 @@ def run_host_version(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHo
             assert_hosts_ended(pids)
 
 
+def run_schema_version(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    host = schema_version_host(scenario["given"]["projectSchemaVersion"])
+    host_path = fake_host(tmp_path, host, ready=False)
+    capabilities = HostClient(host_path=host_path).capabilities()["capabilities"]
+    assert capabilities["projectSchemaVersion"] == scenario["expect"]["projectSchemaVersion"]
+    if scenario["expect"]["releaseIsTheClients"]:
+        assert capabilities["release"] == alpha2.__version__
+
+
 def run_start_timeout(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
     given = scenario["given"]
     host = preamble_host(tmp_path / "pids", given["stdout"], given["stderr"])
@@ -3056,6 +3131,53 @@ def test_an_emit_goes_out_as_a_plain_number_or_fails_the_extract(
     assert client.export(**export_args("next.mp4"))["pid"] == starts_in(log)[0]
 
 
+END_PROGRESS = {
+    "phase": "extract",
+    "stage": "end",
+    "pass": 1,
+    "completed": 4,
+    "total": None,
+    "covered": 9,
+    "span": 9,
+}
+
+
+def test_an_extract_progress_reaches_on_progress_with_its_stage_and_covered_span(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, emit_host(log, END_PROGRESS)))
+    heard: list[ExtractProgress] = []
+    client.extract(
+        project_document(),
+        EXTRACT_REQUEST,
+        EmitsAtEnd("sample", "level", 0, [1]),
+        on_progress=heard.append,
+    )
+    assert heard == [
+        ExtractProgress(stage="end", pass_index=1, completed=4, total=None, covered=9, span=9)
+    ]
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [{"stage": None}, {"stage": "load"}, {"pass": None}, {"covered": 10}],
+    ids=["no stage", "unknown stage", "no pass", "covered past span"],
+)
+def test_an_extract_progress_without_its_stage_or_span_fails_the_request(
+    tmp_path: Path, fake_host: FakeHost, broken: dict[str, Any]
+) -> None:
+    progress = {
+        key: value
+        for key, value in (END_PROGRESS | broken).items()
+        if value is not None or key == "total"
+    }
+    client = HostClient(host_path=fake_host(tmp_path, emit_host(tmp_path / "log", progress)))
+    with pytest.raises(Alpha2HostError) as caught:
+        client.extract(project_document(), EXTRACT_REQUEST, EmitsAtEnd("sample", "level", 0, [1]))
+    assert caught.value.code == "INVALID_RESPONSE", caught.value
+
+
 def test_an_acknowledgement_that_cannot_be_encoded_fails_the_extract(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:
@@ -3084,6 +3206,7 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "cache-directory": run_cache_directory,
     "install-generation": run_install_generation,
     "host-version": run_host_version,
+    "schema-version": run_schema_version,
     "start-timeout": run_start_timeout,
 }
 

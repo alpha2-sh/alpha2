@@ -39,6 +39,7 @@ pub mod probe_cache;
 pub mod providers;
 pub mod rate_control;
 pub mod recovery;
+pub mod remote;
 pub mod request_watch;
 #[cfg(feature = "requests")]
 pub mod requests;

@@ -7,22 +7,24 @@ import { restorePlugin } from "alpha2/plugins";
 import { reviveRangeFile } from "./runtime/range-file.js";
 import { loadEngineWasm } from "./runtime/wasm.js";
 
-/** An error as it crosses to the page: its name, message, code and details. */
+/** An error as it crosses to the page: its name, message, code, details and decode facts. */
 function wireError(error) {
   return {
     name: error?.name ?? "Error",
     message: String(error?.message ?? error),
     ...(typeof error?.code === "string" ? { code: error.code } : {}),
     ...(error?.details === undefined ? {} : { details: error.details }),
+    ...(error?.facts === undefined ? {} : { facts: error.facts }),
   };
 }
 
-/** The error the worker reported, with the code and details callers read. */
+/** The error the worker reported, with the code, details and facts callers read. */
 function pageError(wired) {
   const error = new Error(wired.message);
   error.name = wired.name;
   if (wired.code !== undefined) error.code = wired.code;
   if (wired.details !== undefined) error.details = wired.details;
+  if (wired.facts !== undefined) error.facts = wired.facts;
   return error;
 }
 

@@ -1,5 +1,5 @@
-// Shared decoder failure policy: retry once in software, and report a track that never produced a
-// frame as undecodable rather than as a retryable failure.
+// Shared decoder failure policy: retry once with another decoder, and report a track that never
+// produced a frame as undecodable rather than as a retryable failure.
 
 import {
   DecodeUnavailableError,
@@ -18,20 +18,20 @@ export function isDecoderFailure(error: unknown): boolean {
 }
 
 /**
- * Runs `decodeOnce`; on a decoder failure, if `reopenSoftware` is given, reopens in software and
- * runs it once more. When that attempt fails in its decoder too, `restore` runs before the
- * rejection, so the next request starts from the original choice.
+ * Runs `decodeOnce`; on a decoder failure, if `reopen` is given, it opens another decoder and
+ * `decodeOnce` runs once more. When that attempt fails in its decoder too, `restore` runs before
+ * the rejection, so the next request starts from the original choice.
  */
-export async function withSoftwareFallback<T>(
+export async function withDecoderFallback<T>(
   decodeOnce: () => Promise<T>,
-  reopenSoftware: ((cause: DOMException) => Promise<void>) | undefined,
+  reopen: ((cause: DOMException) => Promise<void>) | undefined,
   restore?: () => Promise<void>,
 ): Promise<T> {
   try {
     return await decodeOnce();
   } catch (error) {
-    if (reopenSoftware === undefined || !isDecoderFailure(error)) throw error;
-    await reopenSoftware(error as DOMException);
+    if (reopen === undefined || !isDecoderFailure(error)) throw error;
+    await reopen(error as DOMException);
     try {
       return await decodeOnce();
     } catch (retry) {

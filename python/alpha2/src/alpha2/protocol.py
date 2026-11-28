@@ -112,6 +112,16 @@ def parse_host_message(header: str) -> dict[str, Any]:
             or not (_safe_count(total) or (extract and total is None))
             or (total is not None and value["completed"] > total)
             or ("phase" in value and value["phase"] not in ("frames", "finalizing", "extract"))
+            or (
+                extract
+                and not (
+                    value.get("stage") in ("begin", "pass", "end")
+                    and _safe_count(value.get("pass"))
+                    and _safe_count(value.get("covered"))
+                    and _safe_count(value.get("span"))
+                    and value["covered"] <= value["span"]
+                )
+            )
         ):
             raise ValueError("invalid progress message")
         return value

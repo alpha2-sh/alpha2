@@ -2,7 +2,6 @@
 //! with failures in the host protocol's tagged form.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use alpha2_host_core::audio_windows::{AudioWindowError, OpenAudio};
 pub use alpha2_host_core::audio_windows::{ByteBudget, audio_block_bytes};
@@ -26,7 +25,7 @@ const AUDIO_DECODE_BLOCK_FRAMES: usize = 4_096;
 /// Fails when a used source has no entry in `assets`.
 pub fn windowed_audio_sources(
     project: &Project,
-    assets: &HashMap<String, PathBuf>,
+    assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
     sample_rate: u32,
     byte_budget: impl Into<ByteBudget>,
     decoding: std::sync::Arc<crate::recovery::ExportDecoding>,
@@ -52,7 +51,7 @@ pub fn windowed_audio_sources(
 /// Opens a source's stream through the export's decode policy, in blocks of at most
 /// [`AUDIO_DECODE_BLOCK_FRAMES`].
 pub fn native_opener(
-    paths: HashMap<alpha2_media::SourceId, PathBuf>,
+    paths: HashMap<alpha2_media::SourceId, alpha2_host_core::remote::SourceLocation>,
     sample_rate: u32,
     decoding: std::sync::Arc<crate::recovery::ExportDecoding>,
 ) -> OpenAudio<NativeAudioDecoder> {

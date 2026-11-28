@@ -203,6 +203,14 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
+    AnimatorGrouping: {
+      oneOf: [
+        { const: "character", type: "string" },
+        { const: "word", type: "string" },
+        { const: "line", type: "string" },
+        { const: "all", type: "string" },
+      ],
+    },
     AudioEffect: {
       oneOf: [
         {
@@ -1085,6 +1093,13 @@ export const PROJECT_SHAPE: unknown = {
       required: ["min"],
       type: "object",
     },
+    FontStyle: {
+      oneOf: [
+        { const: "normal", type: "string" },
+        { const: "italic", type: "string" },
+        { const: "oblique", type: "string" },
+      ],
+    },
     FrameRate: {
       additionalProperties: false,
       properties: {
@@ -1193,6 +1208,12 @@ export const PROJECT_SHAPE: unknown = {
       oneOf: [
         { const: "tone_map", type: "string" },
         { const: "reject", type: "string" },
+      ],
+    },
+    HighlightGap: {
+      oneOf: [
+        { const: "hold", type: "string" },
+        { const: "hide", type: "string" },
       ],
     },
     Insets: {
@@ -1333,6 +1354,16 @@ export const PROJECT_SHAPE: unknown = {
       required: ["time", "value", "interpolation"],
       type: "object",
     },
+    Keyframe_TextContent: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/TextContent" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
     Keyframe_Vec2: {
       additionalProperties: false,
       properties: {
@@ -1349,16 +1380,6 @@ export const PROJECT_SHAPE: unknown = {
         interpolation: { $ref: "#/$defs/Interpolation" },
         time: { $ref: "#/$defs/MediaTime" },
         value: { format: "float", type: "number" },
-      },
-      required: ["time", "value", "interpolation"],
-      type: "object",
-    },
-    Keyframe_string: {
-      additionalProperties: false,
-      properties: {
-        interpolation: { $ref: "#/$defs/Interpolation" },
-        time: { $ref: "#/$defs/MediaTime" },
-        value: { type: "string" },
       },
       required: ["time", "value", "interpolation"],
       type: "object",
@@ -1545,13 +1566,13 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
-    Keyframed_string: {
+    Keyframed_TextContent: {
       oneOf: [
         {
           additionalProperties: false,
           properties: {
             mode: { const: "constant", type: "string" },
-            value: { type: "string" },
+            value: { $ref: "#/$defs/TextContent" },
           },
           required: ["mode", "value"],
           type: "object",
@@ -1560,7 +1581,7 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             keyframes: {
-              items: { $ref: "#/$defs/Keyframe_string" },
+              items: { $ref: "#/$defs/Keyframe_TextContent" },
               maxItems: 100000,
               type: "array",
             },
@@ -1749,14 +1770,20 @@ export const PROJECT_SHAPE: unknown = {
         shape: { anyOf: [{ $ref: "#/$defs/LayoutShape" }, { type: "null" }] },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
-          maxItems: 4,
+          maxItems: 8,
           type: ["array", "null"],
         },
         text: {
-          anyOf: [{ $ref: "#/$defs/Keyframed_string" }, { type: "null" }],
+          anyOf: [{ $ref: "#/$defs/Keyframed_TextContent" }, { type: "null" }],
         },
         text_align: {
           anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }],
+        },
+        text_animator_grouping: {
+          anyOf: [{ $ref: "#/$defs/AnimatorGrouping" }, { type: "null" }],
+        },
+        text_animator_pivot: {
+          anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }],
         },
         text_animators: {
           items: { $ref: "#/$defs/TextAnimator" },
@@ -1955,6 +1982,7 @@ export const PROJECT_SHAPE: unknown = {
         { const: "image", type: "string" },
         { const: "generated", type: "string" },
         { const: "composition", type: "string" },
+        { const: "adjustment", type: "string" },
       ],
     },
     MediaSource: {
@@ -2135,6 +2163,30 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
+            backdrop: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
+            input: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
+            mask: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
+            opacity: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 1 },
+            },
+            type: { const: "key_mix", type: "string" },
+          },
+          required: ["type"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
             input: {
               anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
               default: null,
@@ -2209,7 +2261,7 @@ export const PROJECT_SHAPE: unknown = {
             start: { $ref: "#/$defs/Vec2" },
             stops: {
               items: { $ref: "#/$defs/GradientStop" },
-              maxItems: 8,
+              maxItems: 16,
               type: "array",
             },
             type: { const: "linear_gradient", type: "string" },
@@ -2225,7 +2277,7 @@ export const PROJECT_SHAPE: unknown = {
             spread: { $ref: "#/$defs/Spread", default: "pad" },
             stops: {
               items: { $ref: "#/$defs/GradientStop" },
-              maxItems: 8,
+              maxItems: 16,
               type: "array",
             },
             type: { const: "radial_gradient", type: "string" },
@@ -2240,7 +2292,7 @@ export const PROJECT_SHAPE: unknown = {
             center: { $ref: "#/$defs/Vec2" },
             stops: {
               items: { $ref: "#/$defs/GradientStop" },
-              maxItems: 8,
+              maxItems: 16,
               type: "array",
             },
             type: { const: "conic_gradient", type: "string" },
@@ -2811,6 +2863,7 @@ export const PROJECT_SHAPE: unknown = {
     TextAnimatorProperties: {
       additionalProperties: false,
       properties: {
+        advance_follows_scale: { type: "boolean" },
         fill: { anyOf: [{ $ref: "#/$defs/Keyframed_Rgba" }, { type: "null" }] },
         offset: {
           anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }],
@@ -2818,6 +2871,7 @@ export const PROJECT_SHAPE: unknown = {
         opacity: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
+        reveal: { anyOf: [{ $ref: "#/$defs/TextReveal" }, { type: "null" }] },
         rotation_degrees: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
@@ -2834,11 +2888,33 @@ export const PROJECT_SHAPE: unknown = {
     TextBackground: {
       additionalProperties: false,
       properties: {
+        border: {
+          anyOf: [{ $ref: "#/$defs/TextBoxBorder" }, { type: "null" }],
+        },
         color: { $ref: "#/$defs/Rgba" },
-        padding: { default: 0, format: "float", type: "number" },
+        extent: { $ref: "#/$defs/TextBoxExtent" },
+        padding: { $ref: "#/$defs/TextInsets", default: 0 },
+        radius: { format: "float", type: "number" },
       },
       required: ["color"],
       type: "object",
+    },
+    TextBoxBorder: {
+      additionalProperties: false,
+      properties: {
+        color: { $ref: "#/$defs/Rgba" },
+        dash: { anyOf: [{ $ref: "#/$defs/TextDash" }, { type: "null" }] },
+        width: { format: "float", type: "number" },
+      },
+      required: ["width", "color"],
+      type: "object",
+    },
+    TextBoxExtent: {
+      oneOf: [
+        { const: "line", type: "string" },
+        { const: "revealed", type: "string" },
+        { const: "block", type: "string" },
+      ],
     },
     TextContent: {
       anyOf: [
@@ -2846,14 +2922,114 @@ export const PROJECT_SHAPE: unknown = {
         { items: { $ref: "#/$defs/TextRun" }, maxItems: 512, type: "array" },
       ],
     },
+    TextDash: {
+      additionalProperties: false,
+      properties: {
+        offset: { format: "float", type: "number" },
+        pattern: {
+          items: { format: "float", type: "number" },
+          maxItems: 16,
+          minItems: 1,
+          type: "array",
+        },
+      },
+      required: ["pattern"],
+      type: "object",
+    },
+    TextHighlight: {
+      additionalProperties: false,
+      properties: {
+        border: {
+          anyOf: [{ $ref: "#/$defs/TextBoxBorder" }, { type: "null" }],
+        },
+        color: { $ref: "#/$defs/Rgba" },
+        easing: { $ref: "#/$defs/Easing" },
+        gap: { $ref: "#/$defs/HighlightGap" },
+        padding: { $ref: "#/$defs/TextInsets", default: 0 },
+        radius: { format: "float", type: "number" },
+        transition: { $ref: "#/$defs/MediaTime" },
+      },
+      required: ["color"],
+      type: "object",
+    },
+    TextInsets: {
+      anyOf: [
+        { format: "float", type: "number" },
+        {
+          pattern:
+            "^ *-?(\\d+\\.?\\d*|\\.\\d+)( +-?(\\d+\\.?\\d*|\\.\\d+)){0,3} *$",
+          type: "string",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            bottom: { format: "float", type: "number" },
+            left: { format: "float", type: "number" },
+            right: { format: "float", type: "number" },
+            top: { format: "float", type: "number" },
+          },
+          type: "object",
+        },
+      ],
+    },
+    TextReveal: {
+      additionalProperties: false,
+      properties: {
+        angle_degrees: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        feather: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        progress: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+      },
+      type: "object",
+    },
     TextRun: {
       additionalProperties: false,
       properties: {
         class: { items: { type: "string" }, maxItems: 8, type: "array" },
+        style: { anyOf: [{ $ref: "#/$defs/TextRunStyle" }, { type: "null" }] },
         text: { type: "string" },
         time: { anyOf: [{ $ref: "#/$defs/RunTime" }, { type: "null" }] },
       },
       required: ["text"],
+      type: "object",
+    },
+    TextRunStyle: {
+      additionalProperties: false,
+      properties: {
+        background_color: {
+          anyOf: [{ $ref: "#/$defs/Rgba" }, { type: "null" }],
+        },
+        fill: { anyOf: [{ $ref: "#/$defs/Paint" }, { type: "null" }] },
+        font_family: { type: ["string", "null"] },
+        font_scale: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        font_style: {
+          anyOf: [{ $ref: "#/$defs/FontStyle" }, { type: "null" }],
+        },
+        font_weight: {
+          format: "uint16",
+          maximum: 65535,
+          minimum: 0,
+          type: ["integer", "null"],
+        },
+        letter_spacing: { format: "float", type: ["number", "null"] },
+        line_through: { type: ["boolean", "null"] },
+        strokes: {
+          items: { $ref: "#/$defs/TextStroke" },
+          maxItems: 8,
+          type: ["array", "null"],
+        },
+        underline: { type: ["boolean", "null"] },
+      },
       type: "object",
     },
     TextSelector: {
@@ -2931,6 +3107,8 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         align: { $ref: "#/$defs/TextAlign", default: "center" },
         anchor: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 1 } },
+        animator_grouping: { $ref: "#/$defs/AnimatorGrouping" },
+        animator_pivot: { $ref: "#/$defs/Vec2" },
         animators: {
           items: { $ref: "#/$defs/TextAnimator" },
           maxItems: 8,
@@ -2952,6 +3130,7 @@ export const PROJECT_SHAPE: unknown = {
         font_size_fit: {
           anyOf: [{ $ref: "#/$defs/FontSizeFit" }, { type: "null" }],
         },
+        font_style: { $ref: "#/$defs/FontStyle" },
         font_weight: {
           default: 400,
           format: "uint16",
@@ -2959,11 +3138,15 @@ export const PROJECT_SHAPE: unknown = {
           minimum: 0,
           type: "integer",
         },
+        highlight: {
+          anyOf: [{ $ref: "#/$defs/TextHighlight" }, { type: "null" }],
+        },
         letter_spacing: { default: 0, format: "float", type: "number" },
         line_clamp: {
           anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
         },
         line_height: { default: 1.2, format: "float", type: "number" },
+        line_through: { type: "boolean" },
         max_height: { format: "float", type: ["number", "null"] },
         max_width: { default: 0.9, format: "float", type: "number" },
         position: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 0.92 } },
@@ -2974,9 +3157,10 @@ export const PROJECT_SHAPE: unknown = {
         },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
-          maxItems: 4,
+          maxItems: 8,
           type: "array",
         },
+        underline: { type: "boolean" },
       },
       type: "object",
     },
@@ -2985,6 +3169,10 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         align: { anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }] },
         anchor: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
+        animator_grouping: {
+          anyOf: [{ $ref: "#/$defs/AnimatorGrouping" }, { type: "null" }],
+        },
+        animator_pivot: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
         animators: {
           items: { $ref: "#/$defs/TextAnimator" },
           maxItems: 8,
@@ -2999,17 +3187,24 @@ export const PROJECT_SHAPE: unknown = {
         font_size_fit: {
           anyOf: [{ $ref: "#/$defs/FontSizeFit" }, { type: "null" }],
         },
+        font_style: {
+          anyOf: [{ $ref: "#/$defs/FontStyle" }, { type: "null" }],
+        },
         font_weight: {
           format: "uint16",
           maximum: 65535,
           minimum: 0,
           type: ["integer", "null"],
         },
+        highlight: {
+          anyOf: [{ $ref: "#/$defs/TextHighlight" }, { type: "null" }],
+        },
         letter_spacing: { format: "float", type: ["number", "null"] },
         line_clamp: {
           anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
         },
         line_height: { format: "float", type: ["number", "null"] },
+        line_through: { type: ["boolean", "null"] },
         max_height: { format: "float", type: ["number", "null"] },
         max_width: { format: "float", type: ["number", "null"] },
         position: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
@@ -3020,9 +3215,10 @@ export const PROJECT_SHAPE: unknown = {
         },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
-          maxItems: 4,
+          maxItems: 8,
           type: ["array", "null"],
         },
+        underline: { type: ["boolean", "null"] },
       },
       type: "object",
     },

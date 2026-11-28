@@ -11,7 +11,10 @@ use crate::{EffectDef, EffectKind, ParamSpec, ParamType, ParamUnit, ParamValue};
 pub const GENERATOR_EFFECT_ID: &str = "alpha2.internal.generator";
 
 /// Most stops per paint.
-pub const MAX_GENERATOR_STOPS: usize = 8;
+pub const MAX_GENERATOR_STOPS: usize = 16;
+
+/// The `vec4` parameters holding a paint's stop offsets, four each.
+pub const OFFSET_VECTORS: usize = MAX_GENERATOR_STOPS / 4;
 
 /// Enum values of a paint's `kind` parameter.
 pub const PAINT_KINDS: [&str; 5] = ["none", "solid", "linear", "radial", "conic"];
@@ -32,11 +35,9 @@ pub struct PaintParams {
     pub spread: &'static str,
     /// `{paint}_count`.
     pub count: &'static str,
-    /// `{paint}_offsets0`.
-    pub offsets0: &'static str,
-    /// `{paint}_offsets1`.
-    pub offsets1: &'static str,
-    /// `{paint}_c0` to `{paint}_c7`, by stop.
+    /// `{paint}_offsets0` to `{paint}_offsets3`, four stops each.
+    pub offsets: [&'static str; OFFSET_VECTORS],
+    /// `{paint}_c0` to `{paint}_c15`, by stop.
     pub colors: [&'static str; MAX_GENERATOR_STOPS],
 }
 
@@ -48,8 +49,12 @@ macro_rules! paint_params {
             b: concat!($paint, "_b"),
             spread: concat!($paint, "_spread"),
             count: concat!($paint, "_count"),
-            offsets0: concat!($paint, "_offsets0"),
-            offsets1: concat!($paint, "_offsets1"),
+            offsets: [
+                concat!($paint, "_offsets0"),
+                concat!($paint, "_offsets1"),
+                concat!($paint, "_offsets2"),
+                concat!($paint, "_offsets3"),
+            ],
             colors: [
                 concat!($paint, "_c0"),
                 concat!($paint, "_c1"),
@@ -59,6 +64,14 @@ macro_rules! paint_params {
                 concat!($paint, "_c5"),
                 concat!($paint, "_c6"),
                 concat!($paint, "_c7"),
+                concat!($paint, "_c8"),
+                concat!($paint, "_c9"),
+                concat!($paint, "_c10"),
+                concat!($paint, "_c11"),
+                concat!($paint, "_c12"),
+                concat!($paint, "_c13"),
+                concat!($paint, "_c14"),
+                concat!($paint, "_c15"),
             ],
         }
     };
@@ -92,8 +105,8 @@ fn enum_param(name: String, values: &[&str]) -> ParamSpec {
 ///
 /// `fill_*` holds `kind`; points `a` and `b` (linear start and end; radial centre and radius
 /// in `b.x`; conic centre and start angle in `b.x`, radians clockwise from up); `spread`;
-/// stop `count`; offsets in `offsets0` (first four) and `offsets1`; and straight sRGB colors
-/// `c0` to `c7`. Stops interpolate premultiplied in linear light; output is premultiplied sRGB.
+/// stop `count`; offsets in `offsets0` to `offsets3`, four each; and straight sRGB colors
+/// `c0` to `c15`. Stops interpolate premultiplied in linear light; output is premultiplied sRGB.
 #[must_use]
 pub fn generator_definition() -> EffectDef {
     let names = FILL_PAINT_PARAMS;
@@ -111,17 +124,12 @@ pub fn generator_definition() -> EffectDef {
         ),
         enum_param(names.spread.into(), &PAINT_SPREADS),
         param(names.count.into(), ParamType::Float, ParamValue::Float(0.0)),
-        param(
-            names.offsets0.into(),
-            ParamType::Vec4,
-            ParamValue::Vec4([0.0; 4]),
-        ),
-        param(
-            names.offsets1.into(),
-            ParamType::Vec4,
-            ParamValue::Vec4([0.0; 4]),
-        ),
     ];
+    params.extend(
+        names
+            .offsets
+            .map(|name| param(name.into(), ParamType::Vec4, ParamValue::Vec4([0.0; 4]))),
+    );
     params.extend(names.colors.map(|name| ParamSpec {
         unit: ParamUnit::Color,
         ..param(name.into(), ParamType::Color, ParamValue::Color([0.0; 4]))
@@ -150,22 +158,31 @@ fn paint_constructor(paint: &str) -> String {
         write!(colors, "params.{paint}_c{stop}{separator}")
             .expect("writing to a String cannot fail");
     }
+    let offsets = offset_list(|vector| format!("params.{paint}_offsets{vector}"));
     format!(
         "fn builtin_{paint}_paint() -> AlphaPaint {{
-    let o0 = params.{paint}_offsets0;
-    let o1 = params.{paint}_offsets1;
     return AlphaPaint(
         params.{paint}_kind,
         params.{paint}_a,
         params.{paint}_b,
         params.{paint}_spread,
         u32(clamp(params.{paint}_count, 0.0, {MAX_GENERATOR_STOPS}.0)),
-        array<f32, {MAX_GENERATOR_STOPS}>(o0.x, o0.y, o0.z, o0.w, o1.x, o1.y, o1.z, o1.w),
+        array<f32, {MAX_GENERATOR_STOPS}>({offsets}),
         array<vec4f, {MAX_GENERATOR_STOPS}>({colors}),
     );
 }}
 "
     )
+}
+
+pub(crate) fn offset_list(vector: impl Fn(usize) -> String) -> String {
+    (0..OFFSET_VECTORS)
+        .flat_map(|index| {
+            let name = vector(index);
+            ["x", "y", "z", "w"].map(|lane| format!("{name}.{lane}"))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn generator_body() -> String {
@@ -200,8 +217,10 @@ mod tests {
             ("b", names.b),
             ("spread", names.spread),
             ("count", names.count),
-            ("offsets0", names.offsets0),
-            ("offsets1", names.offsets1),
+            ("offsets0", names.offsets[0]),
+            ("offsets1", names.offsets[1]),
+            ("offsets2", names.offsets[2]),
+            ("offsets3", names.offsets[3]),
         ];
         let stops = names
             .colors

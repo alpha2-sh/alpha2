@@ -79,6 +79,7 @@ macro_rules! animated_value {
 animated_value!(true: f32, Vec2, crate::EffectValue);
 animated_value!(
     false: String,
+    crate::TextContent,
     crate::Paint,
     crate::Rgba,
     crate::Path,
@@ -471,6 +472,7 @@ placed!(Vec2: Vec2);
 placed!(Effect: crate::EffectValue);
 placed!(
     Other: String,
+    crate::TextContent,
     crate::Paint,
     crate::Rgba,
     crate::Path,

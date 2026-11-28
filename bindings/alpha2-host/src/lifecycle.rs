@@ -432,6 +432,7 @@ impl Lifecycle {
             "reason": reason,
             "details": {
                 "hostVersion": env!("CARGO_PKG_VERSION"),
+                "projectSchemaVersion": alpha2_model::CURRENT_SCHEMA_VERSION,
                 "activity": if life.running == 0 { "idle" } else { "busy" },
                 "runningRequests": life.running,
                 "requestsServed": life.requests_served,
@@ -797,6 +798,26 @@ mod tests {
             details["memory"]["baselineBytes"].as_u64().is_some(),
             "{details}"
         );
+    }
+
+    #[test]
+    fn the_state_and_the_status_name_the_project_schema_version() {
+        let lifecycle = Lifecycle::new(SoftLimits::default());
+        for details in [
+            &lifecycle.state_message()["details"],
+            &lifecycle.status()["details"],
+        ] {
+            assert_eq!(
+                details["projectSchemaVersion"],
+                alpha2_model::CURRENT_SCHEMA_VERSION,
+                "{details}"
+            );
+            assert_eq!(
+                details["hostVersion"],
+                env!("CARGO_PKG_VERSION"),
+                "{details}"
+            );
+        }
     }
 
     #[test]

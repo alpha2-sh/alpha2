@@ -79,6 +79,13 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "PLUGIN_TRAPPED": _PERMANENT,
     "PLUGIN_LIMIT": ("RESOURCE_LIMIT", "unknown"),
     "PLUGIN_RESOURCE_INVALID": _PERMANENT,
+    "MEDIA_REFUSED": _PERMANENT,
+    "MEDIA_TLS_FAILED": _PERMANENT,
+    "MEDIA_UNREACHABLE": _UNKNOWN,
+    "MEDIA_BUSY": ("RESOURCE_BUSY", "unknown"),
+    "MEDIA_RANGE_UNSUPPORTED": _PERMANENT,
+    "MEDIA_REJECTED": _PERMANENT,
+    "MEDIA_CHANGED": _PERMANENT,
     "CANCELLED": ("CANCELLED", "unknown"),
     "RESOURCE_LIMIT": ("RESOURCE_LIMIT", "unknown"),
     "GPU_INIT_FAILED": _UNKNOWN,
@@ -153,9 +160,9 @@ class Alpha2HostError(Exception):
     classifies it for a retry policy. ``stderr`` is the tail of the host's standard error;
     ``exit_code`` and ``signal`` say how a host that ended before answering ended. For
     ``OUTPUT_PUBLISH_FAILED``, ``kept_path`` is where the finished render was kept, for the caller
-    to move or remove. For ``RESOURCE_BUSY`` (``ENCODER_BUSY``), :attr:`retry_after_ms` is how long
-    to wait before retrying. ``details`` is what the host sent besides the code, such as
-    ``{"slot", "reason"}`` for ``PLUGIN_RESOURCE_INVALID``.
+    to move or remove. For ``RESOURCE_BUSY`` (``ENCODER_BUSY``, ``MEDIA_BUSY``),
+    :attr:`retry_after_ms` is how long to wait before retrying. ``details`` is what the host sent
+    besides the code, such as ``{"slot", "reason"}`` for ``PLUGIN_RESOURCE_INVALID``.
     """
 
     code: str

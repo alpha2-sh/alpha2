@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use alpha2_engine::extract::{
     AudioInput, Delivery, Direction, Emit, ExtractRequest, ExtractSession, FramePlace, Need,
-    PassProgress, SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
+    SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
 };
 use alpha2_host_core::host_frames::Attachment;
 use alpha2_media::CancelToken;
@@ -225,16 +225,13 @@ fn emit_into(session: &mut ExtractSession, emits: &[Emit]) -> Result<(), HostErr
     })
 }
 
-fn progress_message(request_id: &str, pass: usize, progress: PassProgress) -> Value {
-    json!({
-        "protocolVersion": PROTOCOL_VERSION,
-        "type": "progress",
-        "requestId": request_id,
-        "phase": "extract",
-        "pass": pass,
-        "completed": progress.completed,
-        "total": progress.total,
-    })
+fn progress_message(request_id: &str, session: &ExtractSession) -> Value {
+    let mut message = alpha2_engine::extract::progress_json(session);
+    message["protocolVersion"] = json!(PROTOCOL_VERSION);
+    message["type"] = json!("progress");
+    message["requestId"] = json!(request_id);
+    message["phase"] = json!("extract");
+    message
 }
 
 fn video_step(frame: &VideoInput) -> (Value, Vec<Attachment>) {
@@ -282,13 +279,13 @@ fn run_client(
         cancel,
         waited: Duration::ZERO,
     };
+    out.send(&progress_message(request_id, &session))?;
     let begin = client.step(
         json!({ "step": "begin", "context": alpha2_engine::extract::client_context_json(&session.context()) }),
         &[],
         false,
     )?;
     emit_into(&mut session, &begin)?;
-    let mut pass = 0;
     loop {
         if cancel.is_cancelled() {
             return Err(HostError::new(
@@ -317,17 +314,14 @@ fn run_client(
                         .map_err(|error| HostError::new("INTERNAL", error.to_string()))?;
                 }
             },
-            Step::PassBoundary {
-                pass: index,
-                direction,
-            } => {
-                pass = index;
+            Step::PassBoundary { pass, direction } => {
+                out.send(&progress_message(request_id, &session))?;
                 let direction = match direction {
                     Direction::Forward => "forward",
                     Direction::Backward => "backward",
                 };
                 let emits = client.step(
-                    json!({ "step": "pass", "pass": index, "direction": direction }),
+                    json!({ "step": "pass", "pass": pass, "direction": direction }),
                     &[],
                     true,
                 )?;
@@ -340,13 +334,12 @@ fn run_client(
                 };
                 let emits = client.step(step, &attachments, true)?;
                 emit_into(&mut session, &emits)?;
-                if let Some(progress) = session.progress().get(pass) {
-                    out.send(&progress_message(request_id, pass, *progress))?;
-                }
+                out.send(&progress_message(request_id, &session))?;
             }
             Step::Done => break,
         }
     }
+    out.send(&progress_message(request_id, &session))?;
     let end = client.step(json!({ "step": "end" }), &[], false)?;
     emit_into(&mut session, &end)?;
     let sets = session
@@ -369,7 +362,7 @@ struct HostSupplier<'a> {
 struct TimelineFrames<'a> {
     host: &'a mut Host,
     project: String,
-    assets: HashMap<String, PathBuf>,
+    assets: HashMap<String, alpha2_host_core::remote::SourceLocation>,
     effect_assets: HashMap<String, PathBuf>,
     effects: Vec<crate::protocol::EffectRequest>,
     canvas: (u32, u32),
@@ -503,6 +496,7 @@ pub fn handle(
         request,
         descriptor,
         plugin,
+        remote_content_hash,
         ..
     } = request;
     // Taken first, so a cancel also stops the plugin's fetch and calls.
@@ -537,6 +531,7 @@ pub fn handle(
         &font_files,
         media,
         request.input.source_id.as_ref(),
+        remote_content_hash,
     )?;
     let renderer = alpha2_render::CpuRenderer::new(1);
     let source = request.input.source_id.clone();
@@ -761,10 +756,10 @@ fn run_plugin(
         failure
     };
     let internal = |error: SessionError| HostError::new("INTERNAL", error.to_string());
+    out.send(&progress_message(request_id, &session))?;
     let called = call();
     extractor.begin(&session.context()).map_err(failed)?;
     drop(called);
-    let mut pass = 0;
     loop {
         if cancel.is_cancelled() {
             return Err(HostError::new(
@@ -789,17 +784,11 @@ fn run_plugin(
                     session.supply_audio(block).map_err(internal)?;
                 }
             },
-            Step::PassBoundary {
-                pass: index,
-                direction,
-            } => {
-                pass = index;
+            Step::PassBoundary { pass, direction } => {
+                out.send(&progress_message(request_id, &session))?;
                 let called = call();
                 extractor
-                    .pass(&PassInfo {
-                        pass: index,
-                        direction,
-                    })
+                    .pass(&PassInfo { pass, direction })
                     .map_err(failed)?;
                 drop(called);
             }
@@ -813,13 +802,12 @@ fn run_plugin(
                 .map_err(failed)?;
                 drop(called);
                 emit_into(&mut session, emitter.emits())?;
-                if let Some(progress) = session.progress().get(pass) {
-                    out.send(&progress_message(request_id, pass, *progress))?;
-                }
+                out.send(&progress_message(request_id, &session))?;
             }
             Step::Done => break,
         }
     }
+    out.send(&progress_message(request_id, &session))?;
     let mut emitter = Emitter::default();
     let called = call();
     extractor.end(&mut emitter).map_err(failed)?;

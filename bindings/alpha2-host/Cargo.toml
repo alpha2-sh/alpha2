@@ -60,7 +60,8 @@ pollster.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "0.11"
-ureq = { version = "3.5.1", default-features = false, features = ["platform-verifier", "rustls"] }
+ureq = { version = "=3.5.1", default-features = false, features = ["platform-verifier", "rustls"] }
+rustls = { version = "0.23.46", default-features = false }
 flate2 = "1"
 unicode-normalization = "0.1.25"
 wgpu.workspace = true
@@ -72,6 +73,7 @@ alpha2-test-support.workspace = true
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 alpha2-provider-contract = { workspace = true, default-features = false }
 alpha2-text.workspace = true
+rcgen = "0.14.9"
 
 [build-dependencies]
 alpha2-build-support.workspace = true

@@ -1,5 +1,6 @@
 //! `alpha2.transcribe`: the words spoken in audio and their times, from a whisper.cpp model the
-//! caller supplies in the `model` slot, run on the CPU; native only.
+//! caller supplies in the `model` slot, run on the GPU on Apple silicon and on the CPU elsewhere;
+//! native only.
 //!
 //! whisper.cpp transcribes 30 s windows of the 16 kHz mono audio, overlapping by 5 s, each in the
 //! `audio` call that completes it (the last in `end`). A word runs from the previous word's last
@@ -7,20 +8,25 @@
 //! either end. Windows are joined at a word both heard near the middle of their overlap, else at
 //! that middle. A forward pass emits words as joins settle them; other passes, in `end`.
 //!
-//! Params: `language`, `auto` (the default; the first language detected holds) or ISO 639-1.
+//! Params: `language`, `auto` (the default; the first language detected holds) or ISO 639-1;
+//! `device`, `auto` (the default; the GPU where the build has one) or `cpu`.
 
 mod model;
 mod seam;
 
 use std::collections::BTreeMap;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use alpha2_plugin_sdk::{
     Audio, Context, Direction, Emitter, Error, Extractor, Host, MAX_DATA_LABEL_BYTES,
     MAX_DATA_WORDS, SlotShape, TICKS_PER_SECOND,
 };
 use seam::Word;
-use whisper_rs::whisper_rs_sys::ggml_log_level;
+use whisper_rs::whisper_rs_sys::{
+    ggml_log_level, ggml_log_level_GGML_LOG_LEVEL_CONT, ggml_log_level_GGML_LOG_LEVEL_ERROR,
+};
 use whisper_rs::{
     DtwParameters, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
     WhisperState,
@@ -42,6 +48,8 @@ const MAX_THREADS: usize = 8;
 const MODEL: &str = "model";
 const OUTPUT: &str = "words";
 const AUTO: &str = "auto";
+const DEVICE_CPU: &str = "cpu";
+const GPU_BUILT: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
 
 /// The ISO 639-1 codes whisper transcribes, sorted.
 const LANGUAGES: [&str; 98] = [
@@ -59,12 +67,31 @@ fn whisper_language(code: &str) -> &str {
     if code == "jv" { "jw" } else { code }
 }
 
-fn language(context: &Context) -> Result<Option<&'static str>, Error> {
-    if let Some(key) = context.params.keys().find(|key| *key != "language") {
-        return Err(Error(format!(
+fn known_params(context: &Context) -> Result<(), Error> {
+    match context
+        .params
+        .keys()
+        .find(|key| !["language", "device"].contains(&key.as_str()))
+    {
+        Some(key) => Err(Error(format!(
             "params.{key} is not a param of alpha2.transcribe"
-        )));
+        ))),
+        None => Ok(()),
     }
+}
+
+fn gpu_allowed(context: &Context) -> Result<bool, Error> {
+    match context.params.get("device") {
+        None => Ok(true),
+        Some(value) if value.as_str() == Some(AUTO) => Ok(true),
+        Some(value) if value.as_str() == Some(DEVICE_CPU) => Ok(false),
+        Some(value) => Err(Error(format!(
+            "params.device must be auto or cpu, not {value}"
+        ))),
+    }
+}
+
+fn language(context: &Context) -> Result<Option<&'static str>, Error> {
     match context.params.get("language") {
         None => Ok(None),
         Some(value) if value.as_str() == Some(AUTO) => Ok(None),
@@ -185,9 +212,34 @@ pub struct Transcribe {
     emitted_end: i64,
 }
 
-unsafe extern "C" fn quiet(_: ggml_log_level, _: *const c_char, _: *mut c_void) {}
+// ggml logs the rest of a line at GGML_LOG_LEVEL_CONT, not at the line's own level.
+static ERROR_LINE: AtomicBool = AtomicBool::new(false);
 
-fn load(context: &Context, host: &Host, language: Option<&str>) -> Result<WhisperContext, Error> {
+fn error_line(level: ggml_log_level) -> bool {
+    if level != ggml_log_level_GGML_LOG_LEVEL_CONT {
+        ERROR_LINE.store(
+            level == ggml_log_level_GGML_LOG_LEVEL_ERROR,
+            Ordering::Relaxed,
+        );
+    }
+    ERROR_LINE.load(Ordering::Relaxed)
+}
+
+unsafe extern "C" fn errors_only(level: ggml_log_level, text: *const c_char, _: *mut c_void) {
+    if !error_line(level) || text.is_null() {
+        return;
+    }
+    // SAFETY: whisper.cpp passes a NUL-terminated string that outlives the call.
+    let text = unsafe { CStr::from_ptr(text) };
+    let _ = std::io::stderr().write_all(text.to_bytes());
+}
+
+fn load(
+    context: &Context,
+    host: &Host,
+    language: Option<&str>,
+    gpu: bool,
+) -> Result<WhisperContext, Error> {
     let slot = context
         .supplied
         .get(MODEL)
@@ -208,11 +260,12 @@ fn load(context: &Context, host: &Host, language: Option<&str>) -> Result<Whispe
             "params.language is {code}, but the model in the slot transcribes English only"
         )));
     }
-    // SAFETY: `quiet` neither unwinds nor keeps what it is given.
-    unsafe { whisper_rs::set_log_callback(Some(quiet), std::ptr::null_mut()) };
+    // SAFETY: `errors_only` neither unwinds nor keeps what it is given.
+    unsafe { whisper_rs::set_log_callback(Some(errors_only), std::ptr::null_mut()) };
     let mut parameters = WhisperContextParameters::default();
     parameters
-        .use_gpu(false)
+        .use_gpu(GPU_BUILT && gpu)
+        // whisper.cpp turns DTW token timestamps off under flash attention.
         .flash_attn(false)
         .dtw_parameters(DtwParameters {
             mode: header.alignment(),
@@ -376,8 +429,9 @@ impl Extractor for Transcribe {
 
     fn begin(context: &Context, host: &Host) -> Result<Self, Error> {
         check_cpu(&ggml_instructions())?;
+        known_params(context)?;
         let language = language(context)?;
-        let whisper = load(context, host, language)?;
+        let whisper = load(context, host, language, gpu_allowed(context)?)?;
         let detect = language.is_none() && whisper.is_multilingual();
         let language = language.or_else(|| (!detect).then_some("en"));
         let state = whisper
@@ -471,6 +525,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_error_lines_of_the_whisper_log_are_kept() {
+        use whisper_rs::whisper_rs_sys::{
+            ggml_log_level_GGML_LOG_LEVEL_INFO, ggml_log_level_GGML_LOG_LEVEL_WARN,
+        };
+        assert!(!error_line(ggml_log_level_GGML_LOG_LEVEL_INFO));
+        assert!(!error_line(ggml_log_level_GGML_LOG_LEVEL_CONT));
+        assert!(error_line(ggml_log_level_GGML_LOG_LEVEL_ERROR));
+        assert!(error_line(ggml_log_level_GGML_LOG_LEVEL_CONT));
+        assert!(!error_line(ggml_log_level_GGML_LOG_LEVEL_WARN));
+        assert!(!error_line(ggml_log_level_GGML_LOG_LEVEL_CONT));
+    }
+
+    #[test]
     fn the_descriptor_offers_auto_and_every_language_the_plugin_takes() {
         let descriptor: serde_json::Value =
             serde_json::from_str(<Transcribe as Extractor>::DESCRIPTOR).expect("descriptor");
@@ -484,6 +551,9 @@ mod tests {
             .collect();
         assert_eq!(offered[0], AUTO);
         assert_eq!(offered[1..], LANGUAGES);
+        let device = &descriptor["params_schema"]["properties"]["device"];
+        assert_eq!(device["enum"], serde_json::json!([AUTO, DEVICE_CPU]));
+        assert_eq!(device["default"], AUTO);
     }
 
     #[test]

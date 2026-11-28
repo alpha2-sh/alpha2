@@ -12,6 +12,7 @@ from .types import (
     AlignItems,
     Animated,
     AnimatedPoint,
+    AnimatorGrouping,
     AudioEffect,
     AudioProperties,
     AudioStreamShape,
@@ -53,11 +54,13 @@ from .types import (
     FlexDirection,
     FlexWrap,
     FontSizeFit,
+    FontStyle,
     FrameRate,
     Generator,
     GradientStop,
     GridAutoFlow,
     GridPlacement,
+    HighlightGap,
     Insets,
     Interpolation,
     JustifyContent,
@@ -112,8 +115,15 @@ from .types import (
     TextAnimator,
     TextAnimatorProperties,
     TextBackground,
+    TextBoxBorder,
+    TextBoxExtent,
     TextContent,
+    TextDash,
+    TextHighlight,
+    TextInsets,
+    TextReveal,
     TextRun,
+    TextRunStyle,
     TextSelector,
     TextShadow,
     TextStroke,
@@ -1805,6 +1815,24 @@ class NodeGroup(TypedDict):
     type: Literal["group"]
 
 
+class NodeAdjustment(TypedDict):
+    """No picture of its own: its effects apply to everything under it."""
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    blend: NotRequired[ClipBlendMode | None]
+    """How the result meets the picture under it. Default `normal`."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: what its parent gives it."""
+    effects: NotRequired[list[EffectUse]]
+    """Effects on the picture under it, in order. None changes nothing."""
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    opacity: NotRequired[Anim | None]
+    """How much of the result replaces the picture under it, 0..=1. Default 1."""
+    type: Literal["adjustment"]
+
+
 class NodeShape(TypedDict):
     """Shapes drawn with one fill and one stroke: bars, frames, dividers, badges, icons."""
 
@@ -2261,8 +2289,8 @@ NodeAlpha2ComparisonGrid = TypedDict(
 NodeAlpha2ComparisonGrid.__doc__ = "Clips side by side in a grid, each with an optional label; one of them may be heard."
 
 
-NodeVariant36 = TypedDict(
-    "NodeVariant36",
+NodeVariant37 = TypedDict(
+    "NodeVariant37",
     {
         "at": "NotRequired[float]",
         "duration": "NotRequired[float]",
@@ -2275,10 +2303,10 @@ NodeVariant36 = TypedDict(
         "with": "NotRequired[dict[str, Never]]",
     },
 )
-NodeVariant36.__doc__ = "A node template by its id, bound to `with`."
+NodeVariant37.__doc__ = "A node template by its id, bound to `with`."
 
 
-Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape | NodeMatte | NodeMask | dict[str, Any] | NodeAlpha2CircleReveal | NodeAlpha2WipeReveal | NodeTitle | NodeAlpha2Title | NodeTitleCard | NodeAlpha2TitleCard | NodeLowerThird | NodeAlpha2LowerThird | NodeEndCard | NodeAlpha2EndCard | NodeLogo | NodeAlpha2Logo | NodeReframe | NodeAlpha2Reframe | NodeComparisonGrid | NodeAlpha2ComparisonGrid | NodeVariant36"
+Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeMusicBed | NodeCounter | NodeGroup | NodeAdjustment | NodeShape | NodeMatte | NodeMask | dict[str, Any] | NodeAlpha2CircleReveal | NodeAlpha2WipeReveal | NodeTitle | NodeAlpha2Title | NodeTitleCard | NodeAlpha2TitleCard | NodeLowerThird | NodeAlpha2LowerThird | NodeEndCard | NodeAlpha2EndCard | NodeLogo | NodeAlpha2Logo | NodeReframe | NodeAlpha2Reframe | NodeComparisonGrid | NodeAlpha2ComparisonGrid | NodeVariant37"
 """One part of a video."""
 
 

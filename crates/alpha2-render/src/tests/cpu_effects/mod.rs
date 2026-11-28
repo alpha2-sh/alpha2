@@ -13,9 +13,10 @@ use super::cpu_parity::{Parity, TestPicture, Tolerance, test_card};
 use crate::builtins::{GAUSSIAN_BLUR_PASS_ID, GLOW_THRESHOLD_ID};
 use crate::{
     BlendMode, CHROMA_KEY_ID, EffectId, EffectInputs, EffectParams, EffectResources, EffectRuntime,
-    GAUSSIAN_BLUR_ID, GLOW_ID, GraphError, GraphLayer, LUT_3D_ID, LayerTransform, Lut3dData,
-    MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES, ParamValue, RenderGraph, RenderNodeId, RenderSize,
-    TRACK_MATTE_EFFECT_ID,
+    GAUSSIAN_BLUR_ID, GLOW_ID, GraphError, GraphLayer, KEY_MIX_BACKDROP, KEY_MIX_EFFECT_ID,
+    KEY_MIX_MASK, KEY_MIX_OPACITY, KEY_MIX_UNMASKED_EFFECT_ID, LUT_3D_ID, LayerTransform,
+    Lut3dData, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES, ParamValue, RenderGraph, RenderNodeId,
+    RenderSize, TRACK_MATTE_EFFECT_ID,
 };
 
 fn size() -> RenderSize {
@@ -571,6 +572,49 @@ fn mask_combines_match() {
                     EffectRuntime::default(),
                 )
             });
+        }
+    }
+}
+
+#[test]
+fn key_mix_matches() {
+    let parity = Parity::new();
+    let card = parity.picture(size(), &test_card(size(), false));
+    let backdrop = parity.picture(size(), &coverage_picture(size(), 3));
+    let mask = parity.picture(size(), &coverage_picture(size(), 0));
+    for masked in [false, true] {
+        for opacity in [1.0, 0.4, 0.0] {
+            for small in [false, true] {
+                let name = format!(
+                    "key-mix-{}-{opacity}{}",
+                    if masked { "masked" } else { "unmasked" },
+                    if small { "-small" } else { "" }
+                );
+                parity.check(&name, size(), Tolerance::Close, |graph, side| {
+                    let mut picture = graph.add_source(card.view(side));
+                    let mut behind = graph.add_source(backdrop.view(side));
+                    if small {
+                        picture = small_layer(graph, picture)?;
+                        behind = small_layer(graph, behind)?;
+                    }
+                    let mut inputs = EffectInputs::new();
+                    inputs.insert(KEY_MIX_BACKDROP, behind);
+                    let id = if masked {
+                        inputs.insert(KEY_MIX_MASK, graph.add_source(mask.view(side)));
+                        KEY_MIX_EFFECT_ID
+                    } else {
+                        KEY_MIX_UNMASKED_EFFECT_ID
+                    };
+                    graph.add_effect_with_inputs(
+                        EffectId::from_static(id, 1),
+                        picture,
+                        inputs,
+                        EffectParams::new().with(KEY_MIX_OPACITY, float(opacity)),
+                        EffectResources::new(),
+                        EffectRuntime::default(),
+                    )
+                });
+            }
         }
     }
 }

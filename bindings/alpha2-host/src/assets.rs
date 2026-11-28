@@ -23,7 +23,12 @@ use alpha2_model::{
 use alpha2_time::MediaTime;
 use sha2::{Digest, Sha256};
 
+use alpha2_host_core::remote::SourceLocation;
+use alpha2_host_core::requests::MediaLocation;
 pub use alpha2_host_core::requests::ProxyRequest;
+
+use crate::protocol::HostError;
+use crate::remote_media::{Located, RemoteInputs};
 
 /// A stream only a hardware session decodes (AV1 without libdav1d) is reported `unsupported` by
 /// conform on a software-decode host, rather than failing the export at its first frame.
@@ -55,7 +60,15 @@ impl HardwareVideoDecode {
 
 pub trait AssetResolver {
     /// `None` when the host has no media for it.
-    fn original(&self, source: &SourceId) -> Option<&Path>;
+    ///
+    /// # Errors
+    /// A remote original whose probe failed the request.
+    fn original(&self, source: &SourceId) -> Option<Result<Located, HostError>>;
+
+    /// Whether a remote original whose project records a hash is read whole and hashed.
+    fn hashes_remote(&self) -> bool {
+        false
+    }
 
     /// Frame files in project order (`None` for a gap).
     fn sequence_frames(&self, _source: &SourceId) -> Option<&[Option<PathBuf>]> {
@@ -69,14 +82,29 @@ pub trait DerivativeProvider {
 }
 
 pub struct RequestMedia<'a> {
-    pub originals: &'a HashMap<String, PathBuf>,
+    pub originals: &'a HashMap<String, MediaLocation>,
     pub proxies: &'a HashMap<String, Vec<ProxyRequest>>,
     pub frames: &'a HashMap<String, Vec<Option<PathBuf>>>,
+    /// The request's remote sources, when it names a URL.
+    pub remote: Option<&'a RemoteInputs>,
 }
 
 impl AssetResolver for RequestMedia<'_> {
-    fn original(&self, source: &SourceId) -> Option<&Path> {
-        self.originals.get(source.as_str()).map(PathBuf::as_path)
+    fn original(&self, source: &SourceId) -> Option<Result<Located, HostError>> {
+        Some(match self.originals.get(source.as_str())? {
+            MediaLocation::Path(path) => Ok(Located::Found(SourceLocation::File(path.clone()))),
+            MediaLocation::Url(url) => match self.remote {
+                Some(remote) => remote.locate(source.as_str(), url),
+                None => Err(HostError::new(
+                    "INTERNAL",
+                    "a remote source was read without its request's session",
+                )),
+            },
+        })
+    }
+
+    fn hashes_remote(&self) -> bool {
+        self.remote.is_some_and(RemoteInputs::verifies)
     }
 
     fn sequence_frames(&self, source: &SourceId) -> Option<&[Option<PathBuf>]> {
@@ -93,7 +121,7 @@ impl DerivativeProvider for RequestMedia<'_> {
 pub struct ResolvedMedia {
     pub catalog: AssetCatalog,
     pub report: ConformReport,
-    pub paths: HashMap<String, PathBuf>,
+    pub paths: HashMap<String, SourceLocation>,
     /// As the probe read them, so the export sizes a decode session without opening the file.
     pub video_frames: HashMap<String, VideoFrameSize>,
 }
@@ -119,14 +147,17 @@ impl VideoFrameSize {
 }
 
 /// An original is hashed only when the project recorded a hash to compare, since hashing is a full
-/// read of the file.
+/// read of the file; a remote one only when the request also asks to verify it.
+///
+/// # Errors
+/// A remote source that fails the request: refused, changed, unreachable, or cancelled.
 pub fn resolve_media(
     project: &Project,
     resolver: &dyn AssetResolver,
     derivatives: &dyn DerivativeProvider,
     purpose: MediaPurpose,
     hardware: &HardwareVideoDecode,
-) -> ResolvedMedia {
+) -> Result<ResolvedMedia, HostError> {
     resolve_sources(
         project,
         project.used_sources(),
@@ -138,6 +169,9 @@ pub fn resolve_media(
 }
 
 /// [`resolve_media`] over `sources` instead of the ones a render reads.
+///
+/// # Errors
+/// As [`resolve_media`].
 pub fn resolve_sources(
     project: &Project,
     sources: Vec<&alpha2_model::MediaSource>,
@@ -145,10 +179,11 @@ pub fn resolve_sources(
     derivatives: &dyn DerivativeProvider,
     purpose: MediaPurpose,
     hardware: &HardwareVideoDecode,
-) -> ResolvedMedia {
+) -> Result<ResolvedMedia, HostError> {
     let mut assets = Vec::new();
     let mut proxy_paths = HashMap::new();
-    let mut frames = HashMap::<PathBuf, VideoFrameSize>::new();
+    let mut originals = HashMap::<SourceId, SourceLocation>::new();
+    let mut frames = HashMap::<SourceLocation, VideoFrameSize>::new();
     let wanted = sources
         .iter()
         .map(|source| source.id.clone())
@@ -161,43 +196,49 @@ pub fn resolve_sources(
             .fingerprint
             .as_ref()
             .is_some_and(|fingerprint| fingerprint.content_sha256.is_some());
+        let original = resolver.original(&source.id).transpose()?;
+        if let Some(Located::Found(location)) = &original {
+            originals.insert(source.id.clone(), location.clone());
+        }
         if let Some(provider) = &source.provider {
+            let hash = hash_recorded;
             if let Some(original) =
-                provider_original(provider, &source.id, resolver, hash_recorded, hardware)
+                provider_original(provider, &source.id, original, resolver, hash, hardware)?
             {
                 assets.push(AssetEntry::new(source.id.clone(), 0, original));
             }
             continue;
         }
-        let original = resolver.original(&source.id);
         let proxies = derivatives.proxies(&source.id);
         if original.is_none() && proxies.is_empty() {
             continue;
         }
-        let hash = hash_recorded;
         let still = source.kind == MediaKind::Image;
         let mut alpha_dropped = None;
-        let mut entry = AssetEntry::new(
-            source.id.clone(),
-            0,
-            original.map_or(OriginalState::Offline { path: None }, |path| {
-                let (state, found, alpha) = original_state(path, hash, still, hardware);
-                frames.extend(found.map(|found| (path.to_path_buf(), found)));
+        let state = match &original {
+            None => OriginalState::Offline { path: None },
+            Some(Located::Offline(shown)) => OriginalState::Offline {
+                path: Some(shown.clone()),
+            },
+            Some(Located::Unsupported(reason)) => OriginalState::Unsupported {
+                reason: reason.clone(),
+            },
+            Some(Located::Found(location)) => {
+                let hash = hash_recorded && (location.path().is_some() || resolver.hashes_remote());
+                let (state, found, alpha) = original_state(location, hash, still, hardware)?;
+                frames.extend(found.map(|found| (location.clone(), found)));
                 alpha_dropped = alpha;
                 state
-            }),
-        );
+            }
+        };
+        let mut entry = AssetEntry::new(source.id.clone(), 0, state);
         entry.alpha_dropped = alpha_dropped.map(str::to_owned);
-        if matches!(entry.original, OriginalState::Online { .. }) {
-            entry.audio_streams = original.and_then(audio_streams);
+        if let (OriginalState::Online { .. }, Some(Located::Found(location))) =
+            (&entry.original, &original)
+        {
+            entry.audio_streams = audio_streams(location)?;
         }
-        for (index, proxy) in proxies.iter().enumerate() {
-            let id = format!("{}#proxy{index}", source.id);
-            let (variant, found) = proxy_variant(&id, proxy, hardware);
-            entry.proxies.push(variant);
-            frames.extend(found.map(|found| (proxy.path.clone(), found)));
-            proxy_paths.insert(id, proxy.path.clone());
-        }
+        add_proxies(&mut entry, proxies, hardware, &mut frames, &mut proxy_paths);
         assets.push(entry);
     }
     let catalog = AssetCatalog::new(assets);
@@ -216,7 +257,7 @@ pub fn resolve_sources(
         .iter()
         .filter_map(|source| {
             let path = match &source.selection {
-                Selection::Original => resolver.original(&source.source_id)?.to_path_buf(),
+                Selection::Original => originals.get(&source.source_id)?.clone(),
                 Selection::Proxy { id } => proxy_paths.get(id)?.clone(),
                 _ => return None,
             };
@@ -227,11 +268,28 @@ pub fn resolve_sources(
         .iter()
         .filter_map(|(id, path)| Some((id.clone(), *frames.get(path)?)))
         .collect();
-    ResolvedMedia {
+    Ok(ResolvedMedia {
         catalog,
         report,
         paths,
         video_frames,
+    })
+}
+
+fn add_proxies(
+    entry: &mut AssetEntry,
+    proxies: &[ProxyRequest],
+    hardware: &HardwareVideoDecode,
+    frames: &mut HashMap<SourceLocation, VideoFrameSize>,
+    proxy_paths: &mut HashMap<String, SourceLocation>,
+) {
+    for (index, proxy) in proxies.iter().enumerate() {
+        let id = format!("{}#proxy{index}", entry.source_id);
+        let (variant, found) = proxy_variant(&id, proxy, hardware);
+        entry.proxies.push(variant);
+        let location = SourceLocation::File(proxy.path.clone());
+        frames.extend(found.map(|found| (location.clone(), found)));
+        proxy_paths.insert(id, location);
     }
 }
 
@@ -278,35 +336,64 @@ pub fn blocking_summary(report: &ConformReport) -> String {
 fn provider_original(
     provider: &ProviderSource,
     source: &SourceId,
+    original: Option<Located>,
     resolver: &dyn AssetResolver,
     hash: bool,
     hardware: &HardwareVideoDecode,
-) -> Option<OriginalState> {
+) -> Result<Option<OriginalState>, HostError> {
     let registry = Registry::with_defaults();
     if !registry.supports(provider) {
-        return Some(OriginalState::Unsupported {
+        return Ok(Some(OriginalState::Unsupported {
             reason: "this build has no provider for the source's format".into(),
-        });
+        }));
     }
     if let ProviderSource::ImageSequence {
         frames, frame_rate, ..
     } = provider
     {
-        return sequence_original(&registry, frames, *frame_rate, source, resolver, hardware);
+        return Ok(sequence_original(
+            &registry,
+            frames,
+            *frame_rate,
+            source,
+            resolver,
+            hardware,
+        ));
     }
     if !provider.reads_file() {
-        return Some(fileless_original(&registry, provider));
+        return Ok(Some(fileless_original(&registry, provider)));
     }
-    let path = resolver.original(source)?;
-    if !path.is_file() {
-        return Some(offline(path));
+    let location = match original {
+        None => return Ok(None),
+        Some(Located::Offline(shown)) => {
+            return Ok(Some(OriginalState::Offline { path: Some(shown) }));
+        }
+        Some(Located::Unsupported(reason)) => {
+            return Ok(Some(OriginalState::Unsupported { reason }));
+        }
+        Some(Located::Found(location)) => location,
+    };
+    if let Some(path) = location.path()
+        && !path.is_file()
+    {
+        return Ok(Some(offline(path)));
     }
-    let bytes = match alpha2_host_core::providers::read_source(path, provider) {
+    let bytes = match alpha2_host_core::providers::read_source(&location, provider) {
         Ok(bytes) => bytes,
+        Err(alpha2_host_core::providers::SourceReadError::Remote(error)) => {
+            let url = location
+                .remote()
+                .map_or_else(String::new, |object| object.shown_url().to_owned());
+            return Err(crate::media_policy::media_error(
+                source.as_str(),
+                &url,
+                &error,
+            ));
+        }
         Err(error) => {
-            return Some(OriginalState::Unsupported {
+            return Ok(Some(OriginalState::Unsupported {
                 reason: error.to_string(),
-            });
+            }));
         }
     };
     // A Lottie source shows the animation it names, or its package's first, and a PDF source the
@@ -325,33 +412,41 @@ fn provider_original(
             .probe(&bytes)
             .map(|found| found.map(|(_, report)| report)),
     };
-    Some(match found {
-        Some(Ok(report)) => {
-            let metadata = std::fs::metadata(path).ok();
-            OriginalState::Online {
-                fingerprint: MediaFingerprint {
-                    content_sha256: hash.then(|| hex(&Sha256::digest(&bytes))),
-                    byte_length: Some(bytes.len() as u64),
-                    modified_ms: metadata
-                        .and_then(|metadata| metadata.modified().ok())
-                        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                        .and_then(|since| i64::try_from(since.as_millis()).ok()),
-                    streams: Some(StreamTopology {
-                        video: Some(VideoStreamShape::new(report.width, report.height, None)),
-                        audio: None,
-                    }),
-                    duration_ticks: report.timing.duration().map(MediaTime::ticks),
-                    color: None,
-                },
-            }
-        }
+    Ok(Some(match found {
+        Some(Ok(report)) => OriginalState::Online {
+            fingerprint: MediaFingerprint {
+                content_sha256: hash.then(|| hex(&Sha256::digest(&bytes))),
+                byte_length: Some(bytes.len() as u64),
+                modified_ms: modified_ms(&location),
+                streams: Some(StreamTopology {
+                    video: Some(VideoStreamShape::new(report.width, report.height, None)),
+                    audio: None,
+                }),
+                duration_ticks: report.timing.duration().map(MediaTime::ticks),
+                color: None,
+            },
+        },
         Some(Err(error)) => OriginalState::Unsupported {
             reason: error.to_string(),
         },
         None => OriginalState::Unsupported {
             reason: "no provider reads the file".into(),
         },
-    })
+    }))
+}
+
+/// A file's modification time, or a remote object's `Last-Modified`, in Unix milliseconds.
+fn modified_ms(location: &SourceLocation) -> Option<i64> {
+    match location {
+        SourceLocation::File(path) => std::fs::metadata(path)
+            .ok()?
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|since| i64::try_from(since.as_millis()).ok()),
+        SourceLocation::Remote(object) => object.last_modified_ms(),
+    }
 }
 
 /// A source whose provider reads no file is online when its provider opens it.
@@ -431,26 +526,61 @@ fn sequence_original(
 }
 
 fn original_state(
-    path: &Path,
+    location: &SourceLocation,
     hash: bool,
     still: bool,
     hardware: &HardwareVideoDecode,
-) -> (OriginalState, Option<VideoFrameSize>, Option<&'static str>) {
-    if !path.is_file() {
-        return (offline(path), None, None);
+) -> Result<(OriginalState, Option<VideoFrameSize>, Option<&'static str>), HostError> {
+    if let Some(path) = location.path()
+        && !path.is_file()
+    {
+        return Ok((offline(path), None, None));
     }
-    match probe_media(path, hash, still, hardware) {
+    Ok(match probe_media(location, hash, still, hardware) {
         Ok((fingerprint, frames, alpha)) => (OriginalState::Online { fingerprint }, frames, alpha),
-        Err(reason) => (OriginalState::Unsupported { reason }, None, None),
+        Err(ProbeFailure::Unsupported(reason)) => {
+            (OriginalState::Unsupported { reason }, None, None)
+        }
+        Err(ProbeFailure::Request(error)) => return Err(error),
+    })
+}
+
+/// Why a probe found no media: the source is not usable, or the request failed (a remote source
+/// that changed or could not be read, a cancel).
+enum ProbeFailure {
+    Unsupported(String),
+    Request(HostError),
+}
+
+impl ProbeFailure {
+    fn of(error: alpha2_media::DecodeError) -> Self {
+        match error {
+            alpha2_media::DecodeError::Cancelled => Self::Request(HostError::new(
+                "CANCELLED",
+                crate::protocol::cancelled("the request was cancelled while it read its media"),
+            )),
+            alpha2_media::DecodeError::Source(failure) => {
+                Self::Request(crate::media_policy::source_error(&failure))
+            }
+            error => Self::Unsupported(error.to_string()),
+        }
     }
 }
 
-/// Every audio stream of the media at `path` in demuxer order, which `audio.stream` counts over;
-/// `None` when it cannot be probed.
-fn audio_streams(path: &Path) -> Option<Vec<AudioStreamFacts>> {
-    let probe = alpha2_native::probe(path).ok()?;
+/// Every audio stream of the media at `location` in demuxer order, which `audio.stream` counts
+/// over; `None` when it cannot be probed.
+fn audio_streams(location: &SourceLocation) -> Result<Option<Vec<AudioStreamFacts>>, HostError> {
+    let probe = match alpha2_native::probe(location) {
+        Ok(probe) => probe,
+        Err(error) => {
+            return match ProbeFailure::of(error) {
+                ProbeFailure::Request(error) => Err(error),
+                ProbeFailure::Unsupported(_) => Ok(None),
+            };
+        }
+    };
     let default = probe.selected_audio_ordinal();
-    Some(
+    Ok(Some(
         probe
             .audio_streams()
             .zip(0_u32..)
@@ -463,7 +593,7 @@ fn audio_streams(path: &Path) -> Option<Vec<AudioStreamFacts>> {
                 facts
             })
             .collect(),
-    )
+    ))
 }
 
 fn proxy_variant(
@@ -474,7 +604,14 @@ fn proxy_variant(
     let found = proxy
         .path
         .is_file()
-        .then(|| probe_media(&proxy.path, false, false, hardware))
+        .then(|| {
+            probe_media(&SourceLocation::from(&proxy.path), false, false, hardware).map_err(
+                |failure| match failure {
+                    ProbeFailure::Unsupported(reason) => reason,
+                    ProbeFailure::Request(error) => error.message,
+                },
+            )
+        })
         .ok_or_else(|| "the proxy file is missing".to_owned())
         .and_then(|result| result);
     let (state, shape, frames) = match found {
@@ -515,25 +652,31 @@ pub fn fingerprint(
     still: bool,
     hardware: &HardwareVideoDecode,
 ) -> Result<MediaFingerprint, String> {
-    probe_media(path, hash, still, hardware).map(|(fingerprint, _, _)| fingerprint)
+    probe_media(&SourceLocation::from(path), hash, still, hardware)
+        .map(|(fingerprint, _, _)| fingerprint)
+        .map_err(|failure| match failure {
+            ProbeFailure::Unsupported(reason) => reason,
+            ProbeFailure::Request(error) => error.message,
+        })
 }
 
+type ProbedMedia = (
+    MediaFingerprint,
+    Option<VideoFrameSize>,
+    Option<&'static str>,
+);
+
 fn probe_media(
-    path: &Path,
+    location: &SourceLocation,
     hash: bool,
     still: bool,
     hardware: &HardwareVideoDecode,
-) -> Result<
-    (
-        MediaFingerprint,
-        Option<VideoFrameSize>,
-        Option<&'static str>,
-    ),
-    String,
-> {
+) -> Result<ProbedMedia, ProbeFailure> {
     crate::heartbeat::request_step(crate::heartbeat::RequestSide::Input, "conform");
-    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
-    let probe = alpha2_native::probe(path).map_err(|error| format!("{error}"))?;
+    let byte_length = location
+        .byte_length()
+        .map_err(|error| ProbeFailure::Unsupported(error.to_string()))?;
+    let probe = alpha2_native::probe(location).map_err(ProbeFailure::of)?;
     let stored_frames = probe.selected_video_stream().and_then(VideoFrameSize::of);
     let video = probe
         .selected_video_stream()
@@ -542,28 +685,27 @@ fn probe_media(
         && let Some(reason) = alpha2_native::software_decode_unsupported(video)
         && !hardware.may_decode(&video.codec)
     {
-        return Err(reason);
+        return Err(ProbeFailure::Unsupported(reason));
     }
     let audio = probe
         .selected_audio_stream()
         .filter(|audio| audio.kind == StreamKind::Audio);
+    let rate = match video {
+        Some(video) if !still => measured_rate(location, video.index)?,
+        _ => None,
+    };
     let video_shape = video.and_then(|video| {
         let (width, height) = video.dimensions?;
         let (width, height) = video.sample_aspect_ratio.square_pixel_size(width, height);
         let (width, height) = video.orientation.displayed_size(width, height);
-        let rate = (!still).then(|| measured_rate(path, video.index)).flatten();
         Some(VideoStreamShape::new(width, height, rate))
     });
     let audio_shape =
         audio.and_then(|audio| Some(AudioStreamShape::new(audio.channels?, audio.sample_rate?)));
     let fingerprint = MediaFingerprint {
-        content_sha256: hash.then(|| sha256(path)).transpose()?,
-        byte_length: Some(metadata.len()),
-        modified_ms: metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-            .and_then(|since| i64::try_from(since.as_millis()).ok()),
+        content_sha256: hash.then(|| sha256(location)).transpose()?,
+        byte_length: Some(byte_length),
+        modified_ms: modified_ms(location),
         streams: (video_shape.is_some() || audio_shape.is_some()).then_some(StreamTopology {
             video: video_shape,
             audio: audio_shape,
@@ -584,14 +726,20 @@ fn probe_media(
 }
 
 /// `None` when it cannot be measured, as a browser then records none.
-fn measured_rate(path: &Path, index: usize) -> Option<alpha2_time::FrameRate> {
+fn measured_rate(
+    location: &SourceLocation,
+    index: usize,
+) -> Result<Option<alpha2_time::FrameRate>, ProbeFailure> {
     let mut evidence = FrameRateEvidence::new();
-    alpha2_native::visit_packet_times(path, index, |seconds| {
+    let visited = alpha2_native::visit_packet_times(location, index, |seconds| {
         crate::heartbeat::beat_request();
         evidence.push(seconds)
-    })
-    .ok()?;
-    evidence.rate()
+    });
+    match visited.map_err(ProbeFailure::of) {
+        Ok(()) => Ok(evidence.rate()),
+        Err(ProbeFailure::Unsupported(_)) => Ok(None),
+        Err(failure) => Err(failure),
+    }
 }
 
 /// Milliseconds each 1 MiB of hashing takes on top of its work, for a step whose length is known.
@@ -599,8 +747,15 @@ fn measured_rate(path: &Path, index: usize) -> Option<alpha2_time::FrameRate> {
 pub static INJECT_HASH_CHUNK_DELAY_MS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-fn sha256(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|error| error.to_string())?;
+fn sha256(location: &SourceLocation) -> Result<String, ProbeFailure> {
+    let failed = |error: std::io::Error| match alpha2_host_core::remote::decode_error(&error) {
+        Some(error) => ProbeFailure::of(error),
+        None => ProbeFailure::Unsupported(error.to_string()),
+    };
+    let mut file: Box<dyn Read> = match location {
+        SourceLocation::File(path) => Box::new(File::open(path).map_err(failed)?),
+        SourceLocation::Remote(object) => Box::new(object.stream()),
+    };
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; 1 << 20];
     loop {
@@ -609,7 +764,7 @@ fn sha256(path: &Path) -> Result<String, String> {
         std::thread::sleep(std::time::Duration::from_millis(
             INJECT_HASH_CHUNK_DELAY_MS.load(std::sync::atomic::Ordering::Relaxed),
         ));
-        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        let read = file.read(&mut buffer).map_err(failed)?;
         if read == 0 {
             break;
         }

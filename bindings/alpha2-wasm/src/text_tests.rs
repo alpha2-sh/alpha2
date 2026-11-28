@@ -12,7 +12,9 @@ fn a_json_request_rasterizes_like_the_native_request() {
         r#"{"text":"Alpha2","fontSize":24,"align":"center","fill":[255,255,255,255]}"#,
     )
     .expect("request JSON");
-    let result = rasterizer.rasterize(&wire.into_request(3)).expect("raster");
+    let result = rasterizer
+        .rasterize(&wire.into_request(3).expect("a request"))
+        .expect("raster");
     let descriptor: serde_json::Value =
         serde_json::from_str(&descriptor_json(&result)).expect("descriptor JSON");
     assert_eq!(descriptor["width"], result.descriptor.texture.width);
@@ -32,7 +34,7 @@ fn a_json_request_rasterizes_like_the_native_request() {
             "background":{"color":[0,0,0,128],"padding":4},"splitBackground":true}"#,
     )
     .expect("request JSON");
-    let request = wire.into_request(4);
+    let request = wire.into_request(4).expect("a request");
     assert!(matches!(request.fill, alpha2_text::TextFill::Gradient(_)));
     assert_eq!(request.strokes.len(), 1);
     let result = rasterizer.rasterize(&request).expect("raster");
@@ -103,7 +105,9 @@ fn a_request_over_the_frame_area_is_refused_and_a_wide_paragraph_draws() {
     );
     let wire: TextRequestWire = serde_json::from_str(&huge).expect("request JSON");
     assert_eq!(
-        rasterizer.rasterize(&wire.into_request(6)).map(|_| ()),
+        rasterizer
+            .rasterize(&wire.into_request(6).expect("a request"))
+            .map(|_| ()),
         Err(alpha2_text::TextRasterError::TooLarge)
     );
     let animated = huge.replacen('{', r#"{"clusterState":{"opacity":0.5},"#, 1);
@@ -119,6 +123,65 @@ fn a_request_over_the_frame_area_is_refused_and_a_wide_paragraph_draws() {
         "The quick brown fox jumps over the lazy dog. ".repeat(24)
     );
     let wire: TextRequestWire = serde_json::from_str(&paragraph).expect("request JSON");
-    let result = rasterizer.rasterize(&wire.into_request(8)).expect("raster");
+    let result = rasterizer
+        .rasterize(&wire.into_request(8).expect("a request"))
+        .expect("raster");
     assert!(result.descriptor.texture.width >= 3_700);
+}
+
+#[test]
+fn wire_runs_become_spans_over_the_request() {
+    let wire: TextRequestWire = serde_json::from_str(
+        r#"{"runs":[{"text":"Big "},{"text":"word","fontSize":40,"fontStyle":"italic","underline":true,"fill":[255,0,0,255]},{"text":"é"}],
+            "fontSize":20,"fill":[255,255,255,255],"fontFamily":"Alpha2 Fixture","letterSpacing":1,
+            "clamp":{"maxLines":2}}"#,
+    )
+    .expect("request JSON");
+    let request = wire.into_request(9).expect("a request");
+    assert_eq!(request.text, "Big wordé");
+    assert_eq!(
+        request.spans.len(),
+        1,
+        "plain runs take the request's values"
+    );
+    let span = &request.spans[0];
+    assert_eq!(span.bytes, 4..8);
+    assert_eq!(
+        (span.font_size, span.letter_spacing, span.font_weight),
+        (40.0, 1.0, 400)
+    );
+    assert_eq!(span.font_family.as_deref(), Some("Alpha2 Fixture"));
+    assert_eq!(span.font_style, alpha2_text::FontStyle::Italic);
+    assert!(span.underline && !span.line_through);
+    assert_eq!(span.fill, alpha2_text::TextFill::Solid([255, 0, 0, 255]));
+    assert_eq!(
+        request.clamp,
+        Some(alpha2_text::TextClamp {
+            max_lines: Some(2),
+            max_height: 0.0,
+            ellipsis: Some("\u{2026}".into()),
+        })
+    );
+    let plain: TextRequestWire = serde_json::from_str(
+        r#"{"text":"x","fontSize":20,"fill":[0,0,0,255],"clamp":{"maxHeight":30,"ellipsis":null}}"#,
+    )
+    .expect("request JSON");
+    assert_eq!(
+        plain
+            .into_request(10)
+            .expect("a request")
+            .clamp
+            .and_then(|clamp| clamp.ellipsis),
+        None
+    );
+    for both_or_neither in [
+        r#"{"text":"x","runs":[{"text":"x"}],"fontSize":20,"fill":[0,0,0,255]}"#,
+        r#"{"fontSize":20,"fill":[0,0,0,255]}"#,
+    ] {
+        let wire: TextRequestWire = serde_json::from_str(both_or_neither).expect("request JSON");
+        assert_eq!(
+            wire.into_request(11).err(),
+            Some(alpha2_text::TextRasterError::InvalidRequest)
+        );
+    }
 }

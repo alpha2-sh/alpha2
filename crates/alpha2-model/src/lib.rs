@@ -109,10 +109,10 @@ pub use layout_values::{
 pub use lint::{LintEdge, LintIssue, LintOwner, ShapeLintOwner};
 pub use mask::{MAX_CLIP_MASKS, MaskMode, Matte, MatteMode, ShapeMask};
 pub use project::{
-    BlendSpace, CURRENT_SCHEMA_VERSION, ColorPipeline, HDR_PEAK_NITS_RANGE, HdrSources,
-    MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MAX_CLIPS, MAX_CLIPS_PER_TRACK, MAX_EFFECT_RESOURCES,
-    MAX_PROJECT_JSON_BYTES, MAX_TRACKS, MAX_TRANSITIONS_PER_TRACK, Project, ProjectSettings, Rgb,
-    SAMPLE_RATE_RANGE,
+    ADJUSTMENT_TRANSITION_ID, BlendSpace, CURRENT_SCHEMA_VERSION, ColorPipeline,
+    HDR_PEAK_NITS_RANGE, HdrSources, MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MAX_CLIPS,
+    MAX_CLIPS_PER_TRACK, MAX_EFFECT_RESOURCES, MAX_PROJECT_JSON_BYTES, MAX_TRACKS,
+    MAX_TRANSITIONS_PER_TRACK, Project, ProjectSettings, Rgb, SAMPLE_RATE_RANGE,
 };
 pub use provider::{
     LinearPrimaries, MAX_LATEX_BYTES, MAX_LATEX_FONT_SIZE, MAX_LOTTIE_DOCUMENT_BYTES,
@@ -131,17 +131,20 @@ pub use shapes::{
 };
 pub use source::{MediaKind, MediaSource};
 pub use text::{
-    BlockEllipsis, FONT_SIZE_FIT_STEPS, FONT_WEIGHT_RANGE, FontSizeFit, LETTER_SPACING_RANGE,
-    LINE_HEIGHT_RANGE, LineClamp, MAX_BLOCK_ELLIPSIS_BYTES, MAX_FONT_FAMILY_BYTES,
-    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_POSITION,
+    BlockEllipsis, FONT_SCALE_RANGE, FONT_SIZE_FIT_STEPS, FONT_WEIGHT_RANGE, FontSizeFit,
+    FontStyle, HighlightGap, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE, LineClamp,
+    MAX_BLOCK_ELLIPSIS_BYTES, MAX_FONT_FAMILY_BYTES, MAX_HIGHLIGHT_TRANSITION,
+    MAX_TEXT_BORDER_WIDTH, MAX_TEXT_CONTENT_BYTES, MAX_TEXT_DASH_ENTRY, MAX_TEXT_DASH_OFFSET,
+    MAX_TEXT_FONT_SELECTIONS, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_POSITION,
     MAX_TEXT_SHADOW_BLUR, MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT,
-    MAX_TEXT_STROKES, TextAlign, TextBackground, TextShadow, TextStroke, TextStyle,
+    MAX_TEXT_STROKES, TextAlign, TextBackground, TextBoxBorder, TextBoxExtent, TextDash,
+    TextHighlight, TextInsets, TextShadow, TextStroke, TextStyle,
 };
 pub use text_animation::{
-    ANIMATOR_SCALE_RANGE, MAX_ANIMATOR_OFFSET, MAX_CLASS_NAME_BYTES, MAX_RANGE_INDEX,
-    MAX_RUN_CLASSES, MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS, RANGE_PERCENT, RangeShape, RangeUnits,
-    RunState, RunTime, TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextSelector,
-    TextUnit, valid_class_name,
+    ANIMATOR_SCALE_RANGE, AnimatorGrouping, MAX_ANIMATOR_OFFSET, MAX_CLASS_NAME_BYTES,
+    MAX_RANGE_INDEX, MAX_REVEAL_FEATHER, MAX_RUN_CLASSES, MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS,
+    RANGE_PERCENT, RangeShape, RangeUnits, RunState, RunTime, TextAnimator, TextAnimatorProperties,
+    TextContent, TextReveal, TextRun, TextRunStyle, TextSelector, TextUnit, valid_class_name,
 };
 pub use time_map::{LOOP_FADE_SECONDS, LoopMode, MAX_LOOP_PASSES, TimeMap, loop_passes};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};

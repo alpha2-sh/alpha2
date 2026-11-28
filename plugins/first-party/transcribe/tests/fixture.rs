@@ -370,7 +370,11 @@ fn a_multilingual_model_detects_english_and_keeps_it() {
         return;
     };
     let (samples, _) = repeated(2, 1);
-    for params in [json!({}), json!({ "language": "en" })] {
+    for params in [
+        json!({}),
+        json!({ "language": "en" }),
+        json!({ "device": "cpu" }),
+    ] {
         let run = run(&model, &samples, &params, &forward(&samples));
         let accuracy = accuracy(&run.texts(), &spoken_words(2));
         eprintln!("{params}: word accuracy {accuracy:.3}");
@@ -453,6 +457,8 @@ fn params_outside_the_schema_fail_begin_naming_the_key() {
         (json!({ "language": "EN" }), "language"),
         (json!({ "language": "yue" }), "language"),
         (json!({ "language": 5 }), "language"),
+        (json!({ "device": "gpu" }), "device"),
+        (json!({ "device": 1 }), "device"),
         (json!({ "x": 1 }), "x"),
     ] {
         let failure = refusal(None, &params);

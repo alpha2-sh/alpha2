@@ -35,7 +35,7 @@ fn export_over_magenta(
     let result = host
         .export(
             &over_magenta().to_string(),
-            &HashMap::from([("video".to_owned(), corpus(name))]),
+            &crate::tests::sources([("video".to_owned(), corpus(name))]),
             &HashMap::new(),
             Vec::new(),
             0,

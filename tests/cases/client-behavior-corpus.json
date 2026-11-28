@@ -159,6 +159,62 @@
     }
   },
   {
+    "id": "media-urls-are-sent-unchanged",
+    "kind": "request-paths",
+    "given": {
+      "directories": ["first"],
+      "requests": [
+        {
+          "operation": "export",
+          "fields": {
+            "assets": {
+              "a": "https://media.example/a.mp4?signature=1",
+              "b": "HTTP://media.example/b.mp4",
+              "c": "clip.mp4"
+            },
+            "resources": {
+              "seq": {
+                "x.png": "https://media.example/x.png",
+                "y.png": "resources/y.png"
+              }
+            },
+            "output": "out.mp4"
+          }
+        },
+        {
+          "operation": "conform",
+          "fields": {
+            "assets": { "a": "Https://media.example/a.mp4", "c": "clip.mp4" }
+          }
+        },
+        {
+          "operation": "still",
+          "fields": {
+            "assets": { "a": "http://media.example/a.mp4" },
+            "stills": [{ "time": 0, "output": "frame.png" }]
+          }
+        }
+      ]
+    },
+    "expect": {
+      "hosts": 1,
+      "requests": [
+        {
+          "resolved": ["/assets/c", "/resources/seq/y.png", "/output"],
+          "unchanged": ["/assets/a", "/assets/b", "/resources/seq/x.png"]
+        },
+        {
+          "resolved": ["/assets/c"],
+          "unchanged": ["/assets/a"]
+        },
+        {
+          "resolved": ["/stills/0/output"],
+          "unchanged": ["/assets/a"]
+        }
+      ]
+    }
+  },
+  {
     "id": "forked-child-starts-its-own-host",
     "kind": "fork",
     "clients": ["python"],
@@ -233,6 +289,12 @@
       "namesBinary": true,
       "hostEnded": true
     }
+  },
+  {
+    "id": "ready-names-its-schema-version",
+    "kind": "schema-version",
+    "given": { "projectSchemaVersion": 1 },
+    "expect": { "projectSchemaVersion": 1, "releaseIsTheClients": true }
   },
   {
     "id": "start-timeout-carries-the-preamble",

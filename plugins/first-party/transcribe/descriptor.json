@@ -19,6 +19,15 @@
         "description": "The language spoken, as an ISO 639-1 code, or auto to let the model tell.",
         "default": "auto",
         "x-alpha2-order": 1
+      },
+      "device": {
+        "type": "string",
+        "enum": ["auto", "cpu"],
+        "title": "Device",
+        "description": "auto uses the GPU on Apple silicon; cpu never uses one.",
+        "default": "auto",
+        "x-alpha2-order": 2,
+        "x-alpha2-advanced": true
       }
     },
     "additionalProperties": false

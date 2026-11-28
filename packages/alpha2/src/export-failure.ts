@@ -255,6 +255,13 @@ type ProtocolErrorCode =
   | "PLUGIN_TRAPPED"
   | "PLUGIN_LIMIT"
   | "PLUGIN_RESOURCE_INVALID"
+  | "MEDIA_REFUSED"
+  | "MEDIA_TLS_FAILED"
+  | "MEDIA_UNREACHABLE"
+  | "MEDIA_BUSY"
+  | "MEDIA_RANGE_UNSUPPORTED"
+  | "MEDIA_REJECTED"
+  | "MEDIA_CHANGED"
   | "GPU_INIT_FAILED"
   | "ENCODE_ERROR"
   | "ENCODER_BUSY"
@@ -348,6 +355,13 @@ const CODE_CLASSES: Readonly<Record<ClassifiedCode, FailureClass>> =
     PLUGIN_TRAPPED: permanent,
     PLUGIN_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
     PLUGIN_RESOURCE_INVALID: permanent,
+    MEDIA_REFUSED: permanent,
+    MEDIA_TLS_FAILED: permanent,
+    MEDIA_UNREACHABLE: unknown,
+    MEDIA_BUSY: { code: "RESOURCE_BUSY", resource: "unknown" },
+    MEDIA_RANGE_UNSUPPORTED: permanent,
+    MEDIA_REJECTED: permanent,
+    MEDIA_CHANGED: permanent,
     GPU_INIT_FAILED: unknown,
     ENCODE_ERROR: unknown,
     ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },

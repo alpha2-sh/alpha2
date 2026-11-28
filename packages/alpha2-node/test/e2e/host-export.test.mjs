@@ -874,7 +874,7 @@ test(
       const automatic = await gpuless.getCapabilities();
       assert.equal(automatic.renderer, "cpu");
       assert.match(automatic.rendererReason ?? "", /no GPU adapter/);
-      // `gpu` takes whatever adapter there is, and with none the host cannot start.
+      // `gpu` needs a hardware adapter, and with none the host cannot start.
       const gpuOnly = new Alpha2NodeClient({ hostPath, renderer: "gpu" });
       const error = await gpuOnly.getCapabilities().then(
         () => assert.fail("the probe resolved without a GPU"),

@@ -10,8 +10,8 @@
 //! and chroma siting. Each picture is checked again as it arrives, since a stream may change
 //! mid-way; a picture that no longer qualifies is rendered instead.
 
+use alpha2_host_core::remote::SourceLocation;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::decode::DecodedFrameSet;
@@ -82,7 +82,7 @@ impl TranscodePlan {
 /// The first reason it cannot, naming the clip when a file refuses.
 pub(crate) fn yuv_transcode_plan(
     project: &Project,
-    assets: &HashMap<String, PathBuf>,
+    assets: &HashMap<String, SourceLocation>,
     range: TimeRange,
     encoding: YuvEncoding,
 ) -> Result<TranscodePlan, String> {
@@ -99,9 +99,9 @@ pub(crate) fn yuv_transcode_plan(
 /// Everything the check reads belongs to the file, so each file is probed once.
 fn plan_with(
     project: &Project,
-    assets: &HashMap<String, PathBuf>,
+    assets: &HashMap<String, SourceLocation>,
     range: TimeRange,
-    mut check: impl FnMut(&Path) -> Result<(), String>,
+    mut check: impl FnMut(&SourceLocation) -> Result<(), String>,
 ) -> Result<TranscodePlan, String> {
     crate::config::configured_yuv_transcode()?;
     // The mix renders as always; only the pictures are in question.
@@ -126,6 +126,7 @@ fn plan_with(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::path::{Path, PathBuf};
 
     fn rough_cut() -> (Project, HashMap<String, PathBuf>) {
         let second = alpha2_time::TICKS_PER_SECOND;
@@ -167,15 +168,23 @@ mod tests {
         )
         .expect("range");
         let mut checked = Vec::new();
-        let plan = plan_with(&project, &assets, range, |source| {
-            checked.push(source.to_owned());
-            Ok(())
-        })
+        let plan = plan_with(
+            &project,
+            &crate::tests::locations(&assets),
+            range,
+            |source| {
+                checked.push(source.to_owned());
+                Ok(())
+            },
+        )
         .expect("the cut qualifies");
         assert_eq!(plan.segments.len(), 4);
         assert_eq!(
             checked,
-            [PathBuf::from("camera.mp4"), PathBuf::from("phone.mp4")]
+            [
+                SourceLocation::from(PathBuf::from("camera.mp4")),
+                SourceLocation::from(PathBuf::from("phone.mp4"))
+            ]
         );
     }
 
@@ -187,13 +196,18 @@ mod tests {
             alpha2_time::MediaTime::from_ticks(4 * alpha2_time::TICKS_PER_SECOND),
         )
         .expect("range");
-        let error = plan_with(&project, &assets, range, |source| {
-            if source == Path::new("phone.mp4") {
-                Err("the source's chroma sits Center".to_owned())
-            } else {
-                Ok(())
-            }
-        })
+        let error = plan_with(
+            &project,
+            &crate::tests::locations(&assets),
+            range,
+            |source| {
+                if source.path() == Some(Path::new("phone.mp4")) {
+                    Err("the source's chroma sits Center".to_owned())
+                } else {
+                    Ok(())
+                }
+            },
+        )
         .err()
         .expect("the phone clip refuses");
         assert_eq!(error, "clip d: the source's chroma sits Center");

@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -671,7 +670,7 @@ pub struct NativeFrames {
     cache_scope: u64,
     pub providers: std::sync::Arc<alpha2_host_core::providers::ProviderMedia>,
     pub color: ColorPolicy,
-    pub paths: HashMap<SourceId, PathBuf>,
+    pub paths: HashMap<SourceId, alpha2_host_core::remote::SourceLocation>,
     pub kinds: HashMap<SourceId, MediaKind>,
     pub declared_colors: HashMap<SourceId, alpha2_media::ColorMetadata>,
     pub decoders: HashMap<DecodeCursorKey, NativeDecoder>,
@@ -702,7 +701,7 @@ impl NativeFrames {
         size: RenderSize,
         cache_scope: u64,
         project: &Project,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         decoding: std::sync::Arc<crate::recovery::ExportDecoding>,
     ) -> Result<Self, String> {
         let mut paths = HashMap::new();

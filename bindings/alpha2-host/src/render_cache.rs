@@ -163,6 +163,19 @@ impl SnapshotIdentity {
         }
     }
 
+    /// A file by [`Self::add_file`]; a remote object by origin and path (not the query, so a new
+    /// signature of the same object hits), validator and length, as this request's probe found it.
+    pub fn add_source(&mut self, label: &str, source: &alpha2_host_core::remote::SourceLocation) {
+        match source {
+            alpha2_host_core::remote::SourceLocation::File(path) => self.add_file(label, path),
+            alpha2_host_core::remote::SourceLocation::Remote(object) => {
+                self.add(label, object.shown_url().as_bytes());
+                self.add("validator", object.validator().as_bytes());
+                self.add("length", &object.len().to_le_bytes());
+            }
+        }
+    }
+
     #[must_use]
     pub fn finish(self) -> [u8; 32] {
         self.0.finalize().into()

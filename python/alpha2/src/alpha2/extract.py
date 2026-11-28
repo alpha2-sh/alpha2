@@ -42,11 +42,21 @@ class ExtractAudio:
 
 @dataclass(frozen=True)
 class ExtractProgress:
-    """Progress of one pass; ``total`` is ``None`` for source frames, whose count is unknown."""
+    """Where an extraction is.
 
+    ``stage`` is ``begin`` while the extractor's ``begin`` runs, ``pass`` while a pass is read and
+    ``end`` while its ``end`` runs; ``pass_index`` is the pass that concerns, the first under
+    ``begin`` and the last under ``end``. ``total`` is ``None`` for source frames, whose count is
+    unknown. ``covered`` of ``span`` ticks of the range are read; ``covered`` never decreases and
+    reaches ``span`` when the pass ends.
+    """
+
+    stage: Literal["begin", "pass", "end"]
     pass_index: int
     completed: int
     total: int | None
+    covered: int
+    span: int
 
 
 def _text(value: object, what: str) -> str:

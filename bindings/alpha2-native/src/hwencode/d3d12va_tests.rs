@@ -726,7 +726,9 @@ fn ten_frames_encode_with_parameter_sets_in_the_first_packet_only() {
     assert_eq!(stats.acquired, 10);
     assert_eq!(stats.copy_operations, 20);
 
-    let mut file = crate::decode::open_input(&output).expect("output");
+    let mut file =
+        crate::decode::open_input(&alpha2_host_core::remote::SourceLocation::from(&output))
+            .expect("output");
     let parameters = file.streams()[0].codecpar().clone();
     let record = alpha2_ffmpeg_bridge::codec_parameters_extradata(&parameters);
     assert!(!record.is_empty(), "the sample description is empty");

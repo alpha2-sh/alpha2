@@ -182,6 +182,143 @@ fn text_animator_frames_golden() {
     assert_golden("text_animators", (640, 90), &strip, 2);
 }
 
+/// Three timed words; the said word pops to 1.5 about its baseline and pushes the others.
+const PUSH: &str = r##"{ "font_size": 0.16, "position": { "x": 0.5, "y": 0.5 }, "anchor": { "x": 0.5, "y": 0.5 },
+    "max_width": 0.95, "align": "center", "strokes": [ { "color": "#000000", "width": 0.08 } ],
+    "animator_grouping": "word", "animator_pivot": { "x": 0.5, "y": 0.8 },
+    "animators": [ { "selector": { "type": "timing", "state": "active", "ramp": 12000 },
+                     "properties": { "scale": { "mode": "constant", "value": { "x": 1.5, "y": 1.5 } },
+                                     "fill": { "mode": "constant", "value": "#ffd040" },
+                                     "advance_follows_scale": true } } ] }"##;
+const PUSH_RUNS: &str = r#"[ { "text": "one ", "time": { "start": 0, "end": 60000 } },
+                              { "text": "two ", "time": { "start": 60000, "end": 120000 } },
+                              { "text": "three", "time": { "start": 120000, "end": 180000 } } ]"#;
+
+#[test]
+fn a_pushed_word_draws_the_same_on_the_cpu() {
+    let _lock = gpu_test_lock();
+    let project = text_project("", "", &caption_track(PUSH, PUSH_RUNS));
+    let size = RenderSize::new(160, 90).expect("size");
+    let gpu = gpu_frame(&builtin_renderer(), &mut fixture_texts(), &project, 90_000);
+    let cpu_renderer = alpha2_render::CpuRenderer::new(2);
+    let mut texts = fixture_texts();
+    let frame = project.evaluate(MediaTime(90_000)).expect("frame");
+    texts.prepare(&cpu_renderer, &frame, size).expect("text");
+    let cpu = cpu_renderer
+        .render_frame(size, &frame, &CaptionFrames(&texts))
+        .expect("frame renders")
+        .texture
+        .expect("complete")
+        .read_rgba8();
+    let largest = gpu
+        .iter()
+        .zip(&cpu)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(largest <= 2, "CPU and GPU differ by up to {largest}");
+}
+
+#[test]
+fn text_animator_push_golden() {
+    let _lock = gpu_test_lock();
+    let renderer = builtin_renderer();
+    let mut texts = fixture_texts();
+    let project = text_project("", "", &caption_track(PUSH, PUSH_RUNS));
+    let frames =
+        [30_000, 66_000, 150_000].map(|ticks| gpu_frame(&renderer, &mut texts, &project, ticks));
+    let strip = (0..90)
+        .flat_map(|row| {
+            frames
+                .iter()
+                .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
+        })
+        .collect::<Vec<_>>();
+    assert_golden("text_animator_push", (480, 90), &strip, 2);
+}
+
+/// A line wiped in left to right over the first second, a blue shadow under it.
+const REVEAL: &str = r##"{ "font_size": 0.2, "position": { "x": 0.5, "y": 0.5 }, "anchor": { "x": 0.5, "y": 0.5 },
+    "shadows": [ { "color": "#0000ff", "offset": { "x": 0.08, "y": 0.08 }, "blur": 0 } ],
+    "animator_grouping": "all",
+    "animators": [ { "selector": { "type": "range" },
+                     "properties": { "reveal": {
+                         "progress": { "mode": "keyframes", "keyframes": [
+                             { "time": 0, "value": 0, "interpolation": { "type": "linear" } },
+                             { "time": 120000, "value": 1, "interpolation": { "type": "hold" } } ] },
+                         "feather": { "mode": "constant", "value": 0.1 } } } } ] }"##;
+
+fn blue_right(pixels: &[u8]) -> Option<usize> {
+    pixels
+        .chunks(4)
+        .enumerate()
+        .filter(|(_, pixel)| pixel[2] > 150 && pixel[0] < 60 && pixel[1] < 60)
+        .map(|(index, _)| index % 160)
+        .max()
+}
+
+#[test]
+fn a_revealed_text_casts_its_shadow_from_the_revealed_glyphs() {
+    let _lock = gpu_test_lock();
+    let renderer = builtin_renderer();
+    let mut texts = fixture_texts();
+    let project = text_project("", "", &caption_track(REVEAL, r#""Wiped""#));
+    let half = blue_right(&gpu_frame(&renderer, &mut texts, &project, 60_000)).expect("shadow");
+    let whole = blue_right(&gpu_frame(&renderer, &mut texts, &project, 150_000)).expect("shadow");
+    assert!(
+        half + 20 < whole,
+        "the hidden half casts nothing: {half} vs {whole}"
+    );
+    assert_eq!(
+        blue_right(&gpu_frame(&renderer, &mut texts, &project, 0)),
+        None,
+        "nothing shows at progress 0"
+    );
+}
+
+#[test]
+fn revealed_text_draws_the_same_on_the_cpu() {
+    let _lock = gpu_test_lock();
+    let project = text_project("", "", &caption_track(REVEAL, r#""Wiped""#));
+    let size = RenderSize::new(160, 90).expect("size");
+    let gpu = gpu_frame(&builtin_renderer(), &mut fixture_texts(), &project, 70_000);
+    let cpu_renderer = alpha2_render::CpuRenderer::new(2);
+    let mut texts = fixture_texts();
+    let frame = project.evaluate(MediaTime(70_000)).expect("frame");
+    texts.prepare(&cpu_renderer, &frame, size).expect("text");
+    let cpu = cpu_renderer
+        .render_frame(size, &frame, &CaptionFrames(&texts))
+        .expect("frame renders")
+        .texture
+        .expect("complete")
+        .read_rgba8();
+    let largest = gpu
+        .iter()
+        .zip(&cpu)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(largest <= 2, "CPU and GPU differ by up to {largest}");
+}
+
+#[test]
+fn text_animator_reveal_golden() {
+    let _lock = gpu_test_lock();
+    let renderer = builtin_renderer();
+    let mut texts = fixture_texts();
+    let project = text_project("", "", &caption_track(REVEAL, r#""Wiped""#));
+    let frames =
+        [30_000, 60_000, 90_000].map(|ticks| gpu_frame(&renderer, &mut texts, &project, ticks));
+    let strip = (0..90)
+        .flat_map(|row| {
+            frames
+                .iter()
+                .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
+        })
+        .collect::<Vec<_>>();
+    assert_golden("text_animator_reveal", (480, 90), &strip, 2);
+}
+
 /// A layout generator whose one text node has `animators`.
 fn animated_layout(animators: &str) -> crate::EngineProject {
     let source = format!(

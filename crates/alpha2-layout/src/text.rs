@@ -1,11 +1,16 @@
 //! Text in a text style: its text host request, its identity, and where it lies on a picture.
 
+use std::borrow::Cow;
+
 use alpha2_media::EmojiPolicy;
-use alpha2_model::{Paint, Rgba, Spread, TextAlign, TextShadow, TextStroke, TextStyle};
+use alpha2_model::{
+    FontStyle, Paint, Rgba, Spread, TextAlign, TextContent, TextShadow, TextStroke, TextStyle,
+};
 use alpha2_text::{
     ShapedText, TextFill, TextGradient, TextGradientKind, TextGradientStop, TextRasterError,
     TextRasterRequest, TextRasterizer, TextSpread,
 };
+use alpha2_time::MediaTime;
 
 use crate::{Baselines, CanvasRect, PictureSize};
 
@@ -41,6 +46,117 @@ pub struct TextBounds {
     pub truncated: bool,
     /// Whether the drawn text still splits a word or is taller than `max_height`.
     pub overflow: bool,
+    /// The most the text's animators can widen its advances; its lines break at `max_width`
+    /// over this ([`alpha2_eval::advance_headroom`]).
+    pub advance_headroom: f32,
+}
+
+/// A text at a time since its holder started (a caption cue's start, a text generator's picture
+/// time), which samples its runs' keyframed `font_scale`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextAt<'a> {
+    /// The text, a string or runs.
+    pub content: Cow<'a, TextContent>,
+    /// When.
+    pub time: MediaTime,
+}
+
+impl<'a> TextAt<'a> {
+    /// `content` at `time`.
+    #[must_use]
+    pub const fn new(content: &'a TextContent, time: MediaTime) -> Self {
+        Self {
+            content: Cow::Borrowed(content),
+            time,
+        }
+    }
+
+    /// Each run's `font_scale` at the time, 1 for a run without one.
+    #[must_use]
+    pub fn scales(&self) -> Vec<f32> {
+        self.content
+            .runs()
+            .iter()
+            .map(|run| {
+                run.style
+                    .as_ref()
+                    .and_then(|style| style.font_scale.as_ref())
+                    .map_or(1.0, |scale| {
+                        alpha2_eval::sample_scalar(
+                            scale,
+                            self.time,
+                            &alpha2_eval::SampleContext::NONE,
+                        )
+                        .clamp(
+                            *alpha2_model::FONT_SCALE_RANGE.start(),
+                            *alpha2_model::FONT_SCALE_RANGE.end(),
+                        )
+                    })
+            })
+            .collect()
+    }
+}
+
+impl From<&str> for TextAt<'static> {
+    fn from(text: &str) -> Self {
+        Self {
+            content: Cow::Owned(TextContent::from(text)),
+            time: MediaTime::ZERO,
+        }
+    }
+}
+
+/// The text host spans of `text` in `style` at `font_size` pixels: one per run, each run's style
+/// applied over `style` and its size `font_size` times its sampled `font_scale`; none when no run
+/// has a style and `style` is upright and undecorated, so such a request is a plain one.
+#[must_use]
+pub fn text_spans(
+    text: &TextAt<'_>,
+    style: &TextStyle,
+    font_size: f32,
+) -> Vec<alpha2_text::TextSpan> {
+    let content = &*text.content;
+    let base_plain = style.font_style.is_normal() && !style.underline && !style.line_through;
+    if base_plain && !content.has_run_styles() {
+        return Vec::new();
+    }
+    let span = |bytes: std::ops::Range<usize>,
+                run: Option<&alpha2_model::TextRunStyle>,
+                scale: f32| {
+        let merged = run.map_or_else(|| Cow::Borrowed(style), |run| Cow::Owned(run.apply(style)));
+        let size = (font_size * scale).clamp(f32::MIN_POSITIVE, MAX_FONT_PIXELS);
+        alpha2_text::TextSpan {
+            bytes,
+            font_family: merged.font_family.clone(),
+            font_weight: merged.font_weight,
+            font_style: match merged.font_style {
+                FontStyle::Normal => alpha2_text::FontStyle::Normal,
+                FontStyle::Italic => alpha2_text::FontStyle::Italic,
+                FontStyle::Oblique => alpha2_text::FontStyle::Oblique,
+            },
+            font_size: size,
+            letter_spacing: merged.letter_spacing * size,
+            fill: text_fill(&merged.fill),
+            strokes: stroke_pixels(&merged.strokes, size),
+            background_color: run.and_then(|run| run.background_color).map(rgba8),
+            underline: merged.underline,
+            line_through: merged.line_through,
+        }
+    };
+    if content.runs().is_empty() {
+        return vec![span(0..content.len(), None, 1.0)];
+    }
+    let mut start = 0;
+    content
+        .runs()
+        .iter()
+        .zip(text.scales())
+        .map(|(run, scale)| {
+            let bytes = start..start + run.text.len();
+            start = bytes.end;
+            span(bytes, run.style.as_ref(), scale)
+        })
+        .collect()
 }
 
 /// A layout text's raster request, shadows and animators hashed as a text store key
@@ -126,6 +242,11 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         letter_spacing,
         font_weight,
         clamp,
+        spans,
+        advance_headroom,
+        animator_grouping,
+        animator_pivot,
+        highlight,
     } = request;
     feed(text.as_bytes());
     feed(&[0xff]);
@@ -155,7 +276,7 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
     if let Some(background) = background {
         feed(&[0xfb]);
         feed(&background.color);
-        feed(&background.padding.to_bits().to_le_bytes());
+        feed_box_shape(feed, background);
     }
     // The default policy feeds nothing, so keys of requests that never set it stay as they were.
     match emoji_policy {
@@ -169,6 +290,132 @@ fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
         feed(&clamp.max_height.to_bits().to_le_bytes());
         feed(clamp.ellipsis.as_deref().unwrap_or_default().as_bytes());
         feed(&[0xff, u8::from(clamp.ellipsis.is_some())]);
+    }
+    feed_spans(feed, spans);
+    if *advance_headroom > 1.0 {
+        feed(&[0xf8]);
+        feed(&advance_headroom.to_bits().to_le_bytes());
+    }
+    feed_motion(feed, *animator_grouping, *animator_pivot);
+    if let Some(highlight) = highlight {
+        feed(&[0xee]);
+        feed(&highlight.look.color);
+        feed_box_shape(feed, &highlight.look);
+        feed_count(feed, highlight.steps.len());
+        for (bytes, progress) in &highlight.steps {
+            feed(&bytes.start.to_le_bytes());
+            feed(&bytes.end.to_le_bytes());
+            feed(&progress.to_bits().to_le_bytes());
+        }
+    }
+}
+
+/// Feeds a grouping and pivot other than the default's.
+fn feed_motion(
+    feed: &mut impl FnMut(&[u8]),
+    grouping: alpha2_text::ClusterGrouping,
+    pivot: [f32; 2],
+) {
+    if grouping != alpha2_text::ClusterGrouping::Character
+        || pivot.map(f32::to_bits) != [0.5_f32.to_bits(); 2]
+    {
+        feed(&[0xf7]);
+        feed(&[grouping as u8]);
+        for value in pivot {
+            feed(&value.to_bits().to_le_bytes());
+        }
+    }
+}
+
+/// The grouping of `grouping` in the text host's terms.
+#[must_use]
+pub const fn cluster_grouping(
+    grouping: alpha2_model::AnimatorGrouping,
+) -> alpha2_text::ClusterGrouping {
+    match grouping {
+        alpha2_model::AnimatorGrouping::Character => alpha2_text::ClusterGrouping::Character,
+        alpha2_model::AnimatorGrouping::Word => alpha2_text::ClusterGrouping::Word,
+        alpha2_model::AnimatorGrouping::Line => alpha2_text::ClusterGrouping::Line,
+        alpha2_model::AnimatorGrouping::All => alpha2_text::ClusterGrouping::All,
+    }
+}
+
+fn feed_spans(feed: &mut impl FnMut(&[u8]), spans: &[alpha2_text::TextSpan]) {
+    if spans.is_empty() {
+        return;
+    }
+    feed(&[0xf8]);
+    feed(&spans.len().to_le_bytes());
+    for span in spans {
+        let alpha2_text::TextSpan {
+            bytes,
+            font_family,
+            font_weight,
+            font_style,
+            font_size,
+            letter_spacing,
+            fill,
+            strokes,
+            background_color,
+            underline,
+            line_through,
+        } = span;
+        feed(&bytes.start.to_le_bytes());
+        feed(&bytes.end.to_le_bytes());
+        feed(font_family.as_deref().unwrap_or_default().as_bytes());
+        feed(&[0xff, u8::from(font_family.is_some())]);
+        feed(&font_weight.to_le_bytes());
+        feed(&[*font_style as u8]);
+        feed(&font_size.to_bits().to_le_bytes());
+        feed(&letter_spacing.to_bits().to_le_bytes());
+        match fill {
+            TextFill::Solid(color) => feed(color),
+            TextFill::Gradient(gradient) => feed_text_gradient(feed, gradient),
+        }
+        feed_count(feed, strokes.len());
+        for stroke in strokes {
+            feed(&stroke.color);
+            feed(&stroke.width.to_bits().to_le_bytes());
+        }
+        match background_color {
+            Some(color) => {
+                feed(&[1]);
+                feed(color);
+            }
+            None => feed(&[0]),
+        }
+        feed(&[u8::from(*underline), u8::from(*line_through)]);
+    }
+}
+
+/// Feeds a box's padding (one side alone when all four are the same, as the single padding
+/// keyed before), radius and border, the last two only when set.
+fn feed_box_shape(feed: &mut impl FnMut(&[u8]), background: &alpha2_text::TextBackground) {
+    let padding = background.padding;
+    let [top, right, bottom, left] = padding.map(f32::to_bits);
+    if top == right && top == bottom && top == left {
+        feed(&padding[0].to_bits().to_le_bytes());
+    } else {
+        feed(&[0xf7]);
+        for side in padding {
+            feed(&side.to_bits().to_le_bytes());
+        }
+    }
+    if background.radius != 0.0 {
+        feed(&[0xf6]);
+        feed(&background.radius.to_bits().to_le_bytes());
+    }
+    if let Some(border) = &background.border {
+        feed(&[0xf5]);
+        feed(&border.width.to_bits().to_le_bytes());
+        feed(&border.color);
+        if let Some(dash) = &border.dash {
+            feed_count(feed, dash.pattern.len());
+            for entry in &dash.pattern {
+                feed(&entry.to_bits().to_le_bytes());
+            }
+            feed(&dash.offset.to_bits().to_le_bytes());
+        }
     }
 }
 
@@ -228,10 +475,11 @@ fn feed_look(feed: &mut impl FnMut(&[u8]), strokes: &[TextStroke], shadows: &[Te
     }
 }
 
-/// A text's identity at a render size: the text, its style and the size, hashed with FNV-1a.
-/// Never zero.
+/// A text's identity at a render size: the text, its runs' styles and sampled scales, its style
+/// and the size, hashed with FNV-1a. A text without run styles keys as its plain string. Never
+/// zero.
 #[must_use]
-pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
+pub fn text_key(text: &TextAt<'_>, style: &TextStyle, size: PictureSize) -> u64 {
     // No `..`: a new field must decide whether it is part of the key.
     let TextStyle {
         font_family,
@@ -240,6 +488,9 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         line_height,
         letter_spacing,
         font_weight,
+        font_style,
+        underline,
+        line_through,
         align,
         max_width,
         max_height,
@@ -250,8 +501,11 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         strokes,
         shadows,
         background,
+        highlight,
         // `animated_text_key` adds the sampled animators.
         animators: _,
+        animator_grouping,
+        animator_pivot,
     } = style;
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut feed = |bytes: &[u8]| {
@@ -259,7 +513,7 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
             hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
         }
     };
-    feed(text.as_bytes());
+    feed(text.content.text().as_bytes());
     feed(&[0xff]);
     // Family names cannot hold 0xff (they are UTF-8), so the text and family stay apart.
     feed(font_family.as_deref().unwrap_or_default().as_bytes());
@@ -286,28 +540,37 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
     feed_look(&mut feed, strokes, shadows);
     match background {
         Some(background) => {
+            let unit = text_background(background, 1.0);
             feed(&[1]);
-            feed(&rgba8(background.color));
-            feed(&background.padding.to_bits().to_le_bytes());
+            feed(&unit.color);
+            feed_box_shape(&mut feed, &unit);
         }
         None => feed(&[0]),
     }
     // Only fields that are set are fed.
-    if let Some(height) = max_height {
-        feed(&[0xf0]);
-        feed(&height.to_bits().to_le_bytes());
+    feed_fit(&mut feed, *max_height, *font_size_fit, line_clamp.as_ref());
+    if !font_style.is_normal() {
+        feed(&[0xf3, *font_style as u8]);
     }
-    if let Some(fit) = font_size_fit {
-        feed(&[0xf1]);
-        feed(&fit.min.to_bits().to_le_bytes());
-        feed(&fit.max.unwrap_or(-1.0).to_bits().to_le_bytes());
+    if *underline || *line_through {
+        feed(&[0xf4, u8::from(*underline), u8::from(*line_through)]);
     }
-    if let Some(clamp) = line_clamp {
-        feed(&[0xf2]);
-        feed(&clamp.max_lines.unwrap_or(0).to_le_bytes());
-        feed(clamp.block_ellipsis.text().unwrap_or_default().as_bytes());
-        feed(&[0xff, u8::from(clamp.block_ellipsis.text().is_some())]);
+    if text.content.has_run_styles() {
+        feed_spans(&mut feed, &text_spans(text, style, 1.0));
     }
+    if let Some(highlight) = highlight {
+        feed_highlight(&mut feed, highlight);
+    }
+    let headroom = advance_headroom(text, style);
+    if headroom > 1.0 {
+        feed(&[0xf8]);
+        feed(&headroom.to_bits().to_le_bytes());
+    }
+    feed_motion(
+        &mut feed,
+        cluster_grouping(*animator_grouping),
+        [animator_pivot.x, animator_pivot.y],
+    );
     feed(&size.width().to_le_bytes());
     feed(&size.height().to_le_bytes());
     hash.max(1)
@@ -321,13 +584,66 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
 ///
 /// # Errors
 /// Returns the text host's refusal: no fonts, or a style out of range.
-#[allow(clippy::cast_precision_loss)]
 pub fn measure_text(
     rasterizer: &TextRasterizer,
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
 ) -> Result<TextBounds, TextRasterError> {
+    let placed = place(rasterizer, text, style, size)?;
+    let shaped = rasterizer.shape(&placed.request)?;
+    let boxed = style_lines(&shaped, style, size, &placed.request);
+    let measure = &placed.measure;
+    let height = placed.canvas[1];
+    Ok(TextBounds {
+        layout: placed.layout,
+        content: placed.rect(measure.content),
+        ink: measure.ink.map(|ink| placed.rect(ink)),
+        line_count: measure.line_count,
+        baselines: Baselines {
+            first: (placed.origin[1] + measure.first_baseline) / height,
+            last: (placed.origin[1] + measure.last_baseline) / height,
+        },
+        font_size: placed.font_size,
+        truncated: measure.truncated,
+        overflow: boxed.overflow,
+        advance_headroom: placed.request.advance_headroom,
+    })
+}
+
+/// A text's request at its fitted size, its measure, and where its layout box lies.
+pub(crate) struct Placed {
+    pub(crate) request: TextRasterRequest,
+    pub(crate) measure: alpha2_text::TextMeasure,
+    /// The layout box's top-left corner on the canvas, in pixels.
+    pub(crate) origin: [f32; 2],
+    pub(crate) canvas: [f32; 2],
+    pub(crate) layout: CanvasRect,
+    pub(crate) font_size: f32,
+}
+
+impl Placed {
+    /// A rectangle of the layout box, in pixels, on the canvas in fractions.
+    pub(crate) fn rect(&self, [left, top, right, bottom]: [f32; 4]) -> CanvasRect {
+        CanvasRect {
+            left: (self.origin[0] + left) / self.canvas[0],
+            top: (self.origin[1] + top) / self.canvas[1],
+            right: (self.origin[0] + right) / self.canvas[0],
+            bottom: (self.origin[1] + bottom) / self.canvas[1],
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "picture sides are far below 2^24"
+)]
+pub(crate) fn place(
+    rasterizer: &TextRasterizer,
+    text: &TextAt<'_>,
+    style: &TextStyle,
+    size: PictureSize,
+) -> Result<Placed, TextRasterError> {
     let fitted = fit_text(text, style, size, |request| {
         rasterizer.shape(request).map(std::sync::Arc::new)
     })?;
@@ -339,36 +655,35 @@ pub fn measure_text(
         fitted.font_pixels,
     );
     let measure = rasterizer.measure(&request)?;
-    let shaped = rasterizer.shape(&request)?;
-    let boxed = style_lines(&shaped, style, size, &request);
     let (width, height) = (size.width() as f32, size.height() as f32);
-    let margin = measure.decoration_margin as f32;
+    let [margin_x, margin_y] = measure.decoration_margin.map(|margin| margin as f32);
     let (box_width, box_height) = (measure.box_width as f32, measure.box_height as f32);
     // The layout box's top-left corner on the canvas. The anchor of the decorated box lies at the
     // position, as `text_placement` places the texture.
     let origin = [
-        style.position.x * width - style.anchor.x * (box_width + 2.0 * margin) + margin,
-        style.position.y * height - style.anchor.y * (box_height + 2.0 * margin) + margin,
+        style.position.x * width - style.anchor.x * (box_width + 2.0 * margin_x) + margin_x,
+        style.position.y * height - style.anchor.y * (box_height + 2.0 * margin_y) + margin_y,
     ];
-    let rect = |[left, top, right, bottom]: [f32; 4]| CanvasRect {
-        left: (origin[0] + left) / width,
-        top: (origin[1] + top) / height,
-        right: (origin[0] + right) / width,
-        bottom: (origin[1] + bottom) / height,
-    };
-    Ok(TextBounds {
-        layout: rect([-margin, -margin, box_width + margin, box_height + margin]),
-        content: rect(measure.content),
-        ink: measure.ink.map(rect),
-        line_count: measure.line_count,
-        baselines: Baselines {
-            first: (origin[1] + measure.first_baseline) / height,
-            last: (origin[1] + measure.last_baseline) / height,
+    let mut placed = Placed {
+        request,
+        measure,
+        origin,
+        canvas: [width, height],
+        layout: CanvasRect {
+            left: 0.0,
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
         },
         font_size: fitted.font_size,
-        truncated: measure.truncated,
-        overflow: boxed.overflow,
-    })
+    };
+    placed.layout = placed.rect([
+        -margin_x,
+        -margin_y,
+        box_width + margin_x,
+        box_height + margin_y,
+    ]);
+    Ok(placed)
 }
 
 /// The height in pixels of `style`'s box on a picture of `size`, zero for none.
@@ -388,7 +703,7 @@ fn style_lines(
 ) -> crate::fit::BoxedLines {
     crate::fit::boxed_lines(
         shaped,
-        request.max_width,
+        request.wrap_width(),
         box_height(style, size),
         style.line_clamp.as_ref().and_then(|clamp| clamp.max_lines),
         style.line_clamp.is_some(),
@@ -404,7 +719,7 @@ fn style_lines(
 /// # Errors
 /// Returns the first refusal of `shape`.
 pub fn fit_text<S: std::ops::Deref<Target = ShapedText>>(
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
     mut shape: impl FnMut(&TextRasterRequest) -> Result<S, TextRasterError>,
@@ -433,7 +748,7 @@ pub fn rgba8(color: Rgba) -> [u8; 4] {
 /// `key`. Sizes are scaled from canvas fractions to pixels and clamped to what the host draws.
 #[must_use]
 pub fn text_request(
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
     key: u64,
@@ -445,14 +760,15 @@ pub fn text_request(
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn text_request_at(
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
     key: u64,
     font_size: f32,
 ) -> TextRasterRequest {
+    let spans = text_spans(text, style, font_size);
     TextRasterRequest {
-        text: text.to_owned(),
+        text: text.content.text().into_owned(),
         font_size,
         max_width: (style.max_width * size.width() as f32).max(1.0),
         line_height: style.line_height,
@@ -465,13 +781,14 @@ pub fn text_request_at(
         emoji_policy: EmojiPolicy::Color,
         content_version: key,
         strokes: stroke_pixels(&style.strokes, font_size),
-        split_background: !style.shadows.is_empty() && style.background.is_some(),
+        split_background: !style.shadows.is_empty()
+            && (style.background.is_some()
+                || style.highlight.is_some()
+                || spans.iter().any(|span| span.background_color.is_some())),
         background: style
             .background
-            .map(|background| alpha2_text::TextBackground {
-                color: rgba8(background.color),
-                padding: (background.padding * font_size).clamp(0.0, MAX_PADDING_PIXELS),
-            }),
+            .as_ref()
+            .map(|background| text_background(background, font_size)),
         font_family: style.font_family.clone(),
         letter_spacing: style.letter_spacing * font_size,
         font_weight: style.font_weight,
@@ -479,6 +796,122 @@ pub fn text_request_at(
             .line_clamp
             .as_ref()
             .map(|clamp| crate::fit::text_clamp(clamp, box_height(style, size))),
+        spans,
+        advance_headroom: advance_headroom(text, style),
+        animator_grouping: cluster_grouping(style.animator_grouping),
+        animator_pivot: [style.animator_pivot.x, style.animator_pivot.y],
+        highlight: style.highlight.as_ref().and_then(|highlight| {
+            let steps =
+                crate::text_animation::highlight_steps(text.content.runs(), text.time, highlight);
+            (!steps.is_empty()).then(|| alpha2_text::TextHighlightRequest {
+                look: highlight_look(highlight, font_size),
+                steps,
+            })
+        }),
+    }
+}
+
+/// Feeds a style's box height, fit and clamp, each only when set.
+fn feed_fit(
+    feed: &mut impl FnMut(&[u8]),
+    max_height: Option<f32>,
+    font_size_fit: Option<alpha2_model::FontSizeFit>,
+    line_clamp: Option<&alpha2_model::LineClamp>,
+) {
+    if let Some(height) = max_height {
+        feed(&[0xf0]);
+        feed(&height.to_bits().to_le_bytes());
+    }
+    if let Some(fit) = font_size_fit {
+        feed(&[0xf1]);
+        feed(&fit.min.to_bits().to_le_bytes());
+        feed(&fit.max.unwrap_or(-1.0).to_bits().to_le_bytes());
+    }
+    if let Some(clamp) = line_clamp {
+        feed(&[0xf2]);
+        feed(&clamp.max_lines.unwrap_or(0).to_le_bytes());
+        feed(clamp.block_ellipsis.text().unwrap_or_default().as_bytes());
+        feed(&[0xff, u8::from(clamp.block_ellipsis.text().is_some())]);
+    }
+}
+
+/// Feeds `highlight`'s look at a one-pixel font and its timing.
+fn feed_highlight(feed: &mut impl FnMut(&[u8]), highlight: &alpha2_model::TextHighlight) {
+    let unit = highlight_look(highlight, 1.0);
+    feed(&[0xee]);
+    feed(&unit.color);
+    feed_box_shape(feed, &unit);
+    feed(&highlight.transition.ticks().to_le_bytes());
+    match highlight.easing {
+        alpha2_model::Easing::Linear => feed(&[0]),
+        alpha2_model::Easing::CubicBezier(curve) => {
+            feed(&[1]);
+            for value in [curve.x1, curve.y1, curve.x2, curve.y2] {
+                feed(&value.to_bits().to_le_bytes());
+            }
+        }
+    }
+    feed(&[highlight.gap as u8]);
+}
+
+/// `highlight`'s box look in pixels of a `font_size`-pixel font, as [`text_background`] sizes a
+/// background.
+#[must_use]
+pub fn highlight_look(
+    highlight: &alpha2_model::TextHighlight,
+    font_size: f32,
+) -> alpha2_text::TextBackground {
+    text_background(
+        &alpha2_model::TextBackground {
+            color: highlight.color,
+            padding: highlight.padding,
+            radius: highlight.radius,
+            border: highlight.border.clone(),
+            extent: alpha2_model::TextBoxExtent::Line,
+        },
+        font_size,
+    )
+}
+
+/// The most `style`'s animators can widen an advance of `text` ([`alpha2_eval::advance_headroom`]).
+#[must_use]
+pub fn advance_headroom(text: &TextAt<'_>, style: &TextStyle) -> f32 {
+    if style.animators.is_empty() {
+        1.0
+    } else {
+        alpha2_eval::advance_headroom(&style.animators, text.content.runs())
+    }
+}
+
+/// `background` in pixels of a `font_size`-pixel font, padding clamped to what the host draws.
+#[must_use]
+pub fn text_background(
+    background: &alpha2_model::TextBackground,
+    font_size: f32,
+) -> alpha2_text::TextBackground {
+    alpha2_text::TextBackground {
+        color: rgba8(background.color),
+        padding: background
+            .padding
+            .sides()
+            .map(|side| (side * font_size).clamp(0.0, MAX_PADDING_PIXELS)),
+        radius: background.radius * font_size,
+        border: background
+            .border
+            .as_ref()
+            .map(|border| alpha2_text::TextBoxBorder {
+                width: border.width * font_size,
+                color: rgba8(border.color),
+                dash: border.dash.as_ref().map(|dash| alpha2_text::TextBoxDash {
+                    pattern: dash.pattern.iter().map(|entry| entry * font_size).collect(),
+                    offset: dash.offset * font_size,
+                }),
+            }),
+        extent: match background.extent {
+            alpha2_model::TextBoxExtent::Line => alpha2_text::BoxExtent::Line,
+            alpha2_model::TextBoxExtent::Revealed => alpha2_text::BoxExtent::Revealed,
+            alpha2_model::TextBoxExtent::Block => alpha2_text::BoxExtent::Block,
+        },
     }
 }
 
@@ -652,8 +1085,8 @@ pub fn animated_text_key(
     size: PictureSize,
     time: alpha2_time::MediaTime,
 ) -> u64 {
-    let key = text_key(&content.text(), style, size);
-    if style.animators.is_empty() {
+    let key = text_key(&TextAt::new(content, time), style, size);
+    if style.animators.is_empty() && style.highlight.is_none() {
         return key;
     }
     let mut hash = key;
@@ -662,6 +1095,18 @@ pub fn animated_text_key(
             hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
         }
     };
+    if let Some(highlight) = &style.highlight {
+        let steps = crate::text_animation::highlight_steps(content.runs(), time, highlight);
+        feed(&[0xee]);
+        feed_count(&mut feed, steps.len());
+        for (bytes, progress) in &steps {
+            feed(&bytes.start.to_le_bytes());
+            feed(&progress.to_bits().to_le_bytes());
+        }
+    }
+    if style.animators.is_empty() {
+        return hash.max(1);
+    }
     feed(&[0xfa]);
     let mut stable = alpha2_geometry::StableHash::new();
     alpha2_eval::hash_sampled_animators(
@@ -689,7 +1134,7 @@ pub fn animated_text_key(
 /// `font_size` pixels ([`fit_text`]), with content version `key`.
 #[must_use]
 pub fn text_draw(
-    text: &str,
+    text: &TextAt<'_>,
     style: &TextStyle,
     size: PictureSize,
     key: u64,

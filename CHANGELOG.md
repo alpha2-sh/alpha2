@@ -2,6 +2,187 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Breaking:** a composition `key_mix` node replaces its `backdrop` by its `input` by its
+  `opacity` times its `mask`'s alpha (`(1 - k) backdrop + k input`, the whole picture when `mask`
+  is unconnected); bypassed, it passes the backdrop through. Hosts and engines of 0.7.x refuse
+  documents that use it.
+- **Breaking:** adjustment layers. A source of kind `adjustment` (an id and its kind, nothing
+  else) backs clips on video tracks that have no picture of their own. Such a clip draws its
+  composition with its `clip` nodes reading everything composited beneath it (lower tracks with
+  their transitions, and captions on earlier tracks, over the project background), meets the
+  result with that scene by its blend mode, and mixes it in by its opacity over the frame, cut by
+  its masks and placed by its transform, which move the area it affects and never the scene. An
+  adjustment with no effect or at opacity 0 leaves every byte as it was. It takes no matte and is
+  no clip's matte, and a transition from or to it is `alpha2.transition.fade`, run on the composed
+  scenes. Hosts and engines of 0.7.x refuse documents that use it.
+- Compose `adjustment` node (`effects`, `opacity`, `blend`, `at`, `duration`; `Adjustment` in the
+  Python builder): in a sequence or an overlay it is an adjustment clip over everything before
+  it; in a `group` it adjusts only the children before it. Wrapped in a `mask`, its outlines
+  limit it; it takes no `matte`.
+- `alpha2.transcribe` 1.1.0 runs whisper.cpp on the GPU on Apple silicon (Metal), about 1.2x to
+  2.6x faster there by model size. A new param `device` (`auto`, the default, or `cpu`) turns it
+  off. Words and times can differ from the CPU's in a fraction of a percent of words, as they do
+  between CPUs. A model file whisper.cpp refuses after the plugin's own check accepted it no longer
+  leaves its buffers allocated, which with Metal made the process abort when it exited.
+- `ExtractResult.sourceDecode`: how the browser decoded each source of an extraction.
+- `scripts/sign-macos-host.sh` signs an unpacked macOS archive for an application with its own
+  identity (every library, then the programs, hardened runtime, timestamp), verifies the signatures
+  and checks that the host answers `capabilities`. `release/macos/` holds the two supported
+  entitlement sets (library validation on; `disable-library-validation` on the host), and
+  `docs/native.md` describes the procedure and what each set means for replacing the FFmpeg
+  libraries and for Cisco's OpenH264. Release archives stay ad hoc signed.
+- A text style's `background` takes `padding` per side (a number as before, a CSS shorthand string
+  of one to four numbers such as `"0.1 0.3"`, or `{ top, right, bottom, left }`, each 0 to 2 font
+  sizes), a corner `radius` (0 to 2 font sizes, capped at half the box's shorter side) and a
+  `border` (`width` up to 0.5 font sizes, `color`, and a `dash` of 1 to 16 lengths with an
+  `offset`, as SVG `stroke-dasharray`) drawn inside the box and hidden where another line's box
+  covers it. A number padding draws the same box as in 0.7.x; hosts and engines of 0.7.x refuse
+  documents that use the new fields.
+- Text animators: `advance_follows_scale` makes a character's advance follow its animator's
+  horizontal scale, pushing the rest of its line apart (After Effects' Scale with Tracking,
+  computed exactly), the line re-aligned and never re-broken; a scale below 1 pulls the others
+  in. Text styles, caption style patches and layout nodes (`text_animator_grouping`,
+  `text_animator_pivot`) gain `animator_grouping` (`character`, the default, `word`, `line`,
+  `all`, as After Effects' Anchor Point Grouping) and `animator_pivot` (`{ x, y }` fractions of
+  each group's box, as CSS `transform-origin`; `{ x: 0.5, y: 0.8 }` is the baseline's centre).
+  A text with a pushing animator wraps, fits and clamps at its width over the largest factor its
+  animators can widen an advance by, so its lines fit at their largest moment; text and layout
+  measurements report it as `advanceHeadroom`. `WasmTextRasterizer.rasterize` takes
+  `advanceHeadroom`, `animatorGrouping`, `animatorPivot` and a cluster state's `advanceScale`.
+  Hosts and engines of 0.7.x refuse documents that use these, the `reveal`, the box `extent` and
+  the `highlight` below.
+- Text animators: `reveal` (`progress`, `angle_degrees`, `feather`) wipes each unit in along a
+  straight edge, as a linear wipe: across the character, word, line or whole text that
+  `animator_grouping` makes the unit, in the unit's own frame so the edge scales and turns with
+  it. A unit selected by `w` shows `1 + w (progress - 1)` of itself, 0 hiding it and 1 showing it
+  whole exactly. Fill, strokes, decorations and color glyphs are cut alike, shadows follow from
+  the revealed glyphs, and background boxes are not cut. Several reveals intersect.
+  `WasmTextRasterizer.rasterize` takes a cluster state's `reveals`.
+- A text style's `background` takes `extent`: `line` (the default), `revealed` (from each
+  line's first to its last revealed character that is not white space, so a typewriter's box
+  grows with it; run backgrounds then show only behind revealed characters) or `block` (one box
+  over the whole layout box, `max_width` wide). A character is revealed while it is shown, not
+  scaled to nothing and not hidden by a reveal.
+- Text styles and caption style patches gain `highlight` (`color`, `padding`, `radius`,
+  `border` as a background's, `transition` up to 10 s, `easing`, `gap`: `hold` or `hide`): a
+  box over the timed run being said that slides from run to run, drawn over the background and
+  under the glyphs. Lint `highlight_without_timed_runs` reports one over a text without timed
+  runs. `WasmTextRasterizer.rasterize` takes a `highlight` with `steps` (`{ run, progress }`)
+  and a background `extent`.
+- `WasmTextMeasurer.layoutText`, Python `TextMeasurer.text_layout` and Rust
+  `alpha2_layout::text_layout`: where a text generator's lines, words and grapheme clusters lie
+  (boxes, em boxes, baselines, ink and font sizes, in canvas fractions), at the fitted size and
+  after the clamp, before animators. Cluster ranges count UTF-16 code units in JavaScript, code
+  points in Python and bytes in Rust.
+- `WasmTextRasterizer.rasterize`'s `background` takes `padding` as four sides, `radius` and
+  `border`.
+
+### Changed
+
+- **Breaking:** text runs carry a style (rich text). A run's `style` sets its own `font_family`,
+  `font_weight`, `font_style`, `font_scale` (its size as a multiple of the text's font size, from
+  0.1 to 10, keyframes in the holder's time), `letter_spacing`, `fill`, `strokes`,
+  `background_color`, `underline` and `line_through` over its caption cue's, text generator's or
+  layout node's style, as a CSS inline box does. Runs of another face, size or spacing are shaped
+  apart with their neighbours as context and wrap with the rest; each line is as tall as its
+  largest run (CSS 2.1 10.8), at least the text's own size, and a keyframed `font_scale` lays the
+  text out again as it changes. Text styles and caption style patches gain `font_style`
+  (`normal`, `italic`, `oblique`), `underline` and `line_through`. Faces match style before
+  weight (CSS Fonts 4); a face without italics is slanted by 14 degrees, color emoji stay upright.
+  Decorations take the font's own position and thickness. A text draws in at most 16
+  `(family, weight, style)` selections. A layout node's `text` is a string or runs, whose runs take
+  a static `style` only. Hosts and engines of 0.7.x refuse documents that use any of these.
+- **Breaking:** a text holds up to 8 strokes (was 4, still at most 0.5 font sizes together) and
+  every gradient up to 16 stops (was 8), in text, shapes, fills and layouts.
+- **Breaking:** imported WebVTT and SRT `<b>`, `<i>` and `<u>` are drawn bold, italic and
+  underlined, as WebVTT applies CSS to them; the runs keep their `b`, `i` and `u` classes.
+- A text's background boxes and run backgrounds follow its characters where tracking (and an
+  animator's push) place them: a tracked line's box grows with the line and re-aligns with it,
+  where it kept the line's untracked extent before.
+- **Breaking:** `WasmTextRasterizer.rasterize` takes `runs` (text with per-run family, weight,
+  style, pixel size, letter spacing, fill, strokes, background color and decorations) in place of
+  `text`, and a `clamp`; a request with both or neither of `text` and `runs` is refused.
+- **Breaking:** `alpha2-host --renderer gpu` (`ALPHA2_RENDERER=gpu`, the clients' `renderer: "gpu"`)
+  no longer renders on a software adapter (lavapipe, llvmpipe, WARP, SwiftShader) unless
+  `ALPHA2_GPU_ADAPTER` pins it. Without a hardware adapter the host does not start: it fails with
+  `GPU_INIT_FAILED`, now a permanent failure (class `INVALID_INPUT`), naming every adapter it saw
+  with its backend and whether it is a software one, and the two remedies (`--renderer cpu`, or the
+  pin); `details.adapterChoice` carries the records, with the new reason `no-hardware-adapter`.
+  Results and `capabilities.gpu` report `softwareAdapter`. `auto` is unchanged.
+- An export that pins an encoder taking GPU frames only (`h264_vulkan`, `h264_d3d12va`) on a host
+  whose shared device was not made fails with `GPU_OUTPUT_UNAVAILABLE` naming that device and why
+  it was not made, instead of `INVALID_INPUT` "video encoder ... is unavailable".
+- **Breaking:** the capability report (`alpha2-capabilities`) is version 3 and names the engine's
+  `release` and the project `schema_version` it reads (`projectSchemaVersion`), in the native host
+  and in the browser. The host's `state` details and `status` result add `projectSchemaVersion`
+  beside `hostVersion`. Packages and the host still work together only within one release; the
+  host protocol document and the `alpha2`, `@alpha2-sh/node` and `@alpha2-sh/editor` READMEs now
+  state that policy.
+- **Breaking:** an extraction's progress says which part of the run it is in and how far each pass
+  has read by time. Every report has `stage` (`begin`, `pass` or `end`) and the pass's `covered`
+  and `span` in ticks, so a pass over source frames, whose `total` is `null`, has a fraction too. A
+  report is now also sent before the extractor's `begin`, when each pass begins and before its
+  `end`; a consumer that took every report for a delivery must read `stage`. This holds for
+  `runExtractor`, the host protocol, `@alpha2-sh/node` (`ExtractProgress`) and the Python client
+  (`ExtractProgress`, now with `stage`, `covered` and `span`). In Rust, `PassProgress` has `span`
+  and `covered` and is `#[non_exhaustive]`, and `ExtractSession::stage` and `progress_json` are
+  new.
+- `alpha2-host serve`, `export` and `conform` take `--media-origins none|<https origins>` (default
+  `none`) and `--media-private-addresses refuse|allow` (default `refuse`), the origins remote media
+  may be read from and whether an address that is not global unicast may be connected to; no
+  request can widen them. `capabilities` reports them as `remoteMedia`. New protocol codes
+  `MEDIA_REFUSED`, `MEDIA_TLS_FAILED`, `MEDIA_UNREACHABLE`, `MEDIA_BUSY` (with `retryAfterMs`),
+  `MEDIA_RANGE_UNSUPPORTED`, `MEDIA_REJECTED` and `MEDIA_CHANGED`, each with `details.source`,
+  `details.url` (without user info, query or fragment) and `details.status` when the server
+  answered.
+- `alpha2-host` reads an `https:` URL in a request's `assets` or `resources` by byte range from an
+  origin `--media-origins` lists, without downloading the file first: signed object-store URLs
+  work as they are. The server must answer ranges with a numeric total and name a strong `ETag` or
+  a `Last-Modified`, which every later range sends back, so a file that changes during a request
+  fails it (`MEDIA_CHANGED`) instead of mixing versions. Redirects are followed only to listed
+  origins, a `404` or `410` at the first request conforms `offline`, transient failures are tried
+  again, and a read with no byte for 30 seconds fails (`MEDIA_UNREACHABLE`); such a wait is never
+  taken for a stalled decoder. New request fields `memory.remoteCacheBytes` (the per-request block
+  cache, 64 MiB by default) and `remoteContentHash: "skip" | "verify"` (whether a remote original
+  whose project records a hash is read whole and hashed; `--remote-content-hash` on the command
+  line), and `performance` counters `remoteBytes`, `remoteRequests`, `remoteRetries` and
+  `remoteReadWaitMs`. The render cache keys a remote source by origin, path, validator and
+  length, so a new signature of the same object is a hit. A `conform` reading a remote source can
+  be cancelled.
+- `@alpha2-sh/node` takes `remoteMedia: { origins, privateAddresses }` and the Python client
+  `remote_media={"origins": [...], "private_addresses": ...}`, passed as `--media-origins` and
+  `--media-private-addresses` to every host they start. `python -m alpha2 mcp` refuses a media URL
+  a tool argument or a spec names as outside its roots, before any host call.
+- **Breaking:** `alpha2-host` reads a value of a request's `assets` or `resources` that starts with
+  `https://` as a URL, and refuses one that starts with `http://` (`INVALID_REQUEST`, "only https:
+  media URLs are read"). A URL there is absolute, at most 8192 bytes, with an ASCII host and no user
+  info; its fragment is dropped. A URL in `proxies`, `frames`, `effectAssets`, `fonts`, an output or
+  `renderCache.directory` is `INVALID_REQUEST`. Under `--media-origins none` every media URL is
+  refused with `MEDIA_REFUSED` before anything is contacted.
+- **Breaking:** `@alpha2-sh/node` and the Python client send a value of `assets` or `resources`
+  that starts with `https://` or `http://` (any case) unchanged, where they made it a path under
+  the working directory; every other value is still resolved against it.
+
+### Fixed
+
+- `runExtractor` failed with a bare WebCodecs `OperationError` on a source whose software decoder
+  the browser lists but cannot open, though the timeline decoded it; it now decodes such a source,
+  and a codec with no software decoder, with the browser's own choice of decoder.
+- `runExtractor` refuses a source no decoder reads with `DECODE_UNAVAILABLE` and its `facts`, frames
+  without planes with `PLANAR_DECODE_UNAVAILABLE`, and a frame that cannot be read back with
+  `FRAME_UNREADABLE`, after two retries.
+- `@alpha2-sh/editor`: a decode refusal keeps its `facts` across the extract worker.
+- `alpha2.transcribe` 1.0.2. Its Windows artifact was built without compiler optimization and
+  transcribed 2x to 7x slower than it should; the build now restores CMake's release flags under
+  MSVC. A window in which whisper.cpp advanced less than 0.16 s aborted the run (`PLUGIN_TRAPPED`,
+  or the host itself under `--plugin-isolation in-process`), for any model; the build now narrows
+  whisper.cpp's DTW median filter there as its development branch does. whisper.cpp's error lines
+  are written as plugin diagnostics.
+
 ## [0.7.0] - 2026-11-26
 
 ### Added

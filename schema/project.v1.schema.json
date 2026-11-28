@@ -534,6 +534,31 @@
         }
       ]
     },
+    "AnimatorGrouping": {
+      "description": "The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point\nGrouping.",
+      "oneOf": [
+        {
+          "const": "character",
+          "description": "Each grapheme cluster about its own pivot.",
+          "type": "string"
+        },
+        {
+          "const": "word",
+          "description": "Each UAX #29 word holding a letter or digit; a cluster in no word is its own group.",
+          "type": "string"
+        },
+        {
+          "const": "line",
+          "description": "Each line.",
+          "type": "string"
+        },
+        {
+          "const": "all",
+          "description": "The whole text.",
+          "type": "string"
+        }
+      ]
+    },
     "AudioEffect": {
       "description": "A serializable single-input audio effect applied to a clip or track bus.\n\nSidechain ducking takes a second input, so it is authored per track through [`Ducking`].",
       "oneOf": [
@@ -2527,6 +2552,26 @@
       ],
       "type": "object"
     },
+    "FontStyle": {
+      "description": "Which faces of a family text prefers, as CSS `font-style`.",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Upright faces, then oblique, then italic.",
+          "type": "string"
+        },
+        {
+          "const": "italic",
+          "description": "Italic faces, then oblique, then upright ones sheared.",
+          "type": "string"
+        },
+        {
+          "const": "oblique",
+          "description": "Oblique faces, then italic, then upright ones sheared.",
+          "type": "string"
+        }
+      ]
+    },
     "FrameRate": {
       "additionalProperties": false,
       "description": "A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).",
@@ -2736,6 +2781,21 @@
         {
           "const": "reject",
           "description": "Refuse to render them.",
+          "type": "string"
+        }
+      ]
+    },
+    "HighlightGap": {
+      "description": "What a highlight does after its run ends, before the next starts.",
+      "oneOf": [
+        {
+          "const": "hold",
+          "description": "Stays on the run until the next starts or its holder ends.",
+          "type": "string"
+        },
+        {
+          "const": "hide",
+          "description": "Is drawn only while its run lasts; a run that starts after the last one ended takes the\nbox without sliding.",
           "type": "string"
         }
       ]
@@ -3069,6 +3129,30 @@
       ],
       "type": "object"
     },
+    "Keyframe_TextContent": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
+        },
+        "value": {
+          "$ref": "#/$defs/TextContent",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
     "Keyframe_Vec2": {
       "additionalProperties": false,
       "description": "One timestamped control value.",
@@ -3109,30 +3193,6 @@
           "description": "Value at `time`.",
           "format": "float",
           "type": "number"
-        }
-      },
-      "required": [
-        "time",
-        "value",
-        "interpolation"
-      ],
-      "type": "object"
-    },
-    "Keyframe_string": {
-      "additionalProperties": false,
-      "description": "One timestamped control value.",
-      "properties": {
-        "interpolation": {
-          "$ref": "#/$defs/Interpolation",
-          "description": "Interpolation from this keyframe to its successor."
-        },
-        "time": {
-          "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value. Timeline time, except composition time in a composition node's\nsettings and picture time in a shapes or layout generator's tree."
-        },
-        "value": {
-          "description": "Value at `time`.",
-          "type": "string"
         }
       },
       "required": [
@@ -3471,7 +3531,7 @@
         }
       ]
     },
-    "Keyframed_string": {
+    "Keyframed_TextContent": {
       "description": "A value that is constant or controlled by sorted keyframes.",
       "oneOf": [
         {
@@ -3483,8 +3543,8 @@
               "type": "string"
             },
             "value": {
-              "description": "Value used at every timestamp.",
-              "type": "string"
+              "$ref": "#/$defs/TextContent",
+              "description": "Value used at every timestamp."
             }
           },
           "required": [
@@ -3500,7 +3560,7 @@
             "keyframes": {
               "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
               "items": {
-                "$ref": "#/$defs/Keyframe_string"
+                "$ref": "#/$defs/Keyframe_TextContent"
               },
               "maxItems": 100000,
               "type": "array"
@@ -4168,7 +4228,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": [
             "array",
             "null"
@@ -4177,13 +4237,13 @@
         "text": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Keyframed_string"
+              "$ref": "#/$defs/Keyframed_TextContent"
             },
             {
               "type": "null"
             }
           ],
-          "description": "The box's text, wrapped at its content width in the inherited style; `\\n` starts a line.\nAt most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty. Keyframes all `hold`.\nNot with `children` or `shape`."
+          "description": "The box's text, a string or runs, wrapped at its content width in the inherited style;\n`\\n` starts a line. At most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty.\nKeyframes all `hold`. A run takes a `style` with a constant `font_scale` only: no\n`class`, `time` or keyframes. Not with `children` or `shape`."
         },
         "text_align": {
           "anyOf": [
@@ -4196,8 +4256,30 @@
           ],
           "description": "How lines align within the content width. Inherited; the root's is `start`."
         },
+        "text_animator_grouping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnimatorGrouping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The units whose characters `text_animators` scale and turn about one pivot, as a text\nstyle's `animator_grouping`. Not inherited."
+        },
+        "text_animator_pivot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not\ninherited."
+        },
         "text_animators": {
-          "description": "Per-character motion of the box's own text, Range selectors only (layout text has no\nruns). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never\nchanges layout.",
+          "description": "Per-character motion of the box's own text, Range selectors only (layout text has no\nruns). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited. They\nnever change layout, except that one whose advance follows its scale makes the text wrap,\nand measure as wide, with room for its largest scale.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
@@ -4674,6 +4756,11 @@
           "const": "composition",
           "description": "A composition of the project, drawn with the source time as its own time. The host\nsupplies only the media its nodes read.",
           "type": "string"
+        },
+        {
+          "const": "adjustment",
+          "description": "No picture of its own: a clip of it on a video track applies its composition, masks,\nopacity and blend mode to everything composited beneath it, its `clip` nodes reading that\nbackdrop. The source has only an ID and this kind.",
+          "type": "string"
         }
       ]
     },
@@ -4742,7 +4829,7 @@
         },
         "locator": {
           "default": "",
-          "description": "Opaque URI or host locator; the engine does not open it. Required except for\n[`MediaKind::Generated`] and [`MediaKind::Composition`] sources.",
+          "description": "Opaque URI or host locator; the engine does not open it. Required except for\n[`MediaKind::Generated`], [`MediaKind::Composition`] and [`MediaKind::Adjustment`] sources,\nwhich have none.",
           "type": "string"
         },
         "provider": {
@@ -4833,7 +4920,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "The picture of the clip showing the composition: its source at the time-mapped source\ntime, or what its generated source draws.",
+          "description": "The picture of the clip showing the composition: its source at the time-mapped source\ntime, or what its generated source draws. For an adjustment clip, the scene composited\nbeneath it.",
           "properties": {
             "type": {
               "const": "clip",
@@ -5108,6 +5195,64 @@
         },
         {
           "additionalProperties": false,
+          "description": "The backdrop replaced by the input by `k = opacity x mask alpha`, as\n`(1 - k) backdrop + k input` on premultiplied values: exactly the backdrop where `k` is 0\nand the input where it is 1 (Nuke's `KeyMix` with an opacity). Bypassed, it passes the\nbackdrop through.",
+          "properties": {
+            "backdrop": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The picture replaced."
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The picture that replaces it."
+            },
+            "mask": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image whose alpha is coverage; unconnected, the coverage is `opacity` everywhere."
+            },
+            "opacity": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 1.0
+              },
+              "description": "Scales the coverage, in `0..=1`."
+            },
+            "type": {
+              "const": "key_mix",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "The input kept inside shapes.",
           "properties": {
             "input": {
@@ -5266,7 +5411,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -5305,7 +5450,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -5340,7 +5485,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
-              "maxItems": 8,
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -6647,6 +6792,10 @@
       "additionalProperties": false,
       "description": "What an animator does to each character, in proportion to its selection. A property left\nout does nothing.",
       "properties": {
+        "advance_follows_scale": {
+          "description": "Whether the character's advance follows this animator's horizontal scale, pushing the\ncharacters after it along its line, which is re-aligned; lines are not re-broken, and the\ntext wraps with room for the largest scale this can reach. Needs `scale`.",
+          "type": "boolean"
+        },
         "fill": {
           "anyOf": [
             {
@@ -6679,6 +6828,17 @@
             }
           ],
           "description": "The opacity a fully selected character takes, in `[0, 1]`."
+        },
+        "reveal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextReveal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight\nedge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows\n`progress` of itself."
         },
         "rotation_degrees": {
           "anyOf": [
@@ -6729,15 +6889,34 @@
     },
     "TextBackground": {
       "additionalProperties": false,
-      "description": "A box behind each line of text.",
+      "description": "A box behind each line of text, as CSS draws an inline box's background with\n`box-decoration-break: clone`: each line's box has its own padding, radius and border.",
       "properties": {
+        "border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextBoxBorder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A line inside the box's edge, as a CSS border. `None` draws none."
+        },
         "color": {
           "$ref": "#/$defs/Rgba",
           "description": "Box color."
         },
+        "extent": {
+          "$ref": "#/$defs/TextBoxExtent",
+          "description": "Which part of each line the box spans."
+        },
         "padding": {
+          "$ref": "#/$defs/TextInsets",
           "default": 0.0,
-          "description": "Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.",
+          "description": "Space between the text and the box edge, as fractions of the font size, each side in\n`[0, 2]`."
+        },
+        "radius": {
+          "description": "Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is\ncapped at half its shorter side, as CSS `border-radius`. Default 0.",
           "format": "float",
           "type": "number"
         }
@@ -6746,6 +6925,57 @@
         "color"
       ],
       "type": "object"
+    },
+    "TextBoxBorder": {
+      "additionalProperties": false,
+      "description": "The border of a text box, drawn inside the box's edge.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Line color."
+        },
+        "dash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextDash"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Dashes along the border's centre line; `None` draws it solid."
+        },
+        "width": {
+          "description": "Width as a fraction of the font size, in `(0, 0.5]`.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "color"
+      ],
+      "type": "object"
+    },
+    "TextBoxExtent": {
+      "description": "Which part of each line a text's background box spans, where tracking and pushing place its\ncharacters.",
+      "oneOf": [
+        {
+          "const": "line",
+          "description": "From the line's first character to its last that is not a hanging space.",
+          "type": "string"
+        },
+        {
+          "const": "revealed",
+          "description": "From the first to the last revealed character that is not white space: shown, not scaled\nto nothing, and not hidden by a reveal. A line with none has no box; a text without\nanimators draws as `line`.",
+          "type": "string"
+        },
+        {
+          "const": "block",
+          "description": "One box over the whole layout box, `max_width` wide and as tall as the lines.",
+          "type": "string"
+        }
+      ]
     },
     "TextContent": {
       "anyOf": [
@@ -6764,9 +6994,147 @@
       ],
       "description": "A text: one string, or runs whose texts joined are the text.\n\nWritten as `\"Hello\"` or `[{ \"text\": \"Hel\" }, { \"text\": \"lo\", \"class\": [\"key\"] }]`."
     },
+    "TextDash": {
+      "additionalProperties": false,
+      "description": "Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at\nthe end of the top-left corner and run clockwise.",
+      "properties": {
+        "offset": {
+          "description": "How far into the pattern the border starts, in font sizes, in `[-16, 16]`.",
+          "format": "float",
+          "type": "number"
+        },
+        "pattern": {
+          "description": "Alternating dash and gap lengths, as fractions of the font size: one to\n[`crate::MAX_DASH_ENTRIES`] entries in `[0, 4]`, not all zero. An odd count repeats once\nmore to pair up.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
+    "TextHighlight": {
+      "additionalProperties": false,
+      "description": "A box over the timed run being said, sliding from run to run, drawn over the background\nboxes and under the glyphs. The run is the timed run that started last; before the first\nstarts there is none.",
+      "properties": {
+        "border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextBoxBorder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A line inside the box's edge, as a background's `border`."
+        },
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Box color."
+        },
+        "easing": {
+          "$ref": "#/$defs/Easing",
+          "description": "The slide's timing curve."
+        },
+        "gap": {
+          "$ref": "#/$defs/HighlightGap",
+          "description": "What the box does between a run's end and the next run's start."
+        },
+        "padding": {
+          "$ref": "#/$defs/TextInsets",
+          "default": 0.0,
+          "description": "Space between the run and the box edge, as a background's `padding`."
+        },
+        "radius": {
+          "description": "Every corner's radius, as a background's `radius`.",
+          "format": "float",
+          "type": "number"
+        },
+        "transition": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "How long the box takes to slide to the next run once it starts, at most\n[`MAX_HIGHLIGHT_TRANSITION`]; 0 jumps. A change during a slide starts where the box is."
+        }
+      },
+      "required": [
+        "color"
+      ],
+      "type": "object"
+    },
+    "TextInsets": {
+      "anyOf": [
+        {
+          "format": "float",
+          "type": "number"
+        },
+        {
+          "pattern": "^ *-?(\\d+\\.?\\d*|\\.\\d+)( +-?(\\d+\\.?\\d*|\\.\\d+)){0,3} *$",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bottom": {
+              "format": "float",
+              "type": "number"
+            },
+            "left": {
+              "format": "float",
+              "type": "number"
+            },
+            "right": {
+              "format": "float",
+              "type": "number"
+            },
+            "top": {
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "type": "object"
+        }
+      ],
+      "description": "A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers (\"0.1 0.3\": top first, clockwise), or the sides object, missing sides 0."
+    },
+    "TextReveal": {
+      "additionalProperties": false,
+      "description": "A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its\nadvances by its em boxes, outset by its strokes) in the direction `angle_degrees`.",
+      "properties": {
+        "angle_degrees": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,\n90 top to bottom. Default 0."
+        },
+        "feather": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel\nantialiased step. Default 0."
+        },
+        "progress": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit\nselected by `w` shows `1 + w (progress - 1)`. Default 0."
+        }
+      },
+      "type": "object"
+    },
     "TextRun": {
       "additionalProperties": false,
-      "description": "A piece of a text that animators' Class and Timing selectors can pick.",
+      "description": "A piece of a text with its own style, that animators' Class and Timing selectors can pick.",
       "properties": {
         "class": {
           "description": "Names Class selectors match, each 1 to 64 bytes of `A-Z`, `a-z`, `0-9`, `_` and `-`; at\nmost [`MAX_RUN_CLASSES`].",
@@ -6775,6 +7143,17 @@
           },
           "maxItems": 8,
           "type": "array"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextRunStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Changes to the holder's style for this run's characters."
         },
         "text": {
           "description": "Non-empty; `\\n` starts a line. A grapheme cluster spanning two runs belongs to the run\nholding its first byte.",
@@ -6795,6 +7174,107 @@
       "required": [
         "text"
       ],
+      "type": "object"
+    },
+    "TextRunStyle": {
+      "additionalProperties": false,
+      "description": "A run's changes to its holder's text style, as an inline box's own CSS properties. Each\nfield set replaces the holder's value for the run's characters; a field left out keeps it.\nA change of family, weight, style, size or letter spacing shapes the run apart and can move\nline breaks; fill, strokes, background and decorations only paint.",
+      "properties": {
+        "background_color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rgba"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A box behind the run on each line, its advances wide and its em box tall, as CSS\n`background-color` paints an inline box."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Paint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What paints the run's glyphs; gradient positions are in the text's layout box, as the\ntext's fill."
+        },
+        "font_family": {
+          "description": "The family, as a text style's `font_family`; `null` draws from the fallback order alone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "font_scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run's size as a multiple of the text's font size, in `[0.1, 10]`, as CSS\n`font-size: <n>em`. Lines are laid out again when it changes; keyframes are in the\nholder's time."
+        },
+        "font_style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The face style, as a text style's `font_style`."
+        },
+        "font_weight": {
+          "description": "The weight in `[1, 1000]`, as a text style's `font_weight`.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "letter_spacing": {
+          "description": "Space after each character, as a fraction of the run's size, in `[-0.5, 1]`.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "line_through": {
+          "description": "See [`crate::TextStyle::line_through`].",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strokes": {
+          "description": "The run's bands, as a text style's `strokes`, widths in fractions of the run's size.",
+          "items": {
+            "$ref": "#/$defs/TextStroke"
+          },
+          "maxItems": 8,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "underline": {
+          "description": "See [`crate::TextStyle::underline`].",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "TextSelector": {
@@ -6976,8 +7456,16 @@
           },
           "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre. Each coordinate within [`MAX_TEXT_POSITION`]."
         },
+        "animator_grouping": {
+          "$ref": "#/$defs/AnimatorGrouping",
+          "description": "The units whose characters the animators scale and turn about one pivot."
+        },
+        "animator_pivot": {
+          "$ref": "#/$defs/Vec2",
+          "description": "Where in each group's box (the union of its characters' advances by their em boxes) the\npivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`\npercentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre\non one line. Not animated."
+        },
         "animators": {
-          "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never change line layout.",
+          "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never re-break lines while they play; an animator whose advance\nfollows its scale makes the text wrap with room for its largest scale.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
@@ -7033,6 +7521,10 @@
           ],
           "description": "The range the font size is fitted in so the text fits its box. `None` draws at the\nfont size as set."
         },
+        "font_style": {
+          "$ref": "#/$defs/FontStyle",
+          "description": "The face style matched before weight, as CSS Fonts 4 matches `font-style`. A face that is\nneither italic nor oblique is sheared by 14 degrees when one is asked; bitmap glyphs stay\nupright. Default `normal`."
+        },
         "font_weight": {
           "default": 400,
           "description": "The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches\n`font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is\nsynthetically emboldened.",
@@ -7040,6 +7532,17 @@
           "maximum": 65535,
           "minimum": 0,
           "type": "integer"
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextHighlight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A box over the timed run being said. Needs timed runs; without them it draws nothing."
         },
         "letter_spacing": {
           "default": 0.0,
@@ -7063,6 +7566,10 @@
           "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font\nsizes above the baseline, 0.2 below) is centred in a taller line.",
           "format": "float",
           "type": "number"
+        },
+        "line_through": {
+          "description": "A line through the glyphs, as CSS `text-decoration-line: line-through`, placed by the\nfont.",
+          "type": "boolean"
         },
         "max_height": {
           "description": "Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for\n`font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS\n`max-height` lets a box with visible overflow. `None` sets no height.",
@@ -7099,8 +7606,12 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": "array"
+        },
+        "underline": {
+          "description": "A line under the glyphs, as CSS `text-decoration-line: underline`, placed by the font.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -7130,6 +7641,28 @@
             }
           ],
           "description": "See [`TextStyle::anchor`]."
+        },
+        "animator_grouping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnimatorGrouping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::animator_grouping`]."
+        },
+        "animator_pivot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::animator_pivot`]."
         },
         "animators": {
           "description": "See [`TextStyle::animators`].",
@@ -7190,6 +7723,17 @@
           ],
           "description": "See [`TextStyle::font_size_fit`]; `null` removes the base's."
         },
+        "font_style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::font_style`]."
+        },
         "font_weight": {
           "description": "See [`TextStyle::font_weight`].",
           "format": "uint16",
@@ -7199,6 +7743,17 @@
             "integer",
             "null"
           ]
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextHighlight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The box over the timed run being said; `null` removes the base's."
         },
         "letter_spacing": {
           "description": "See [`TextStyle::letter_spacing`].",
@@ -7224,6 +7779,13 @@
           "format": "float",
           "type": [
             "number",
+            "null"
+          ]
+        },
+        "line_through": {
+          "description": "See [`TextStyle::line_through`].",
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -7270,9 +7832,16 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
-          "maxItems": 4,
+          "maxItems": 8,
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "underline": {
+          "description": "See [`TextStyle::underline`].",
+          "type": [
+            "boolean",
             "null"
           ]
         }

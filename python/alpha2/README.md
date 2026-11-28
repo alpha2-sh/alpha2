@@ -120,6 +120,7 @@ dot = project.generated(shapes(circle((0.5, 0.5), 0.2, picture=(1280, 720)), fil
 | Lengths: corner radii, stroke widths, dashes, blur radii, layout numbers | A fraction of the picture's shorter side |
 | Font sizes (text generators, layouts) | A fraction of the picture's shorter side, or `"40px"` of the canvas in a layout |
 | Letter spacing, text stroke widths, text shadow offsets and blur | A fraction of the font size |
+| A text run's `font_scale` | A multiple of its text's font size; its letter spacing and stroke widths are fractions of its own size |
 
 `circle(center, diameter, picture=(w, h))` gives a round ellipse: the diameter is a shorter-side
 fraction, and `picture` is the size of what the shapes draw on (the canvas for a shapes generator,
@@ -168,7 +169,13 @@ bounds = measurer.layout(card_layout, picture=(1280, 720))
 title = bounds["nodes"][1]
 print(title["border"], title["lineCount"], title["overflow"], title["baselines"])
 words = measurer.text({"type": "text", "text": "Hi"}, canvas=(1280, 720))
+places = measurer.text_layout({"type": "text", "text": "Hi there"}, canvas=(1280, 720))
+print(places["words"][1]["boxes"], places["clusters"][0]["range"])
 ```
+
+`text_layout` answers where each line, word and grapheme cluster of a text generator lies, as
+drawn before its animators: boxes, em boxes, baselines and ink. Cluster ranges count code points
+of the text (of its runs joined, for runs).
 
 Rectangles are fractions of the picture, `(0, 0)` top-left to `(1, 1)` bottom-right; `baselines`
 holds the first and last lines' alphabetic baselines as fractions of its height, to line a text up
@@ -241,7 +248,9 @@ with alpha2.HostClient() as client:
   descriptor's `params_schema` first.
 - Output the project would refuse fails with `INVALID_EMIT`, a step that raises with
   `EXTRACTOR_FAILED`, and a step slower than the host's `--extract-step-timeout` with
-  `EXTRACTOR_TIMEOUT`. `cancel=` and `on_progress=` work as for `export`.
+  `EXTRACTOR_TIMEOUT`. `cancel=` and `on_progress=` work as for `export`. An extraction's
+  progress (`alpha2.extract.ExtractProgress`) has `stage` (`begin`, `pass` or `end`),
+  `pass_index`, `completed`, `total` (`None` for source frames) and `covered` of `span` ticks.
 - A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass
   `plugin={"manifest": ..., "sha256": ...}` and no extractor. The host fetches the manifest (an
   `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact
@@ -260,6 +269,11 @@ with alpha2.HostClient() as client:
   (where supplied files may lie: `"none"` by default, `"any"` or a directory). Only under
   `"mode": "native"` does a request's `"allow_native": True` let a native artifact run, with the
   host's rights.
+- An `https:` URL in `assets` or `resources` is read by range by the host, which must be allowed to:
+  `HostClient(remote_media={"origins": ["https://media.example"]})` passes `--media-origins` to
+  every host it starts (`"none"` by default), and `"private_addresses": "allow"` lets it reach a
+  loopback or private address. Such values, and `http:` ones the host refuses, are sent unchanged;
+  every other value is a path resolved against the working directory.
 
 ## Apply data with edit operations
 
@@ -297,10 +311,12 @@ decoded, on `HostClient(...)` for every request or per call to `export`, `still`
 `auto` renderer, and `auto` decode on Linux and macOS, `software` on Windows.
 
 - `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software
-  GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader). `gpu` takes whatever adapter the host finds
-  and fails with `GPU_INIT_FAILED` without one; `cpu` opens no graphics driver.
+  GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader). `gpu` renders on a hardware adapter, or on a
+  software one only when `ALPHA2_GPU_ADAPTER` pins it, and fails with `GPU_INIT_FAILED` otherwise;
+  `cpu` opens no graphics driver.
 - Results and capabilities report `renderer` (`"gpu"` or `"cpu"`), `rendererReason` (why the host
-  renders on the CPU) and, on the CPU, `rendererThreads`; the capability report's
+  renders on the CPU), `softwareAdapter` (a pinned software adapter renders) and, on the CPU,
+  `rendererThreads`; the capability report's
   `["capabilities"]["features"]` has `renderer.gpu`, `renderer.cpu` and `effects.runtime`. A
   runtime WGSL effect cannot run on the CPU renderer: such an export fails with `EFFECT_ERROR`.
 - Under `auto` decode, an export whose hardware decoder stalls runs once more decoding in software.
@@ -337,7 +353,9 @@ alpha2.export(compiled, "summer.mp4")
 - Wrappers combine any nodes: `Group` (one layer, with `effects=[Effect("gaussian-blur",
   radius=8)]`, a transform and a blend mode), `Matte` (one node shown through another's alpha or
   luma), `Mask` (shapes cut out of a node), `Shape` (rectangles, ellipses, polygons and SVG paths)
-  and `Box` (CSS flexbox or grid around text, shapes and any other node). Any value may move:
+  and `Box` (CSS flexbox or grid around text, shapes and any other node). `Adjustment` has no
+  picture: its effects apply to everything under it (in a `Group`, the children before it), and a
+  `Mask` around it limits where. Any value may move:
   `Ramp(0, 1, ease="ease-out")` or `Keys((0, 0), (1, 1))`.
 - Motion: `enter=` and `exit=` on visual nodes and containers take `Fade`, `Rise`, `Slide` or
   `Scale`, timed from the node's own start and back from its own end; `Stack` and `Grid` take

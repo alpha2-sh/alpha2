@@ -228,7 +228,7 @@ fn an_output_that_is_an_input_is_refused_with_or_without_overwrite() {
         let Request::Export(mut request) = export_request(&linked, overwrite) else {
             unreachable!("an export");
         };
-        request.assets = HashMap::from([("video".to_owned(), source.clone())]);
+        request.assets = HashMap::from([("video".to_owned(), source.clone().into())]);
         let error = host
             .handle(Request::Export(request), &mut |_| Ok(()))
             .expect_err("the output is the asset");
@@ -241,7 +241,7 @@ fn an_output_that_is_an_input_is_refused_with_or_without_overwrite() {
     let Request::Export(mut request) = export_request(&copy, true) else {
         unreachable!("an export");
     };
-    request.assets = HashMap::from([("video".to_owned(), source.clone())]);
+    request.assets = HashMap::from([("video".to_owned(), source.clone().into())]);
     host.handle(Request::Export(request), &mut |_| Ok(()))
         .expect("a copy of an input may be replaced");
 }

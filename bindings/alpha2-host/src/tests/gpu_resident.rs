@@ -81,7 +81,7 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
             let output = directory.join(format!("{name}-{}.mp4", policy.as_str()));
             let exported = host.export(
                 &project.to_string(),
-                &assets,
+                &crate::tests::locations(&assets),
                 &HashMap::new(),
                 Vec::new(),
                 0,
@@ -174,7 +174,7 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
         let result = host
             .export(
                 &project.to_string(),
-                &assets,
+                &crate::tests::locations(&assets),
                 &HashMap::new(),
                 Vec::new(),
                 0,
@@ -261,7 +261,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
     let mut export = |end: i64, name: &str, fail_at: Option<u64>| {
         host.export(
             &project(end).to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             0,
@@ -369,7 +369,7 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
     let result = host
         .export(
             &project.to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             0,
@@ -546,7 +546,7 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
         let result = host
             .export(
                 &project.to_string(),
-                &assets,
+                &crate::tests::locations(&assets),
                 &HashMap::new(),
                 Vec::new(),
                 0,
@@ -710,7 +710,7 @@ fn a_clip_whose_stream_and_container_disagree_on_colour_renders_as_its_pictures(
         let result = host
             .export(
                 &project.to_string(),
-                &assets,
+                &crate::tests::locations(&assets),
                 &HashMap::new(),
                 Vec::new(),
                 0,
@@ -1057,7 +1057,7 @@ fn a_transcoded_picture_is_the_last_of_its_frame_set_and_a_changed_one_renders()
     let assets = HashMap::from([("video".to_owned(), corpus("h264-bt709-transcode.mp4"))]);
     let plan = crate::yuv_transcode::yuv_transcode_plan(
         &project,
-        &assets,
+        &crate::tests::locations(&assets),
         TimeRange::new(MediaTime::ZERO, MediaTime::from_ticks(end)).expect("range"),
         alpha2_media::YuvEncoding::export(alpha2_media::VideoCodec::H264),
     )
@@ -1172,7 +1172,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
         let result = host
             .export(
                 &project.to_string(),
-                &assets,
+                &crate::tests::locations(&assets),
                 &HashMap::new(),
                 Vec::new(),
                 0,
@@ -1310,7 +1310,7 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
         let result = host
             .export(
                 &project.to_string(),
-                &assets,
+                &crate::tests::locations(&assets),
                 &HashMap::new(),
                 Vec::new(),
                 0,

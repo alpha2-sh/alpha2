@@ -36,7 +36,7 @@ impl Host {
     pub(crate) fn render_stills(
         &mut self,
         project: &str,
-        assets: &HashMap<String, PathBuf>,
+        assets: &HashMap<String, alpha2_host_core::remote::SourceLocation>,
         effect_assets: &HashMap<String, PathBuf>,
         effects: Vec<EffectRequest>,
         stills: &[StillEntry],

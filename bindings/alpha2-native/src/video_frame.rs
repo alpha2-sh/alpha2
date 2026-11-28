@@ -570,8 +570,10 @@ impl NativeExportDecoder {
     ///
     /// # Errors
     /// Returns a native decode error if the input or selected stream cannot be opened.
-    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, DecodeError> {
-        NativeDecoder::open(path).map(|decoder| Self {
+    pub fn open(
+        source: impl Into<alpha2_host_core::remote::SourceLocation>,
+    ) -> Result<Self, DecodeError> {
+        NativeDecoder::open(source).map(|decoder| Self {
             backend: ExportDecoderBackend::Software(decoder),
             hardware_frames: 0,
             hardware_failure: None,
@@ -583,10 +585,10 @@ impl NativeExportDecoder {
     /// # Errors
     /// Returns a native decode error for invalid worker counts or stream setup failures.
     pub fn open_with_threads(
-        path: impl AsRef<std::path::Path>,
+        source: impl Into<alpha2_host_core::remote::SourceLocation>,
         threads: i64,
     ) -> Result<Self, DecodeError> {
-        NativeDecoder::open_with_threads(path, threads).map(|decoder| Self {
+        NativeDecoder::open_with_threads(source, threads).map(|decoder| Self {
             backend: ExportDecoderBackend::Software(decoder),
             hardware_frames: 0,
             hardware_failure: None,
@@ -600,7 +602,7 @@ impl NativeExportDecoder {
     /// decoder cannot use the shared device.
     #[cfg(all(target_os = "linux", feature = "hwdecode"))]
     pub fn open_vulkan(
-        path: impl AsRef<std::path::Path>,
+        source: impl Into<alpha2_host_core::remote::SourceLocation>,
         threads: i64,
         context: &SharedVulkanContext,
         generation: u64,
@@ -617,16 +619,16 @@ impl NativeExportDecoder {
             hardware_codecs: Some(context.decode_codecs()),
             get_format: alpha2_ffmpeg_bridge::vulkan_get_format_callback(),
         };
-        NativeDecoder::open_hardware(path, threads, context.ffmpeg_device(), &spec).map(|decoder| {
-            Self {
+        NativeDecoder::open_hardware(source, threads, context.ffmpeg_device(), &spec).map(
+            |decoder| Self {
                 backend: ExportDecoderBackend::Vulkan {
                     decoder,
                     generation,
                 },
                 hardware_frames: 0,
                 hardware_failure: None,
-            }
-        })
+            },
+        )
     }
 
     /// Opens a `VideoToolbox` hardware decoder producing `CoreVideo` surfaces.
@@ -636,7 +638,7 @@ impl NativeExportDecoder {
     /// create a hardware session.
     #[cfg(all(target_os = "macos", feature = "hwdecode"))]
     pub fn open_videotoolbox(
-        path: impl AsRef<std::path::Path>,
+        source: impl Into<alpha2_host_core::remote::SourceLocation>,
         threads: i64,
         context: &SharedMetalContext,
         generation: u64,
@@ -669,7 +671,7 @@ impl NativeExportDecoder {
             hardware_codecs: Some(context.decode_codecs()),
             get_format: alpha2_ffmpeg_bridge::videotoolbox_get_format_callback(),
         };
-        NativeDecoder::open_hardware(path, threads, device, &spec)
+        NativeDecoder::open_hardware(source, threads, device, &spec)
             .map(|decoder| Self {
                 backend: ExportDecoderBackend::VideoToolbox {
                     decoder,
@@ -692,7 +694,7 @@ impl NativeExportDecoder {
     /// shared device cannot create a decode session.
     #[cfg(all(target_os = "windows", feature = "hwdecode"))]
     pub fn open_d3d12(
-        path: impl AsRef<std::path::Path>,
+        source: impl Into<alpha2_host_core::remote::SourceLocation>,
         threads: i64,
         context: &SharedD3D12Context,
         generation: u64,
@@ -707,8 +709,8 @@ impl NativeExportDecoder {
             hardware_codecs: None,
             get_format: alpha2_ffmpeg_bridge::d3d12_get_format_callback(),
         };
-        NativeDecoder::open_hardware(path, threads, context.ffmpeg_device(), &spec).map(|decoder| {
-            Self {
+        NativeDecoder::open_hardware(source, threads, context.ffmpeg_device(), &spec).map(
+            |decoder| Self {
                 backend: ExportDecoderBackend::D3D12 {
                     decoder,
                     generation,
@@ -716,8 +718,8 @@ impl NativeExportDecoder {
                 },
                 hardware_frames: 0,
                 hardware_failure: None,
-            }
-        })
+            },
+        )
     }
 
     /// Stream descriptions from the common decode session.

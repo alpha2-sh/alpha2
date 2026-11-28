@@ -18,6 +18,7 @@ use alpha2_time::MediaTime;
 
 use super::{FrameProvider, FrameRenderer, GpuFrameRenderer};
 
+mod adjustments;
 mod alpha_exports;
 mod backgrounds;
 mod cache;
@@ -30,9 +31,11 @@ mod layers;
 mod layout;
 mod missing_sources;
 mod player;
+mod rich_text;
 mod shapes;
 mod submissions;
 mod text_animators;
+mod text_boxes;
 mod text_fit;
 mod text_look;
 mod timing;

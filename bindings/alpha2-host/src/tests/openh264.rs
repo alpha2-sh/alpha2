@@ -118,7 +118,7 @@ fn openh264_export(directory: &Path, name: &str) -> (Value, String, usize) {
     let result = host
         .export(
             &project.to_string(),
-            &assets,
+            &crate::tests::locations(&assets),
             &HashMap::new(),
             Vec::new(),
             0,

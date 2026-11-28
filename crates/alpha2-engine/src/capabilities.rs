@@ -11,7 +11,9 @@ use crate::PlaybackPolicy;
 /// The report's schema name.
 pub const CAPABILITY_SCHEMA: &str = "alpha2-capabilities";
 /// The report's schema version.
-pub const CAPABILITY_VERSION: u32 = 2;
+pub const CAPABILITY_VERSION: u32 = 3;
+
+const RELEASE: &str = env!("CARGO_PKG_VERSION");
 
 /// Where the engine runs.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
@@ -31,6 +33,12 @@ pub struct CapabilityReport {
     pub schema: &'static str,
     /// [`CAPABILITY_VERSION`].
     pub version: u32,
+    /// The alpha2 release this engine is. Clients and hosts work together only within one release.
+    pub release: &'static str,
+    /// The project `schema_version` this engine reads and writes
+    /// ([`alpha2_model::CURRENT_SCHEMA_VERSION`]). Before v1 the release, not this number, decides
+    /// which fields a document may hold.
+    pub project_schema_version: u32,
     /// Where the engine runs.
     pub runtime: Runtime,
     /// The GPU it renders with.
@@ -58,6 +66,8 @@ pub struct CapabilityReport {
 pub struct GpuReport {
     /// The adapter's name.
     pub adapter: String,
+    /// Whether the adapter rasterizes in software (lavapipe, llvmpipe, WARP, `SwiftShader`).
+    pub software_adapter: bool,
     /// The graphics backend.
     pub backend: String,
     /// The driver's name.
@@ -159,9 +169,12 @@ impl CapabilityReport {
         Self {
             schema: CAPABILITY_SCHEMA,
             version: CAPABILITY_VERSION,
+            release: RELEASE,
+            project_schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
             runtime,
             gpu: GpuReport {
                 adapter: capabilities.adapter_name.clone(),
+                software_adapter: capabilities.software_rasterizer,
                 backend: capabilities.backend.clone(),
                 driver: capabilities.driver.clone(),
                 driver_info: capabilities.driver_info.clone(),
@@ -204,9 +217,12 @@ impl CapabilityReport {
         Self {
             schema: CAPABILITY_SCHEMA,
             version: CAPABILITY_VERSION,
+            release: RELEASE,
+            project_schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
             runtime,
             gpu: GpuReport {
                 adapter: format!("alpha2 CPU renderer ({} threads)", renderer.threads()),
+                software_adapter: false,
                 backend: "cpu".to_owned(),
                 driver: "alpha2".to_owned(),
                 driver_info: env!("CARGO_PKG_VERSION").to_owned(),
@@ -242,5 +258,31 @@ impl CapabilityReport {
     pub fn with_feature(mut self, name: &str, feature: Feature) -> Self {
         self.features.insert(name.to_owned(), feature);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CAPABILITY_VERSION, CapabilityReport, Runtime};
+
+    #[test]
+    fn the_report_names_its_release_and_the_project_schema_it_reads() {
+        let renderer = alpha2_render::CpuRenderer::new(1);
+        for runtime in [Runtime::Native, Runtime::Browser] {
+            let report =
+                serde_json::to_value(CapabilityReport::cpu(runtime, &renderer)).expect("a report");
+            assert_eq!(report["version"], serde_json::json!(3), "{report}");
+            assert_eq!(CAPABILITY_VERSION, 3);
+            assert_eq!(
+                report["release"],
+                serde_json::json!(env!("CARGO_PKG_VERSION")),
+                "{report}"
+            );
+            assert_eq!(
+                report["projectSchemaVersion"],
+                serde_json::json!(alpha2_model::CURRENT_SCHEMA_VERSION),
+                "{report}"
+            );
+        }
     }
 }

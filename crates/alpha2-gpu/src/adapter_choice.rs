@@ -150,6 +150,9 @@ pub enum ChoiceReason {
     /// No adapter could share a device with the video codecs, so decode and encode run without
     /// the GPU.
     NoSharedDevice,
+    /// No hardware adapter renders, and `ALPHA2_GPU_ADAPTER` pins no software one: a renderer
+    /// that asks for the GPU does not start.
+    NoHardwareAdapter,
 }
 
 impl ChoiceReason {
@@ -164,6 +167,7 @@ impl ChoiceReason {
             Self::HighPerformanceOrder => "high-performance-order",
             Self::PerformancePolicy => "performance-policy",
             Self::NoSharedDevice => "no-shared-device",
+            Self::NoHardwareAdapter => "no-hardware-adapter",
         }
     }
 }
@@ -323,6 +327,11 @@ pub fn explain_choice(
         (ChoiceReason::PerformancePolicy, _) => format!(
             "{} is the first hardware adapter in the high-performance order",
             record.name
+        ),
+        (ChoiceReason::NoHardwareAdapter, _) => format!(
+            "{} renders in software, and {} pins no software adapter",
+            record.name,
+            policy.setting()
         ),
         (ChoiceReason::NoSharedDevice, _) => format!(
             "{} renders without a device shared with the video decoder and encoder",

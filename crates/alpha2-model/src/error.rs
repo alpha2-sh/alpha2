@@ -231,6 +231,14 @@ pub enum ModelError {
         /// What is wrong there.
         problem: crate::LayoutProblem,
     },
+    /// A text generator's run has a style out of range once applied, or the runs draw in more
+    /// than [`crate::MAX_TEXT_FONT_SELECTIONS`] font selections from this run on.
+    InvalidTextRunStyle {
+        /// What holds the text generator.
+        owner: ShapeOwner,
+        /// The run's position among the text's runs.
+        run: usize,
+    },
     /// An effect resource locator was empty.
     EmptyEffectResourceLocator {
         /// Resource whose locator was empty.
@@ -434,6 +442,19 @@ pub enum ModelError {
         /// The source.
         source: SourceId,
     },
+    /// An adjustment source has more than an ID and its kind: a locator, generator,
+    /// composition, color, fingerprint, provider or audio.
+    InvalidAdjustmentSource {
+        /// The source.
+        source: SourceId,
+    },
+    /// A transition from or to an adjustment clip is not `alpha2.transition.fade`.
+    InvalidAdjustmentTransition {
+        /// The track holding the transition.
+        track: TrackId,
+        /// The adjustment clip it names, its `from_clip` first.
+        clip: ClipId,
+    },
     /// An effect or transition under [`crate::BUILTIN_EFFECT_PREFIX`] that does not match its
     /// built-in definition.
     InvalidEffect {
@@ -474,7 +495,9 @@ pub enum ModelError {
         /// The style it names.
         name: String,
     },
-    /// A caption cue's style (its track's with the cue's patch applied) is out of range.
+    /// A caption cue's style (its track's with the cue's patch applied), or the style of one of
+    /// its runs over it, is out of range, or its runs draw in more than
+    /// [`crate::MAX_TEXT_FONT_SELECTIONS`] font selections.
     InvalidCaptionCueStyle {
         /// The track.
         track: TrackId,
@@ -495,8 +518,8 @@ pub enum ModelError {
         /// The most passes a clip makes.
         maximum: u64,
     },
-    /// A clip's matte names no visual clip, itself, a clip with its own matte, or a clip in a
-    /// transition; or an audio clip has a matte.
+    /// A clip's matte names no visual clip, itself, a clip with its own matte, an adjustment
+    /// clip, or a clip in a transition; or an audio or adjustment clip has a matte.
     InvalidMatte {
         /// Clip whose matte is invalid.
         clip: ClipId,
@@ -702,7 +725,9 @@ impl ModelError {
                 DataOwner::Node { composition, .. } => Composition(composition),
                 DataOwner::Source(source) => Source(source),
             },
-            Self::InvalidShape { owner, .. } | Self::InvalidLayout { owner, .. } => match owner {
+            Self::InvalidShape { owner, .. }
+            | Self::InvalidLayout { owner, .. }
+            | Self::InvalidTextRunStyle { owner, .. } => match owner {
                 ShapeOwner::Source(source) => Source(source),
                 ShapeOwner::Clip(clip) => Clip(clip),
                 ShapeOwner::Node { composition, .. } => Composition(composition),
@@ -718,7 +743,8 @@ impl ModelError {
             | Self::InvalidFingerprint { source }
             | Self::ContradictoryColor { source }
             | Self::InvalidGenerator { source }
-            | Self::InvalidCompositionSource { source } => Source(source),
+            | Self::InvalidCompositionSource { source }
+            | Self::InvalidAdjustmentSource { source } => Source(source),
             Self::DuplicateEffectResourceId(resource)
             | Self::EmptyEffectResourceLocator { resource } => EffectResource(resource),
             Self::DuplicateTrackId(track)
@@ -749,6 +775,7 @@ impl ModelError {
             | Self::InvalidClipMask { clip }
             | Self::InvalidTimeMap { clip }
             | Self::TooManyLoopPasses { clip, .. }
+            | Self::InvalidAdjustmentTransition { clip, .. }
             | Self::InvalidMatte { clip } => Clip(clip),
             Self::DuplicateCompositionId(composition)
             | Self::InvalidNodeId { composition, .. }
@@ -799,6 +826,12 @@ impl fmt::Display for ModelError {
             }
             Self::InvalidLayout { owner, at, problem } => {
                 write!(formatter, "{owner} has an invalid layout: {at} {problem}")
+            }
+            Self::InvalidTextRunStyle { owner, run } => {
+                write!(
+                    formatter,
+                    "{owner} has text run {run} with a style out of range"
+                )
             }
             Self::ContradictoryColor { source } => write!(
                 formatter,
@@ -964,6 +997,14 @@ impl fmt::Display for ModelError {
                     "source {source} is not a valid composition source"
                 )
             }
+            Self::InvalidAdjustmentSource { source } => write!(
+                formatter,
+                "source {source} is not a valid adjustment source: it has only an id and its kind"
+            ),
+            Self::InvalidAdjustmentTransition { track, clip } => write!(
+                formatter,
+                "a transition on track {track} names adjustment clip {clip}, which only fades"
+            ),
             Self::InvalidEffect { owner, id, problem } => {
                 write!(formatter, "effect {id} in {owner} {problem}")
             }

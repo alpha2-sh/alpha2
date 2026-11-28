@@ -146,6 +146,9 @@ export const MAX_FOLLOW_DEPTH = 8;
 /** Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`. */
 export const MAX_FONT_FAMILY_BYTES = 256;
 
+/** Mirrors `alpha2_model::MAX_FONT_SCALE`. */
+export const MAX_FONT_SCALE = 10;
+
 /** Mirrors `alpha2_model::MAX_FONT_WEIGHT`. */
 export const MAX_FONT_WEIGHT = 1000;
 
@@ -156,7 +159,7 @@ export const MAX_FRAME_INLINED_NODES = 65536;
 export const MAX_GAIN = 16;
 
 /** Mirrors `alpha2_model::MAX_GRADIENT_STOPS`. */
-export const MAX_GRADIENT_STOPS = 8;
+export const MAX_GRADIENT_STOPS = 16;
 
 /** Mirrors `alpha2_model::MAX_GRID_TRACKS`. */
 export const MAX_GRID_TRACKS = 64;
@@ -166,6 +169,9 @@ export const MAX_GROUP_INPUTS = 16;
 
 /** Mirrors `alpha2_model::MAX_HDR_PEAK_NITS`. */
 export const MAX_HDR_PEAK_NITS = 10000;
+
+/** Mirrors `alpha2_model::MAX_HIGHLIGHT_TRANSITION`. */
+export const MAX_HIGHLIGHT_TRANSITION = 1200000;
 
 /** Mirrors `alpha2_model::MAX_INLINED_NODES`. */
 export const MAX_INLINED_NODES = 65536;
@@ -248,6 +254,9 @@ export const MAX_RANGE_INDEX = 4096;
 /** Mirrors `alpha2_model::MAX_RANGE_PERCENT`. */
 export const MAX_RANGE_PERCENT = 200;
 
+/** Mirrors `alpha2_model::MAX_REVEAL_FEATHER`. */
+export const MAX_REVEAL_FEATHER = 1;
+
 /** Mirrors `alpha2_model::MAX_RUN_CLASSES`. */
 export const MAX_RUN_CLASSES = 8;
 
@@ -278,8 +287,20 @@ export const MAX_SVG_DOCUMENT_BYTES = 33554432;
 /** Mirrors `alpha2_model::MAX_TEXT_ANIMATORS`. */
 export const MAX_TEXT_ANIMATORS = 8;
 
+/** Mirrors `alpha2_model::MAX_TEXT_BORDER_WIDTH`. */
+export const MAX_TEXT_BORDER_WIDTH = 0.5;
+
 /** Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`. */
 export const MAX_TEXT_CONTENT_BYTES = 4096;
+
+/** Mirrors `alpha2_model::MAX_TEXT_DASH_ENTRY`. */
+export const MAX_TEXT_DASH_ENTRY = 4;
+
+/** Mirrors `alpha2_model::MAX_TEXT_DASH_OFFSET`. */
+export const MAX_TEXT_DASH_OFFSET = 16;
+
+/** Mirrors `alpha2_model::MAX_TEXT_FONT_SELECTIONS`. */
+export const MAX_TEXT_FONT_SELECTIONS = 16;
 
 /** Mirrors `alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE`. */
 export const MAX_TEXT_GENERATOR_FONT_SIZE = 1;
@@ -303,7 +324,7 @@ export const MAX_TEXT_SHADOW_BLUR = 1;
 export const MAX_TEXT_SHADOW_OFFSET = 1;
 
 /** Mirrors `alpha2_model::MAX_TEXT_STROKES`. */
-export const MAX_TEXT_STROKES = 4;
+export const MAX_TEXT_STROKES = 8;
 
 /** Mirrors `alpha2_model::MAX_TEXT_STROKE_EXTENT`. */
 export const MAX_TEXT_STROKE_EXTENT = 0.5;
@@ -322,6 +343,9 @@ export const MIN_EQ_FREQUENCY_HZ = 10;
 
 /** Mirrors `alpha2_model::MIN_EQ_Q`. */
 export const MIN_EQ_Q = 0.05;
+
+/** Mirrors `alpha2_model::MIN_FONT_SCALE`. */
+export const MIN_FONT_SCALE = 0.1;
 
 /** Mirrors `alpha2_model::MIN_FONT_WEIGHT`. */
 export const MIN_FONT_WEIGHT = 1;
@@ -370,6 +394,14 @@ export const ALIGN_ITEMS_VALUES: readonly AlignItems[] = [
   "center",
   "end",
   "stretch",
+];
+
+/** Every {@link AnimatorGrouping}, in the model's order. */
+export const ANIMATOR_GROUPING_VALUES: readonly AnimatorGrouping[] = [
+  "character",
+  "word",
+  "line",
+  "all",
 ];
 
 /** Every {@link BlendSpace}, in the model's order. */
@@ -472,6 +504,13 @@ export const FLEX_DIRECTION_VALUES: readonly FlexDirection[] = [
 /** Every {@link FlexWrap}, in the model's order. */
 export const FLEX_WRAP_VALUES: readonly FlexWrap[] = ["nowrap", "wrap"];
 
+/** Every {@link FontStyle}, in the model's order. */
+export const FONT_STYLE_VALUES: readonly FontStyle[] = [
+  "normal",
+  "italic",
+  "oblique",
+];
+
 /** Every {@link GridAutoFlow}, in the model's order. */
 export const GRID_AUTO_FLOW_VALUES: readonly GridAutoFlow[] = [
   "row",
@@ -482,6 +521,9 @@ export const GRID_AUTO_FLOW_VALUES: readonly GridAutoFlow[] = [
 
 /** Every {@link HdrSources}, in the model's order. */
 export const HDR_SOURCES_VALUES: readonly HdrSources[] = ["tone_map", "reject"];
+
+/** Every {@link HighlightGap}, in the model's order. */
+export const HIGHLIGHT_GAP_VALUES: readonly HighlightGap[] = ["hold", "hide"];
 
 /** Every {@link JustifyContent}, in the model's order. */
 export const JUSTIFY_CONTENT_VALUES: readonly JustifyContent[] = [
@@ -537,6 +579,7 @@ export const MEDIA_KIND_VALUES: readonly MediaKind[] = [
   "image",
   "generated",
   "composition",
+  "adjustment",
 ];
 
 /** Every {@link MissingFrames}, in the model's order. */
@@ -586,6 +629,13 @@ export const TEXT_ALIGN_VALUES: readonly TextAlign[] = [
   "start",
   "center",
   "end",
+];
+
+/** Every {@link TextBoxExtent}, in the model's order. */
+export const TEXT_BOX_EXTENT_VALUES: readonly TextBoxExtent[] = [
+  "line",
+  "revealed",
+  "block",
 ];
 
 /** Every {@link TextUnit}, in the model's order. */
@@ -812,6 +862,12 @@ export type AnimatedPoint =
        */
       readonly via?: DataVia | null;
     };
+
+/**
+ * The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+ * Grouping.
+ */
+export type AnimatorGrouping = "character" | "word" | "line" | "all";
 
 /**
  * A serializable single-input audio effect applied to a clip or track bus.
@@ -1910,6 +1966,11 @@ export interface FontSizeFit {
 }
 
 /**
+ * Which faces of a family text prefers, as CSS `font-style`.
+ */
+export type FontStyle = "normal" | "italic" | "oblique";
+
+/**
  * A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).
  */
 export interface FrameRate {
@@ -2010,6 +2071,11 @@ export type GridPlacement = number | string;
  * What a project does with HDR sources.
  */
 export type HdrSources = "tone_map" | "reject";
+
+/**
+ * What a highlight does after its run ends, before the next starts.
+ */
+export type HighlightGap = "hold" | "hide";
 
 /**
  * A length on each side of a box: one length for every side, the CSS shorthand of one to four lengths ("8px 16px": top first, clockwise), or the sides object, missing sides 0.
@@ -2417,19 +2483,31 @@ export interface LayoutNode {
    */
   readonly strokes?: readonly TextStroke[] | null;
   /**
-   * The box's text, wrapped at its content width in the inherited style; `\n` starts a line.
-   * At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty. Keyframes all `hold`.
-   * Not with `children` or `shape`.
+   * The box's text, a string or runs, wrapped at its content width in the inherited style;
+   * `\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty.
+   * Keyframes all `hold`. A run takes a `style` with a constant `font_scale` only: no
+   * `class`, `time` or keyframes. Not with `children` or `shape`.
    */
-  readonly text?: Keyframed<string> | null;
+  readonly text?: Keyframed<TextContent> | null;
   /**
    * How lines align within the content width. Inherited; the root's is `start`.
    */
   readonly text_align?: TextAlign | null;
   /**
+   * The units whose characters `text_animators` scale and turn about one pivot, as a text
+   * style's `animator_grouping`. Not inherited.
+   */
+  readonly text_animator_grouping?: AnimatorGrouping | null;
+  /**
+   * Where in each group's box its pivot lies, as a text style's `animator_pivot`. Not
+   * inherited.
+   */
+  readonly text_animator_pivot?: Vec2 | null;
+  /**
    * Per-character motion of the box's own text, Range selectors only (layout text has no
-   * runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited; never
-   * changes layout.
+   * runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited. They
+   * never change layout, except that one whose advance follows its scale makes the text wrap,
+   * and measure as wide, with room for its largest scale.
    */
   readonly text_animators?: readonly TextAnimator[];
   /**
@@ -2666,7 +2744,7 @@ export interface MediaFingerprint {
  * The payload domain of a source.
  */
 export type MediaKind =
-  "video" | "audio" | "image" | "generated" | "composition";
+  "video" | "audio" | "image" | "generated" | "composition" | "adjustment";
 
 /**
  * A host-resolved media resource.
@@ -2716,7 +2794,8 @@ export interface MediaSource {
   readonly kind: MediaKind;
   /**
    * Opaque URI or host locator; the engine does not open it. Required except for
-   * `MediaKind::Generated` and `MediaKind::Composition` sources.
+   * `MediaKind::Generated`, `MediaKind::Composition` and `MediaKind::Adjustment` sources,
+   * which have none.
    *
    * @defaultValue `""`
    */
@@ -2776,7 +2855,8 @@ export type NodeOp =
   | {
       /**
        * The picture of the clip showing the composition: its source at the time-mapped source
-       * time, or what its generated source draws.
+       * time, or what its generated source draws. For an adjustment clip, the scene composited
+       * beneath it.
        */
       readonly type: "clip";
     }
@@ -2905,6 +2985,39 @@ export type NodeOp =
        * The input kept where a second image says.
        */
       readonly type: "matte";
+    }
+  | {
+      /**
+       * The picture replaced.
+       *
+       * @defaultValue `null`
+       */
+      readonly backdrop?: NodeId | null;
+      /**
+       * The picture that replaces it.
+       *
+       * @defaultValue `null`
+       */
+      readonly input?: NodeId | null;
+      /**
+       * The image whose alpha is coverage; unconnected, the coverage is `opacity` everywhere.
+       *
+       * @defaultValue `null`
+       */
+      readonly mask?: NodeId | null;
+      /**
+       * Scales the coverage, in `0..=1`.
+       *
+       * @defaultValue `{"mode":"constant","value":1}`
+       */
+      readonly opacity?: Animated<number>;
+      /**
+       * The backdrop replaced by the input by `k = opacity x mask alpha`, as
+       * `(1 - k) backdrop + k input` on premultiplied values: exactly the backdrop where `k` is 0
+       * and the input where it is 1 (Nuke's `KeyMix` with an opacity). Bypassed, it passes the
+       * backdrop through.
+       */
+      readonly type: "key_mix";
     }
   | {
       /**
@@ -3869,6 +3982,12 @@ export interface TextAnimator {
  */
 export interface TextAnimatorProperties {
   /**
+   * Whether the character's advance follows this animator's horizontal scale, pushing the
+   * characters after it along its line, which is re-aligned; lines are not re-broken, and the
+   * text wraps with room for the largest scale this can reach. Needs `scale`.
+   */
+  readonly advance_follows_scale?: boolean;
+  /**
    * The fill color a fully selected character takes; a gradient fill is mixed toward it.
    */
   readonly fill?: Keyframed<Rgba> | null;
@@ -3880,6 +3999,12 @@ export interface TextAnimatorProperties {
    * The opacity a fully selected character takes, in `[0, 1]`.
    */
   readonly opacity?: Animated<number> | null;
+  /**
+   * Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight
+   * edge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows
+   * `progress` of itself.
+   */
+  readonly reveal?: TextReveal | null;
   /**
    * Turns the character about its centre, clockwise degrees.
    */
@@ -3901,20 +4026,59 @@ export interface TextAnimatorProperties {
 }
 
 /**
- * A box behind each line of text.
+ * A box behind each line of text, as CSS draws an inline box's background with
+ * `box-decoration-break: clone`: each line's box has its own padding, radius and border.
  */
 export interface TextBackground {
+  /**
+   * A line inside the box's edge, as a CSS border. `None` draws none.
+   */
+  readonly border?: TextBoxBorder | null;
   /**
    * Box color.
    */
   readonly color: Rgba;
   /**
-   * Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.
+   * Which part of each line the box spans.
+   */
+  readonly extent?: TextBoxExtent;
+  /**
+   * Space between the text and the box edge, as fractions of the font size, each side in
+   * `[0, 2]`.
    *
    * @defaultValue `0`
    */
-  readonly padding?: number;
+  readonly padding?: TextInsets;
+  /**
+   * Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is
+   * capped at half its shorter side, as CSS `border-radius`. Default 0.
+   */
+  readonly radius?: number;
 }
+
+/**
+ * The border of a text box, drawn inside the box's edge.
+ */
+export interface TextBoxBorder {
+  /**
+   * Line color.
+   */
+  readonly color: Rgba;
+  /**
+   * Dashes along the border's centre line; `None` draws it solid.
+   */
+  readonly dash?: TextDash | null;
+  /**
+   * Width as a fraction of the font size, in `(0, 0.5]`.
+   */
+  readonly width: number;
+}
+
+/**
+ * Which part of each line a text's background box spans, where tracking and pushing place its
+ * characters.
+ */
+export type TextBoxExtent = "line" | "revealed" | "block";
 
 /**
  * A text: one string, or runs whose texts joined are the text.
@@ -3924,7 +4088,104 @@ export interface TextBackground {
 export type TextContent = string | readonly TextRun[];
 
 /**
- * A piece of a text that animators' Class and Timing selectors can pick.
+ * Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at
+ * the end of the top-left corner and run clockwise.
+ */
+export interface TextDash {
+  /**
+   * How far into the pattern the border starts, in font sizes, in `[-16, 16]`.
+   */
+  readonly offset?: number;
+  /**
+   * Alternating dash and gap lengths, as fractions of the font size: one to
+   * `MAX_DASH_ENTRIES` entries in `[0, 4]`, not all zero. An odd count repeats once
+   * more to pair up.
+   */
+  readonly pattern: readonly number[];
+}
+
+/**
+ * A box over the timed run being said, sliding from run to run, drawn over the background
+ * boxes and under the glyphs. The run is the timed run that started last; before the first
+ * starts there is none.
+ */
+export interface TextHighlight {
+  /**
+   * A line inside the box's edge, as a background's `border`.
+   */
+  readonly border?: TextBoxBorder | null;
+  /**
+   * Box color.
+   */
+  readonly color: Rgba;
+  /**
+   * The slide's timing curve.
+   */
+  readonly easing?: Easing;
+  /**
+   * What the box does between a run's end and the next run's start.
+   */
+  readonly gap?: HighlightGap;
+  /**
+   * Space between the run and the box edge, as a background's `padding`.
+   *
+   * @defaultValue `0`
+   */
+  readonly padding?: TextInsets;
+  /**
+   * Every corner's radius, as a background's `radius`.
+   */
+  readonly radius?: number;
+  /**
+   * How long the box takes to slide to the next run once it starts, at most
+   * `MAX_HIGHLIGHT_TRANSITION`; 0 jumps. A change during a slide starts where the box is.
+   */
+  readonly transition?: MediaTime;
+}
+
+/**
+ * A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers ("0.1 0.3": top first, clockwise), or the sides object, missing sides 0.
+ */
+export type TextInsets =
+  | number
+  | string
+  | {
+      readonly bottom?: number;
+      readonly left?: number;
+      readonly right?: number;
+      readonly top?: number;
+    };
+
+/**
+ * A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its
+ * advances by its em boxes, outset by its strokes) in the direction `angle_degrees`.
+ */
+export interface TextReveal {
+  /**
+   * The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,
+   * 90 top to bottom. Default 0.
+   *
+   * @defaultValue `{"mode":"constant","value":0}`
+   */
+  readonly angle_degrees?: Animated<number>;
+  /**
+   * The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel
+   * antialiased step. Default 0.
+   *
+   * @defaultValue `{"mode":"constant","value":0}`
+   */
+  readonly feather?: Animated<number>;
+  /**
+   * How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit
+   * selected by `w` shows `1 + w (progress - 1)`. Default 0.
+   *
+   * @defaultValue `{"mode":"constant","value":0}`
+   */
+  readonly progress?: Animated<number>;
+}
+
+/**
+ * A piece of a text with its own style, that animators' Class and Timing selectors can pick.
  */
 export interface TextRun {
   /**
@@ -3932,6 +4193,10 @@ export interface TextRun {
    * most `MAX_RUN_CLASSES`.
    */
   readonly class?: readonly string[];
+  /**
+   * Changes to the holder's style for this run's characters.
+   */
+  readonly style?: TextRunStyle | null;
   /**
    * Non-empty; `\n` starts a line. A grapheme cluster spanning two runs belongs to the run
    * holding its first byte.
@@ -3942,6 +4207,59 @@ export interface TextRun {
    * generator's picture time zero).
    */
   readonly time?: RunTime | null;
+}
+
+/**
+ * A run's changes to its holder's text style, as an inline box's own CSS properties. Each
+ * field set replaces the holder's value for the run's characters; a field left out keeps it.
+ * A change of family, weight, style, size or letter spacing shapes the run apart and can move
+ * line breaks; fill, strokes, background and decorations only paint.
+ */
+export interface TextRunStyle {
+  /**
+   * A box behind the run on each line, its advances wide and its em box tall, as CSS
+   * `background-color` paints an inline box.
+   */
+  readonly background_color?: Rgba | null;
+  /**
+   * What paints the run's glyphs; gradient positions are in the text's layout box, as the
+   * text's fill.
+   */
+  readonly fill?: Paint | null;
+  /**
+   * The family, as a text style's `font_family`; `null` draws from the fallback order alone.
+   */
+  readonly font_family?: string | null;
+  /**
+   * The run's size as a multiple of the text's font size, in `[0.1, 10]`, as CSS
+   * `font-size: <n>em`. Lines are laid out again when it changes; keyframes are in the
+   * holder's time.
+   */
+  readonly font_scale?: Animated<number> | null;
+  /**
+   * The face style, as a text style's `font_style`.
+   */
+  readonly font_style?: FontStyle | null;
+  /**
+   * The weight in `[1, 1000]`, as a text style's `font_weight`.
+   */
+  readonly font_weight?: number | null;
+  /**
+   * Space after each character, as a fraction of the run's size, in `[-0.5, 1]`.
+   */
+  readonly letter_spacing?: number | null;
+  /**
+   * See `TextStyle::line_through`.
+   */
+  readonly line_through?: boolean | null;
+  /**
+   * The run's bands, as a text style's `strokes`, widths in fractions of the run's size.
+   */
+  readonly strokes?: readonly TextStroke[] | null;
+  /**
+   * See `TextStyle::underline`.
+   */
+  readonly underline?: boolean | null;
 }
 
 /**
@@ -4096,9 +4414,21 @@ export interface TextStyle {
    */
   readonly anchor?: Vec2;
   /**
+   * The units whose characters the animators scale and turn about one pivot.
+   */
+  readonly animator_grouping?: AnimatorGrouping;
+  /**
+   * Where in each group's box (the union of its characters' advances by their em boxes) the
+   * pivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`
+   * percentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre
+   * on one line. Not animated.
+   */
+  readonly animator_pivot?: Vec2;
+  /**
    * Per-character motion and color, applied in order, at most `MAX_TEXT_ANIMATORS`.
    * Keyframes are in the holder's time (since a caption cue's start, or a text generator's
-   * picture time). They never change line layout.
+   * picture time). They never re-break lines while they play; an animator whose advance
+   * follows its scale makes the text wrap with room for its largest scale.
    */
   readonly animators?: readonly TextAnimator[];
   /**
@@ -4136,6 +4466,12 @@ export interface TextStyle {
    */
   readonly font_size_fit?: FontSizeFit | null;
   /**
+   * The face style matched before weight, as CSS Fonts 4 matches `font-style`. A face that is
+   * neither italic nor oblique is sheared by 14 degrees when one is asked; bitmap glyphs stay
+   * upright. Default `normal`.
+   */
+  readonly font_style?: FontStyle;
+  /**
    * The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
    * `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
    * synthetically emboldened.
@@ -4143,6 +4479,10 @@ export interface TextStyle {
    * @defaultValue `400`
    */
   readonly font_weight?: number;
+  /**
+   * A box over the timed run being said. Needs timed runs; without them it draws nothing.
+   */
+  readonly highlight?: TextHighlight | null;
   /**
    * Space after each character, as a fraction of the font size, in `[-0.5, 1]`, added as CSS
    * `letter-spacing` does: none after a line's last character or within cursive scripts such
@@ -4162,6 +4502,11 @@ export interface TextStyle {
    * @defaultValue `1.2`
    */
   readonly line_height?: number;
+  /**
+   * A line through the glyphs, as CSS `text-decoration-line: line-through`, placed by the
+   * font.
+   */
+  readonly line_through?: boolean;
   /**
    * Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
    * `font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS
@@ -4191,6 +4536,10 @@ export interface TextStyle {
    * `MAX_TEXT_STROKES`, widths summing to at most `MAX_TEXT_STROKE_EXTENT`.
    */
   readonly strokes?: readonly TextStroke[];
+  /**
+   * A line under the glyphs, as CSS `text-decoration-line: underline`, placed by the font.
+   */
+  readonly underline?: boolean;
 }
 
 /**
@@ -4206,6 +4555,14 @@ export interface TextStylePatch {
    * See `TextStyle::anchor`.
    */
   readonly anchor?: Vec2 | null;
+  /**
+   * See `TextStyle::animator_grouping`.
+   */
+  readonly animator_grouping?: AnimatorGrouping | null;
+  /**
+   * See `TextStyle::animator_pivot`.
+   */
+  readonly animator_pivot?: Vec2 | null;
   /**
    * See `TextStyle::animators`.
    */
@@ -4231,9 +4588,17 @@ export interface TextStylePatch {
    */
   readonly font_size_fit?: FontSizeFit | null;
   /**
+   * See `TextStyle::font_style`.
+   */
+  readonly font_style?: FontStyle | null;
+  /**
    * See `TextStyle::font_weight`.
    */
   readonly font_weight?: number | null;
+  /**
+   * The box over the timed run being said; `null` removes the base's.
+   */
+  readonly highlight?: TextHighlight | null;
   /**
    * See `TextStyle::letter_spacing`.
    */
@@ -4246,6 +4611,10 @@ export interface TextStylePatch {
    * See `TextStyle::line_height`.
    */
   readonly line_height?: number | null;
+  /**
+   * See `TextStyle::line_through`.
+   */
+  readonly line_through?: boolean | null;
   /**
    * See `TextStyle::max_height`; `null` removes the base's.
    */
@@ -4266,6 +4635,10 @@ export interface TextStylePatch {
    * See `TextStyle::strokes`.
    */
   readonly strokes?: readonly TextStroke[] | null;
+  /**
+   * See `TextStyle::underline`.
+   */
+  readonly underline?: boolean | null;
 }
 
 /**

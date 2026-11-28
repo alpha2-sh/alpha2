@@ -12,7 +12,7 @@ fn a_copy_refuses_a_source_whose_carried_display_a_render_would_not_show() {
     let plan = |name: &str| {
         let source = corpus(name);
         crate::plan_packet_copy(&crate::PacketCopyRequest {
-            source: &source,
+            source: &alpha2_host_core::remote::SourceLocation::from(&source),
             frame_times: &frame_times,
             width: 128,
             height: 96,
@@ -45,17 +45,32 @@ fn a_yuv_transcode_takes_any_codec_whose_pictures_already_are_the_output() {
         ("h264-bt709-copy.mp4", 128, 96, h264),
         ("vp9-color.webm", 256, 64, vp9),
     ] {
-        crate::check_yuv_transcode(&corpus(name), width, height, output)
-            .unwrap_or_else(|reason| panic!("{name}: {reason}"));
+        crate::check_yuv_transcode(
+            &alpha2_host_core::remote::SourceLocation::from(&corpus(name)),
+            width,
+            height,
+            output,
+        )
+        .unwrap_or_else(|reason| panic!("{name}: {reason}"));
     }
     let opened = || crate::decode::INPUTS_OPENED.with(std::cell::Cell::get);
     let before = opened();
-    crate::check_yuv_transcode(&corpus("h264-bt709-copy.mp4"), 128, 96, h264)
-        .expect("the copy fixture qualifies");
+    crate::check_yuv_transcode(
+        &alpha2_host_core::remote::SourceLocation::from(&corpus("h264-bt709-copy.mp4")),
+        128,
+        96,
+        h264,
+    )
+    .expect("the copy fixture qualifies");
     assert_eq!(opened() - before, 1, "inputs opened by one check");
     // H.264 without VUI sites chroma left, as an H.264 output does.
-    crate::check_yuv_transcode(&corpus("h264-bt709-no-vui.mp4"), 128, 96, h264)
-        .unwrap_or_else(|reason| panic!("h264-bt709-no-vui.mp4: {reason}"));
+    crate::check_yuv_transcode(
+        &alpha2_host_core::remote::SourceLocation::from(&corpus("h264-bt709-no-vui.mp4")),
+        128,
+        96,
+        h264,
+    )
+    .unwrap_or_else(|reason| panic!("h264-bt709-no-vui.mp4: {reason}"));
     for (name, width, height, output, expected) in [
         (
             "h264-bt709-copy.mp4",
@@ -84,8 +99,13 @@ fn a_yuv_transcode_takes_any_codec_whose_pictures_already_are_the_output() {
             "stream declares",
         ),
     ] {
-        let reason =
-            crate::check_yuv_transcode(&corpus(name), width, height, output).expect_err(name);
+        let reason = crate::check_yuv_transcode(
+            &alpha2_host_core::remote::SourceLocation::from(&corpus(name)),
+            width,
+            height,
+            output,
+        )
+        .expect_err(name);
         assert!(reason.contains(expected), "{name}: {reason}");
     }
 }
@@ -173,7 +193,7 @@ fn copied_audio_whose_timestamps_land_outside_the_video_is_not_copied() {
         .collect::<Vec<_>>();
     let plan = |source: &Path| {
         crate::plan_packet_copy(&crate::PacketCopyRequest {
-            source,
+            source: &alpha2_host_core::remote::SourceLocation::from(source),
             frame_times: &frame_times,
             width: 128,
             height: 96,
@@ -228,7 +248,7 @@ fn copy_plan(
     let source = corpus(name);
     let frame_times = copy_frame_times(frames);
     crate::plan_packet_copy(&crate::PacketCopyRequest {
-        source: &source,
+        source: &alpha2_host_core::remote::SourceLocation::from(&source),
         frame_times: &frame_times,
         width: 128,
         height: 96,
@@ -279,7 +299,7 @@ fn a_copy_takes_only_a_source_whose_container_and_stream_are_tagged_as_the_outpu
     let plan = |name: &str| {
         let source = corpus(name);
         crate::plan_packet_copy(&crate::PacketCopyRequest {
-            source: &source,
+            source: &alpha2_host_core::remote::SourceLocation::from(&source),
             frame_times: &frame_times,
             width: 256,
             height: 144,
@@ -312,7 +332,7 @@ fn a_copy_names_each_refusal_its_correctness_rests_on() {
         .map(|frame| MediaTime::from_ticks(frame * alpha2_time::TICKS_PER_SECOND / 25))
         .collect::<Vec<_>>();
     let reason = crate::plan_packet_copy(&crate::PacketCopyRequest {
-        source: &source,
+        source: &alpha2_host_core::remote::SourceLocation::from(&source),
         frame_times: &off_grid,
         width: 128,
         height: 96,
@@ -374,7 +394,7 @@ fn a_cancelled_copy_leaves_nothing() {
 #[test]
 fn a_planner_reads_each_source_once_and_stops_when_cancelled() {
     fn request<'a>(
-        source: &'a Path,
+        source: &'a alpha2_host_core::remote::SourceLocation,
         first: i64,
         times: &'a [MediaTime],
     ) -> crate::PacketCopyRequest<'a> {
@@ -391,7 +411,7 @@ fn a_planner_reads_each_source_once_and_stops_when_cancelled() {
         }
     }
     let opened = || crate::decode::INPUTS_OPENED.with(std::cell::Cell::get);
-    let source = corpus("h264-bt709-copy.mp4");
+    let source = alpha2_host_core::remote::SourceLocation::from(corpus("h264-bt709-copy.mp4"));
     let (early, late) = (copy_frame_times(0..30), copy_frame_times(30..60));
     let mut planner = crate::PacketCopyPlanner::new(CancelToken::default());
     let before = opened();

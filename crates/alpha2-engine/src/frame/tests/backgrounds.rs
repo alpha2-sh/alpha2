@@ -4,6 +4,7 @@ use super::*;
 
 fn white_clip(opacity: f32, scale: Vec2) -> ActiveClip<'static> {
     ActiveClip {
+        adjustment: false,
         data: alpha2_eval::SampleContext::NONE,
         correction: None,
         clip_id: leak(ClipId::new("clip").expect("valid ID")),
@@ -191,6 +192,7 @@ fn an_odd_canvas_previews_even_though_it_cannot_be_exported() {
         canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            adjustment: false,
             data: alpha2_eval::SampleContext::NONE,
             correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),

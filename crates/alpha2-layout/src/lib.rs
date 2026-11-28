@@ -9,6 +9,7 @@
 mod fit;
 pub mod json;
 pub mod layout;
+mod report;
 mod text;
 pub mod text_animation;
 
@@ -23,11 +24,12 @@ pub use layout::{
     LAYOUT_WRAP_SLACK, LayoutBounds, NodeBounds, NodeRects, ResolvedLayout, fit_texts,
     layout_texts, measure_layout, resolve, shape_texts,
 };
+pub use report::{ClusterReport, LineReport, TextLayoutReport, WordReport, text_layout};
 pub use text::{
-    MAX_FONT_PIXELS, MAX_PADDING_PIXELS, MAX_STROKE_PIXELS, ShadowPixels, TextAnimation,
+    MAX_FONT_PIXELS, MAX_PADDING_PIXELS, MAX_STROKE_PIXELS, ShadowPixels, TextAnimation, TextAt,
     TextBounds, TextDraw, animated_text_key, fit_text, font_pixels, layout_text_key, measure_text,
     rgba8, shadow_pixels, shaped_key, stroke_pixels, text_draw, text_fill, text_key, text_request,
-    text_request_at,
+    text_request_at, text_spans,
 };
 
 /// The size in pixels of a picture text and layouts are placed on. Never empty, and within

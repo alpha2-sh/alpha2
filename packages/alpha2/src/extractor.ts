@@ -150,18 +150,40 @@ export interface Extractor {
   madeByPlugin?(): MadeByPlugin;
 }
 
-/** Progress of one pass; `total` is `null` for source frames, whose count is not known ahead. */
+/**
+ * Where an extraction is. `stage` is `begin` while the extractor's `begin` runs, `pass` while a
+ * pass is read and `end` while its `end` runs; `pass` is the pass that concerns, the first
+ * under `begin` and the last under `end`. `completed` of `total` deliveries are made; `total` is
+ * `null` for source frames, whose count is not known ahead. `covered` of `span` ticks are read:
+ * `span` is the part of the range the pass reads, and `covered` never decreases and reaches it
+ * when the pass ends. `span` is 0 for a backward pass from the range's start.
+ */
 export interface ExtractProgress {
   readonly phase: "extract";
+  readonly stage: "begin" | "pass" | "end";
   readonly pass: number;
   readonly completed: number;
   readonly total: number | null;
+  readonly covered: number;
+  readonly span: number;
+}
+
+/** How the browser decoded one source's video for an extraction. */
+export interface ExtractSourceDecode {
+  /** What the decoder was opened with: software, unless this browser's did not decode the source. */
+  readonly hardwareAcceleration: "prefer-software" | "no-preference";
+  /** Why software decoding was not used, when it was not. */
+  readonly softwareRefusal?: string;
+  /** The first decoded frame's pixel format, once a frame was read. */
+  readonly frameFormat?: string;
 }
 
 /** What an extraction returns: the data sets, ready to put in the project. */
 export interface ExtractResult {
   readonly dataSets: readonly DataSet[];
   readonly timings: Readonly<Record<string, number>>;
+  /** In the browser: how each source whose frames were read was decoded, by source id. */
+  readonly sourceDecode?: Readonly<Record<string, ExtractSourceDecode>>;
 }
 
 function text(value: unknown, what: string): string {

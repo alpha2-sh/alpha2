@@ -108,3 +108,51 @@ fn sizes_are_clamped_to_what_the_text_host_draws() {
             .all(|pixels| (1.0..=MAX_FONT_PIXELS).contains(pixels))
     );
 }
+
+#[test]
+fn a_fit_scales_every_run_with_the_base_size() {
+    let rasterizer = alpha2_text::TextRasterizer::new(vec![alpha2_text::TextFont {
+        family: "Alpha2 Fixture".into(),
+        bytes: std::fs::read("../../tests/fonts/Alpha2Fixture.ttf")
+            .expect("fixture font")
+            .into(),
+        face_index: 0,
+    }])
+    .expect("font");
+    let size = crate::PictureSize::new(640, 360).expect("size");
+    let content: alpha2_model::TextContent = serde_json::from_value(serde_json::json!([
+        { "text": "fit " },
+        { "text": "THIS", "style": { "font_scale": { "mode": "constant", "value": 2 } } }
+    ]))
+    .expect("runs");
+    let style = alpha2_model::TextStyle {
+        font_size: 0.5,
+        max_width: 0.5,
+        font_size_fit: Some(FontSizeFit {
+            min: 0.01,
+            max: None,
+        }),
+        ..alpha2_model::TextStyle::default()
+    };
+    let text = crate::TextAt::new(&content, alpha2_time::MediaTime::ZERO);
+    let fitted = crate::fit_text(&text, &style, size, |request| {
+        rasterizer.shape(request).map(std::sync::Arc::new)
+    })
+    .expect("fits");
+    assert!(
+        fitted.font_size < 0.5,
+        "the larger run made the text shrink"
+    );
+    let request = crate::text_request_at(&text, &style, size, 1, fitted.font_pixels);
+    assert_eq!(request.spans[1].font_size, 2.0 * fitted.font_pixels);
+    let shaped = rasterizer.shape(&request).expect("shapes");
+    assert!(
+        shaped.min_content_width() <= request.max_width,
+        "no word splits"
+    );
+    let plain = crate::fit_text(&crate::TextAt::from("fit THIS"), &style, size, |request| {
+        rasterizer.shape(request).map(std::sync::Arc::new)
+    })
+    .expect("fits");
+    assert!(plain.font_size > fitted.font_size);
+}

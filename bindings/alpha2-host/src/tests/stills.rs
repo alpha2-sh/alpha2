@@ -72,7 +72,8 @@ fn reference(host: &Host, project: &Value, time: MediaTime) -> Vec<u8> {
     let snapshot = EngineProject::new(project.clone()).expect("snapshot");
     let size = alpha2_render::RenderSize::new(project.settings.width, project.settings.height)
         .expect("size");
-    let mut state = ExportDecodeState::new(&project, &assets()).expect("decode state");
+    let mut state = ExportDecodeState::new(&project, &crate::tests::locations(&assets()))
+        .expect("decode state");
     let needs = snapshot
         .frame_needs(time)
         .expect("needs")

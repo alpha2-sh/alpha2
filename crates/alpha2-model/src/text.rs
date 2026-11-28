@@ -1,6 +1,7 @@
 //! Styled text: what caption tracks and text generators draw.
 
 use crate::{Paint, Rgba, TextAnimator, Vec2};
+use alpha2_time::MediaTime;
 use serde::{Deserialize, Serialize};
 
 /// Most bytes of text in one caption cue or text generator.
@@ -22,11 +23,18 @@ pub const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
 pub const FONT_WEIGHT_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 
 /// Most strokes around one text.
-pub const MAX_TEXT_STROKES: usize = 4;
+pub const MAX_TEXT_STROKES: usize = 8;
 
 /// Widest a text's strokes reach together (the sum of their widths), as a fraction of the
 /// font size.
 pub const MAX_TEXT_STROKE_EXTENT: f32 = 0.5;
+
+/// Most distinct `(family, weight, style)` selections one text draws in, counted after each
+/// run's style is applied.
+pub const MAX_TEXT_FONT_SELECTIONS: usize = 16;
+
+/// The range a run's `font_scale` takes, as multiples of the text's font size.
+pub const FONT_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.1..=10.0;
 
 /// Most shadows under one text.
 pub const MAX_TEXT_SHADOWS: usize = 4;
@@ -37,8 +45,17 @@ pub const MAX_TEXT_SHADOW_OFFSET: f32 = 1.0;
 /// Widest text shadow blur, as a fraction of the font size.
 pub const MAX_TEXT_SHADOW_BLUR: f32 = 1.0;
 
-/// Largest text background padding, as a fraction of the font size.
+/// Largest text background padding and radius, as a fraction of the font size.
 pub const MAX_TEXT_PADDING: f32 = 2.0;
+
+/// Widest text box border, as a fraction of the font size.
+pub const MAX_TEXT_BORDER_WIDTH: f32 = 0.5;
+
+/// Largest dash or gap of a text box border, as a fraction of the font size.
+pub const MAX_TEXT_DASH_ENTRY: f32 = 4.0;
+
+/// Largest magnitude of a text box border's dash offset, as a fraction of the font size.
+pub const MAX_TEXT_DASH_OFFSET: f32 = 16.0;
 /// Largest magnitude of a text's `position` or `anchor` coordinate, in canvas or text extents.
 pub const MAX_TEXT_POSITION: f32 = 1_024.0;
 
@@ -92,6 +109,18 @@ pub struct TextStyle {
     /// synthetically emboldened.
     #[serde(default = "default_font_weight")]
     pub font_weight: u16,
+    /// The face style matched before weight, as CSS Fonts 4 matches `font-style`. A face that is
+    /// neither italic nor oblique is sheared by 14 degrees when one is asked; bitmap glyphs stay
+    /// upright. Default `normal`.
+    #[serde(default, skip_serializing_if = "FontStyle::is_normal")]
+    pub font_style: FontStyle,
+    /// A line under the glyphs, as CSS `text-decoration-line: underline`, placed by the font.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+    /// A line through the glyphs, as CSS `text-decoration-line: line-through`, placed by the
+    /// font.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub line_through: bool,
     /// How lines align within the text.
     #[serde(default)]
     pub align: TextAlign,
@@ -133,13 +162,51 @@ pub struct TextStyle {
     /// A box behind each line.
     #[serde(default)]
     pub background: Option<TextBackground>,
+    /// A box over the timed run being said. Needs timed runs; without them it draws nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<TextHighlight>,
     /// Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].
     /// Keyframes are in the holder's time (since a caption cue's start, or a text generator's
-    /// picture time). They never change line layout.
+    /// picture time). They never re-break lines while they play; an animator whose advance
+    /// follows its scale makes the text wrap with room for its largest scale.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TEXT_ANIMATORS }>")]
     #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_ANIMATORS)))]
     pub animators: Vec<TextAnimator>,
+    /// The units whose characters the animators scale and turn about one pivot.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub animator_grouping: crate::AnimatorGrouping,
+    /// Where in each group's box (the union of its characters' advances by their em boxes) the
+    /// pivot lies, fractions from its left and top in `[0, 1]`, as CSS `transform-origin`
+    /// percentages: `(0.5, 0.5)`, the default, is its centre, `(0.5, 0.8)` its baseline's centre
+    /// on one line. Not animated.
+    #[serde(
+        default = "default_animator_pivot",
+        skip_serializing_if = "is_default_animator_pivot"
+    )]
+    pub animator_pivot: Vec2,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+/// The centre of a group's box.
+pub(crate) const fn default_animator_pivot() -> Vec2 {
+    Vec2::new(0.5, 0.5)
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference; the lint fires only where a pointer is as wide as a Vec2"
+)]
+pub(crate) fn is_default_animator_pivot(pivot: &Vec2) -> bool {
+    *pivot == default_animator_pivot()
+}
+
+/// Whether `pivot` lies in a group's box.
+pub(crate) fn valid_animator_pivot(pivot: Vec2) -> bool {
+    (0.0..=1.0).contains(&pivot.x) && (0.0..=1.0).contains(&pivot.y)
 }
 
 impl Default for TextStyle {
@@ -151,6 +218,9 @@ impl Default for TextStyle {
             line_height: default_line_height(),
             letter_spacing: 0.0,
             font_weight: default_font_weight(),
+            font_style: FontStyle::Normal,
+            underline: false,
+            line_through: false,
             align: TextAlign::default(),
             max_width: default_max_width(),
             max_height: None,
@@ -161,7 +231,10 @@ impl Default for TextStyle {
             strokes: Vec::new(),
             shadows: Vec::new(),
             background: None,
+            highlight: None,
             animators: Vec::new(),
+            animator_grouping: crate::AnimatorGrouping::Character,
+            animator_pivot: default_animator_pivot(),
         }
     }
 }
@@ -287,6 +360,30 @@ impl BlockEllipsis {
     }
 }
 
+/// Which faces of a family text prefers, as CSS `font-style`.
+#[derive(
+    Copy, Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FontStyle {
+    /// Upright faces, then oblique, then italic.
+    #[default]
+    Normal,
+    /// Italic faces, then oblique, then upright ones sheared.
+    Italic,
+    /// Oblique faces, then italic, then upright ones sheared.
+    Oblique,
+}
+
+impl FontStyle {
+    /// Whether this is `normal`.
+    #[must_use]
+    pub const fn is_normal(&self) -> bool {
+        matches!(self, Self::Normal)
+    }
+}
+
 /// How lines of text align within it.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -330,16 +427,349 @@ pub struct TextShadow {
     pub blur: f32,
 }
 
-/// A box behind each line of text.
-#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
+/// A box behind each line of text, as CSS draws an inline box's background with
+/// `box-decoration-break: clone`: each line's box has its own padding, radius and border.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TextBackground {
     /// Box color.
     pub color: Rgba,
-    /// Space between the text and the box edge, as a fraction of the font size, in `[0, 2]`.
+    /// Space between the text and the box edge, as fractions of the font size, each side in
+    /// `[0, 2]`.
     #[serde(default)]
-    pub padding: f32,
+    pub padding: TextInsets,
+    /// Every corner's radius, as a fraction of the font size, in `[0, 2]`; each box's radius is
+    /// capped at half its shorter side, as CSS `border-radius`. Default 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub radius: f32,
+    /// A line inside the box's edge, as a CSS border. `None` draws none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<TextBoxBorder>,
+    /// Which part of each line the box spans.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub extent: TextBoxExtent,
+}
+
+/// Which part of each line a text's background box spans, where tracking and pushing place its
+/// characters.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TextBoxExtent {
+    /// From the line's first character to its last that is not a hanging space.
+    #[default]
+    Line,
+    /// From the first to the last revealed character that is not white space: shown, not scaled
+    /// to nothing, and not hidden by a reveal. A line with none has no box; a text without
+    /// animators draws as `line`.
+    Revealed,
+    /// One box over the whole layout box, `max_width` wide and as tall as the lines.
+    Block,
+}
+
+/// A box over the timed run being said, sliding from run to run, drawn over the background
+/// boxes and under the glyphs. The run is the timed run that started last; before the first
+/// starts there is none.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextHighlight {
+    /// Box color.
+    pub color: Rgba,
+    /// Space between the run and the box edge, as a background's `padding`.
+    #[serde(default)]
+    pub padding: TextInsets,
+    /// Every corner's radius, as a background's `radius`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub radius: f32,
+    /// A line inside the box's edge, as a background's `border`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<TextBoxBorder>,
+    /// How long the box takes to slide to the next run once it starts, at most
+    /// [`MAX_HIGHLIGHT_TRANSITION`]; 0 jumps. A change during a slide starts where the box is.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub transition: MediaTime,
+    /// The slide's timing curve.
+    #[serde(default = "linear", skip_serializing_if = "is_linear")]
+    pub easing: crate::Easing,
+    /// What the box does between a run's end and the next run's start.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub gap: HighlightGap,
+}
+
+/// What a highlight does after its run ends, before the next starts.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum HighlightGap {
+    /// Stays on the run until the next starts or its holder ends.
+    #[default]
+    Hold,
+    /// Is drawn only while its run lasts; a run that starts after the last one ended takes the
+    /// box without sliding.
+    Hide,
+}
+
+/// Longest highlight transition.
+pub const MAX_HIGHLIGHT_TRANSITION: MediaTime =
+    MediaTime::from_ticks(10 * alpha2_time::TICKS_PER_SECOND);
+
+const fn linear() -> crate::Easing {
+    crate::Easing::Linear
+}
+
+fn is_linear(easing: &crate::Easing) -> bool {
+    matches!(easing, crate::Easing::Linear)
+}
+
+impl TextHighlight {
+    pub(crate) fn is_valid(&self) -> bool {
+        self.color.is_valid()
+            && self.padding.is_valid()
+            && (0.0..=MAX_TEXT_PADDING).contains(&self.radius)
+            && self.border.as_ref().is_none_or(TextBoxBorder::is_valid)
+            && self.transition >= MediaTime::ZERO
+            && self.transition <= MAX_HIGHLIGHT_TRANSITION
+            && self.easing.is_valid()
+    }
+}
+
+impl TextBackground {
+    /// A box of `color` with `padding` on every side, no radius and no border.
+    #[must_use]
+    pub const fn padded(color: Rgba, padding: f32) -> Self {
+        Self {
+            color,
+            padding: TextInsets::all(padding),
+            radius: 0.0,
+            border: None,
+            extent: TextBoxExtent::Line,
+        }
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        self.color.is_valid()
+            && self.padding.is_valid()
+            && (0.0..=MAX_TEXT_PADDING).contains(&self.radius)
+            && self.border.as_ref().is_none_or(TextBoxBorder::is_valid)
+    }
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
+}
+
+/// The border of a text box, drawn inside the box's edge.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextBoxBorder {
+    /// Width as a fraction of the font size, in `(0, 0.5]`.
+    pub width: f32,
+    /// Line color.
+    pub color: Rgba,
+    /// Dashes along the border's centre line; `None` draws it solid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash: Option<TextDash>,
+}
+
+impl TextBoxBorder {
+    fn is_valid(&self) -> bool {
+        self.width.is_finite()
+            && self.width > 0.0
+            && self.width <= MAX_TEXT_BORDER_WIDTH
+            && self.color.is_valid()
+            && self.dash.as_ref().is_none_or(TextDash::is_valid)
+    }
+}
+
+/// Dashes along a box border, as SVG `stroke-dasharray` and `stroke-dashoffset`: they start at
+/// the end of the top-left corner and run clockwise.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextDash {
+    /// Alternating dash and gap lengths, as fractions of the font size: one to
+    /// [`crate::MAX_DASH_ENTRIES`] entries in `[0, 4]`, not all zero. An odd count repeats once
+    /// more to pair up.
+    #[serde(deserialize_with = "dash_pattern")]
+    #[cfg_attr(feature = "schema", schemars(length(min = 1, max = crate::MAX_DASH_ENTRIES)))]
+    pub pattern: Vec<f32>,
+    /// How far into the pattern the border starts, in font sizes, in `[-16, 16]`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offset: f32,
+}
+
+fn dash_pattern<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<f32>, D::Error> {
+    let pattern = crate::bounded::seq::<_, _, { crate::MAX_DASH_ENTRIES }>(deserializer)?;
+    if pattern.is_empty() {
+        return Err(serde::de::Error::invalid_length(
+            0,
+            &"one to sixteen entries",
+        ));
+    }
+    Ok(pattern)
+}
+
+impl TextDash {
+    fn is_valid(&self) -> bool {
+        !self.pattern.is_empty()
+            && self.pattern.len() <= crate::MAX_DASH_ENTRIES
+            && self
+                .pattern
+                .iter()
+                .all(|entry| (0.0..=MAX_TEXT_DASH_ENTRY).contains(entry))
+            && self.pattern.iter().any(|entry| *entry > 0.0)
+            && (-MAX_TEXT_DASH_OFFSET..=MAX_TEXT_DASH_OFFSET).contains(&self.offset)
+    }
+}
+
+/// A length on each side of a text box, as fractions of the font size.
+///
+/// Written as one number for every side, the CSS shorthand of one to four numbers (`"0.1 0.3"`:
+/// top first, clockwise), or the sides object, missing sides 0. Pixels are refused.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct TextInsets {
+    /// Top side.
+    pub top: f32,
+    /// Right side.
+    pub right: f32,
+    /// Bottom side.
+    pub bottom: f32,
+    /// Left side.
+    pub left: f32,
+}
+
+impl TextInsets {
+    /// The same length on every side.
+    #[must_use]
+    pub const fn all(value: f32) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    /// The sides, top first, clockwise.
+    #[must_use]
+    pub const fn sides(self) -> [f32; 4] {
+        [self.top, self.right, self.bottom, self.left]
+    }
+
+    fn is_valid(self) -> bool {
+        self.sides()
+            .iter()
+            .all(|side| (0.0..=MAX_TEXT_PADDING).contains(side))
+    }
+
+    fn from_shorthand(values: &[f32]) -> Option<Self> {
+        let [top, right, bottom, left] = match *values {
+            [all] => [all; 4],
+            [vertical, horizontal] => [vertical, horizontal, vertical, horizontal],
+            [top, horizontal, bottom] => [top, horizontal, bottom, horizontal],
+            [top, right, bottom, left] => [top, right, bottom, left],
+            _ => return None,
+        };
+        Some(Self {
+            top,
+            right,
+            bottom,
+            left,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for TextInsets {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Written {
+            Number(f32),
+            Shorthand(String),
+            Sides(std::collections::BTreeMap<String, f32>),
+        }
+        match Written::deserialize(deserializer)? {
+            Written::Number(value) => Ok(Self::all(value)),
+            Written::Shorthand(text) => text
+                .split(' ')
+                .filter(|token| !token.is_empty())
+                .map(str::parse::<f32>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+                .and_then(|values| Self::from_shorthand(&values))
+                .ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "text insets: expected one to four numbers, got {text:?}"
+                    ))
+                }),
+            Written::Sides(sides) => {
+                let mut insets = Self::default();
+                for (side, value) in sides {
+                    *match side.as_str() {
+                        "top" => &mut insets.top,
+                        "right" => &mut insets.right,
+                        "bottom" => &mut insets.bottom,
+                        "left" => &mut insets.left,
+                        _ => {
+                            return Err(serde::de::Error::unknown_field(
+                                &side,
+                                &["top", "right", "bottom", "left"],
+                            ));
+                        }
+                    } = value;
+                }
+                Ok(insets)
+            }
+        }
+    }
+}
+
+/// One number when every side is the same, else the sides object.
+impl Serialize for TextInsets {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let [top, right, bottom, left] = self.sides().map(f32::to_bits);
+        if top == right && top == bottom && top == left {
+            return serializer.serialize_f32(self.top);
+        }
+        let mut sides = serializer.serialize_struct("TextInsets", 4)?;
+        sides.serialize_field("top", &self.top)?;
+        sides.serialize_field("right", &self.right)?;
+        sides.serialize_field("bottom", &self.bottom)?;
+        sides.serialize_field("left", &self.left)?;
+        sides.end()
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for TextInsets {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "TextInsets".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let number = r"-?(\d+\.?\d*|\.\d+)";
+        let side = schemars::json_schema!({ "type": "number", "format": "float" });
+        schemars::json_schema!({
+            "description": "A length on each side of a text box, as fractions of the font size: one number for every side, the CSS shorthand of one to four numbers (\"0.1 0.3\": top first, clockwise), or the sides object, missing sides 0.",
+            "anyOf": [
+                { "type": "number", "format": "float" },
+                { "type": "string", "pattern": format!("^ *{number}( +{number}){{0,3}} *$") },
+                {
+                    "type": "object",
+                    "properties": { "top": side, "right": side, "bottom": side, "left": side },
+                    "additionalProperties": false,
+                },
+            ],
+        })
+    }
 }
 
 impl TextStyle {
@@ -370,10 +800,12 @@ impl TextStyle {
             && valid_strokes(&self.strokes)
             && valid_shadows(&self.shadows)
             && crate::text_animation::valid_animators(&self.animators, false)
-            && self.background.is_none_or(|background| {
-                background.color.is_valid()
-                    && (0.0..=MAX_TEXT_PADDING).contains(&background.padding)
-            })
+            && valid_animator_pivot(self.animator_pivot)
+            && self
+                .background
+                .as_ref()
+                .is_none_or(TextBackground::is_valid)
+            && self.highlight.as_ref().is_none_or(TextHighlight::is_valid)
     }
 }
 

@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 /// Most stops in one gradient.
-pub const MAX_GRADIENT_STOPS: usize = 8;
+pub const MAX_GRADIENT_STOPS: usize = 16;
 
 /// A straight (not premultiplied), sRGB-encoded color with alpha, each component in `0..=1`.
 ///
@@ -296,8 +296,16 @@ impl Generator {
             }
             Self::Layout { root } => return crate::layout::validate_layout(root, canvas),
             Self::Text { text, style } => {
-                text.is_valid(MAX_TEXT_CONTENT_BYTES)
-                    && style.is_valid(MAX_TEXT_GENERATOR_FONT_SIZE)
+                if !(text.is_valid(MAX_TEXT_CONTENT_BYTES)
+                    && style.is_valid(MAX_TEXT_GENERATOR_FONT_SIZE))
+                {
+                    return Err(GeneratorIssue::Invalid);
+                }
+                return match text.invalid_run_style(crate::text_animation::FontSelection::of(style))
+                {
+                    Some(run) => Err(GeneratorIssue::TextRun { run }),
+                    None => Ok(()),
+                };
             }
         };
         valid.then_some(()).ok_or(GeneratorIssue::Invalid)

@@ -102,8 +102,17 @@ fn a_closed_stderr_does_not_end_the_host() {
 
 /// Runs a child whose GPU waits are 1 s. Its exit status is `None` when it hung and was killed.
 fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, String) {
+    run_with_a_hung_release_in(test, input, &[])
+}
+
+fn run_with_a_hung_release_in(
+    test: &str,
+    input: &str,
+    environment: &[(&str, &std::ffi::OsStr)],
+) -> (Option<i32>, String, String) {
     use std::io::Read as _;
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .envs(environment.iter().copied())
         .env("ALPHA2_GPU_TIMEOUT_MS", "1000")
         .args([
             "--exact",
@@ -202,6 +211,48 @@ fn export_on_the_cli_with_a_hung_release() {
     assert!(host.is_some(), "the export failed before its host started");
     let code = conclude(result, host);
     panic!("the release returned (status {code}) although it never finishes");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn auto_on_a_pinned_software_adapter_makes_no_gpu_host_it_would_drop() {
+    let _gpu = gpu_test_lock();
+    let Some(lavapipe) = std::fs::read_dir("/usr/share/vulkan/icd.d")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("lvp_icd"))
+        })
+    else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::SoftwareAdapter,
+            "no lavapipe ICD in /usr/share/vulkan/icd.d"
+        );
+        return;
+    };
+    let (status, _, stderr) = run_with_a_hung_release_in(
+        "tests::requests::export_on_the_cli_with_a_hung_release",
+        "",
+        &[
+            ("VK_ICD_FILENAMES", lavapipe.as_os_str()),
+            ("WGPU_BACKEND", "vulkan".as_ref()),
+            ("ALPHA2_GPU_ADAPTER", "llvmpipe".as_ref()),
+            ("ALPHA2_RENDERER", "auto".as_ref()),
+        ],
+    );
+    assert_eq!(status, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("renderer: CPU") && stderr.contains("software adapter llvmpipe"),
+        "{stderr}"
+    );
+    assert_reported_before_the_release(
+        &stderr,
+        "alpha2-host: the project's media is not ready: video-source: offline",
+    );
 }
 
 #[test]
@@ -1579,16 +1630,20 @@ fn capabilities_report_the_adapter_choice() {
     let explanation = adapters["explanation"].as_str().expect("an explanation");
     assert!(explanation.contains(&report.gpu.adapter), "{adapters}");
     let candidates = adapters["candidates"].as_array().expect("candidates");
-    match adapters["chosen"].as_u64() {
-        Some(index) => {
-            let chosen = candidates
-                .iter()
-                .find(|candidate| candidate["index"].as_u64() == Some(index))
-                .expect("the chosen adapter is a candidate");
-            assert_eq!(chosen["name"], json!(report.gpu.adapter), "{adapters}");
-            assert_eq!(chosen["renders"], json!(true), "{adapters}");
-        }
-        None => assert_eq!(adapters["reason"], json!("no-shared-device"), "{adapters}"),
+    if let Some(index) = adapters["chosen"].as_u64() {
+        let chosen = candidates
+            .iter()
+            .find(|candidate| candidate["index"].as_u64() == Some(index))
+            .expect("the chosen adapter is a candidate");
+        assert_eq!(chosen["name"], json!(report.gpu.adapter), "{adapters}");
+        assert_eq!(chosen["renders"], json!(true), "{adapters}");
+    } else {
+        let reason = if crate::adapter_choice::AdapterPolicy::from_env().is_pin() {
+            "pinned"
+        } else {
+            "no-shared-device"
+        };
+        assert_eq!(adapters["reason"], json!(reason), "{adapters}");
     }
     for candidate in candidates {
         for key in [
@@ -1614,7 +1669,12 @@ fn capabilities_are_the_shared_capability_report() {
     let result = host.handle(request, &mut |_| Ok(())).expect("capabilities");
     let report = &result["capabilities"];
     assert_eq!(report["schema"], json!("alpha2-capabilities"));
-    assert_eq!(report["version"], json!(2));
+    assert_eq!(report["version"], json!(3));
+    assert_eq!(report["release"], json!(env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        report["projectSchemaVersion"],
+        json!(alpha2_model::CURRENT_SCHEMA_VERSION)
+    );
     assert_eq!(report["runtime"], json!("native"));
     assert!(matches!(report["gpu"]["tier"].as_str(), Some("a" | "b")));
     assert_eq!(report["color"]["workingSpace"], json!("linear_bt709_sdr"));
@@ -2979,4 +3039,133 @@ fn a_terminated_host_whose_output_nobody_reads_exits_at_its_deadline() {
     };
     drop(stdin);
     assert_eq!(status.and_then(|status| status.code()), Some(143));
+}
+
+fn conform_media_line(asset: &str) -> Result<Value, HostError> {
+    let line = json!({
+        "protocolVersion": 2,
+        "operation": "conform",
+        "requestId": "remote",
+        "project": {},
+        "assets": { "video": asset },
+    })
+    .to_string();
+    match parse_request(&line)? {
+        Request::Conform(request) => {
+            crate::host::conform_media(request, VideoDecodePolicy::Software)
+        }
+        _ => unreachable!("a conform line parses as a conform"),
+    }
+}
+
+#[test]
+fn no_request_can_widen_the_media_origins() {
+    use crate::media_policy::{MediaOrigins, MediaPolicy, PrivateAddresses};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let port = listener.local_addr().expect("address").port();
+    let url = format!("https://127.0.0.1:{port}/take.mp4?signature=secret");
+    let shown = format!("https://127.0.0.1:{port}/take.mp4");
+
+    let error = conform_media_line(&url).expect_err("no origin is listed by default");
+    assert_eq!(error.code, "MEDIA_REFUSED", "{}", error.message);
+    let details = error.details.clone().expect("details");
+    assert_eq!(details["source"], "video");
+    assert_eq!(details["url"], shown.as_str());
+    assert_eq!(details["policy"], "origins");
+    assert!(!error.message.contains("secret"), "{}", error.message);
+
+    let _policy = crate::media_policy::set_for_test(MediaPolicy {
+        origins: MediaOrigins::List(vec![
+            crate::origin::Origin::of_url("https://media.example").expect("origin"),
+        ]),
+        private_addresses: PrivateAddresses::Allow,
+    });
+    let error = conform_media_line(&url).expect_err("an unlisted origin is refused");
+    assert_eq!(error.code, "MEDIA_REFUSED", "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("is not an origin this host was started with"),
+        "{}",
+        error.message
+    );
+
+    for field in ["mediaOrigins", "remoteMedia", "mediaPrivateAddresses"] {
+        let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+        request[field] = json!(["https://127.0.0.1"]);
+        let Err(error) = parse_request(&request.to_string()) else {
+            panic!("{field} must be refused");
+        };
+        assert_eq!(error.code, "INVALID_REQUEST", "{field}: {}", error.message);
+    }
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "nothing was contacted"
+    );
+}
+
+#[test]
+fn an_http_media_url_is_an_invalid_request() {
+    let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+    request["assets"] = json!({ "video": "HTTP://media.example/take.mp4?signature=secret" });
+    let Err(error) = parse_request(&request.to_string()) else {
+        panic!("an http: asset must be refused");
+    };
+    assert_eq!(error.code, "INVALID_REQUEST");
+    assert!(
+        error.message.contains("only https: media URLs are read"),
+        "{}",
+        error.message
+    );
+    assert!(!error.message.contains("secret"), "{}", error.message);
+    let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+    request["resources"] = json!({ "logo": { "a.png": "http://media.example/a.png" } });
+    assert_eq!(
+        parse_request(&request.to_string())
+            .err()
+            .map(|error| error.code),
+        Some("INVALID_REQUEST")
+    );
+    for (value, url) in [
+        ("https://media.example/take.mp4#t=1", true),
+        ("take:1.mov", false),
+        ("/srv/https:/take.mov", false),
+    ] {
+        let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+        request["assets"] = json!({ "video": value });
+        let Ok(Request::Export(export)) = parse_request(&request.to_string()) else {
+            panic!("{value} is a media location");
+        };
+        let location = &export.assets["video"];
+        assert_eq!(location.url().is_some(), url, "{value}");
+        if url {
+            assert_eq!(location.url(), Some("https://media.example/take.mp4"));
+        }
+    }
+}
+
+#[test]
+fn a_url_in_frames_fonts_or_proxies_is_an_invalid_request() {
+    let url = "https://media.example/a.png";
+    for (field, value) in [
+        ("frames", json!({ "seq": [url] })),
+        ("fonts", json!([url])),
+        ("proxies", json!({ "video": [{ "path": url }] })),
+        ("effectAssets", json!({ "grade": url })),
+        ("output", json!("https://media.example/out.mp4")),
+        ("renderCache", json!({ "directory": url })),
+    ] {
+        let mut request: Value = serde_json::from_str(&export_line(None)).expect("line");
+        request[field] = value;
+        let Err(error) = parse_request(&request.to_string()) else {
+            panic!("a URL in {field} must be refused");
+        };
+        assert_eq!(error.code, "INVALID_REQUEST", "{field}: {}", error.message);
+        assert!(
+            error.message.contains("takes a path, not a URL"),
+            "{field}: {}",
+            error.message
+        );
+    }
 }

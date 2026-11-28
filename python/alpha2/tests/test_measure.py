@@ -44,6 +44,14 @@ def test_every_pinned_text_measures_to_the_same_bits_as_natively_and_in_wasm() -
         assert measured == json.loads(case["expected"]), case["name"]
 
 
+def test_every_pinned_text_layout_reports_the_same_as_natively_and_in_wasm() -> None:
+    pinned = golden("text_layout.json")
+    measurer = alpha2.TextMeasurer([ROOT / pinned["font"]])
+    for case in pinned["cases"]:
+        reported = measurer.text_layout(case["generator"], canvas=(case["width"], case["height"]))
+        assert reported == json.loads(case["expected"]), case["name"]
+
+
 def test_a_layout_root_measures_as_its_generator_and_time_is_in_seconds() -> None:
     measurer = alpha2.TextMeasurer([FIXTURE])
     root = box(text("Alpha2", font_size=0.1), padding=0.05)

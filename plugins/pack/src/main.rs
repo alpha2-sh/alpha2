@@ -14,7 +14,9 @@
 //! `about.json`, when present, is written as the manifest's `about`. Native targets default to the
 //! host's. A crate whose `Cargo.toml` sets `[package.metadata.alpha2-plugin] wasm = false` is
 //! packed without a wasm artifact and refuses `--no-native`; `builds-wasm` prints `true` or `false`
-//! for a crate. `merge` joins packs of one plugin made on several machines. Nothing is uploaded.
+//! for a crate. `[package.metadata.alpha2-plugin.native-env]` lists variables set for the crate's
+//! native builds, a string each or `{ path = "..." }` for a file of the crate. `merge` joins packs
+//! of one plugin made on several machines. Nothing is uploaded.
 
 mod check;
 mod merge;
@@ -31,8 +33,6 @@ const WASM_RUSTFLAGS: [&str; 3] = [
     "--cfg",
     "getrandom_backend=\"unsupported\"",
 ];
-
-const NATIVE_BUILD_ENV: [(&str, &str); 2] = [("GGML_NATIVE", "OFF"), ("GGML_CCACHE", "OFF")];
 
 const USAGE: &str =
     "usage: alpha2-plugin-pack <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
@@ -214,6 +214,7 @@ fn build(
     target: &str,
     wasm: bool,
     prefixes: &[(PathBuf, String)],
+    env: &[(String, String)],
 ) -> Result<(), String> {
     let mut command = cargo();
     command.args(["build", "--release", "--target", target, "--manifest-path"]);
@@ -224,7 +225,7 @@ fn build(
         // plugin has no randomness, so getrandom reports it unsupported instead of importing it.
         rustflags.extend(WASM_RUSTFLAGS.map(str::to_owned));
     } else {
-        command.envs(NATIVE_BUILD_ENV);
+        command.envs(env.iter().map(|(name, value)| (name, value)));
     }
     let mut cflags = Vec::new();
     for (from, to) in prefixes {
@@ -291,6 +292,38 @@ fn builds_wasm(package: &Value) -> Result<bool, String> {
     }
 }
 
+fn native_env(package: &Value, plugin: &Path) -> Result<Vec<(String, String)>, String> {
+    let declared = match &package["metadata"]["alpha2-plugin"]["native-env"] {
+        Value::Null => return Ok(Vec::new()),
+        Value::Object(declared) => declared,
+        other => {
+            return Err(format!(
+                "package.metadata.alpha2-plugin.native-env is {other}, not a table"
+            ));
+        }
+    };
+    declared
+        .iter()
+        .map(|(name, value)| {
+            if let Some(text) = value.as_str() {
+                return Ok((name.clone(), text.to_owned()));
+            }
+            let path = value["path"].as_str().ok_or_else(|| {
+                format!("native-env.{name} is neither a string nor {{ path = \"...\" }}")
+            })?;
+            let file = std::path::absolute(plugin.join(path))
+                .map_err(|error| format!("native-env.{name}: {path}: {error}"))?;
+            if !file.is_file() {
+                return Err(format!(
+                    "native-env.{name}: {} is not a file",
+                    file.display()
+                ));
+            }
+            Ok((name.clone(), file.to_string_lossy().replace('\\', "/")))
+        })
+        .collect()
+}
+
 fn metadata(manifest_path: &Path) -> Result<Value, String> {
     serde_json::from_str(&run(cargo()
         .args(["metadata", "--format-version", "1", "--manifest-path"])
@@ -336,6 +369,7 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
         .to_owned();
 
     let wasm = builds_wasm(package)?;
+    let native_env = native_env(package, &options.plugin)?;
     if !wasm && !options.native {
         return Err(format!(
             "{} is native only (package.metadata.alpha2-plugin.wasm = false): --no-native leaves \
@@ -348,7 +382,13 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&options.out).map_err(|error| error.to_string())?;
     let mut artifacts = Vec::new();
     if wasm {
-        build(&manifest_path, "wasm32-unknown-unknown", true, &prefixes)?;
+        build(
+            &manifest_path,
+            "wasm32-unknown-unknown",
+            true,
+            &prefixes,
+            &[],
+        )?;
         let module =
             read(&target_dir.join(format!("wasm32-unknown-unknown/release/{library}.wasm")))?;
         check::wasm_module(&module)?;
@@ -362,7 +402,7 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
         targets.push(host_triple()?);
     }
     for target in targets.iter().filter(|_| options.native) {
-        build(&manifest_path, target, false, &prefixes)?;
+        build(&manifest_path, target, false, &prefixes, &native_env)?;
         let file = native_file(&library, target);
         let bytes = read(&target_dir.join(target).join("release").join(&file))?;
         let mut entry = place(&options.out, &format!("{target}/{file}"), &bytes)?;
@@ -464,6 +504,43 @@ mod tests {
         let error = builds_wasm(&json!({ "metadata": { "alpha2-plugin": { "wasm": "no" } } }))
             .expect_err("refused");
         assert!(error.contains("not true or false"), "{error}");
+    }
+
+    #[test]
+    fn a_crate_declares_its_native_build_environment() {
+        let plugin =
+            std::env::temp_dir().join(format!("alpha2-pack-native-env-{}", std::process::id()));
+        std::fs::create_dir_all(plugin.join("cmake")).expect("scratch dir");
+        std::fs::write(plugin.join("cmake/fix.cmake"), "").expect("scratch file");
+        let declared = |env: Value| {
+            native_env(
+                &json!({ "metadata": { "alpha2-plugin": { "native-env": env } } }),
+                &plugin,
+            )
+        };
+
+        assert_eq!(
+            native_env(&json!({ "metadata": null }), &plugin),
+            Ok(Vec::new())
+        );
+        let env =
+            declared(json!({ "A": "OFF", "B": { "path": "cmake/fix.cmake" } })).expect("declared");
+        assert_eq!(env[0], ("A".to_owned(), "OFF".to_owned()));
+        assert_eq!(env[1].0, "B");
+        let path = Path::new(&env[1].1);
+        assert!(path.is_absolute(), "{}", env[1].1);
+        assert!(!env[1].1.contains('\\'), "{}", env[1].1);
+        assert!(env[1].1.ends_with("/cmake/fix.cmake"), "{}", env[1].1);
+        assert!(path.is_file(), "{}", env[1].1);
+
+        let error = declared(json!({ "N": 1 })).expect_err("a number");
+        assert!(error.contains("native-env.N"), "{error}");
+        let error = declared(json!({ "M": { "path": "cmake/missing.cmake" } }))
+            .expect_err("a missing file");
+        assert!(error.contains("native-env.M"), "{error}");
+        let error = declared(json!(["A"])).expect_err("not a table");
+        assert!(error.contains("not a table"), "{error}");
+        std::fs::remove_dir_all(&plugin).expect("scratch removed");
     }
 
     #[test]

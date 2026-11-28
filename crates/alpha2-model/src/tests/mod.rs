@@ -7,6 +7,7 @@ use crate::{
 };
 use alpha2_media::SourceId;
 
+mod adjustments;
 mod audio_projects;
 mod bounds;
 mod captions;
@@ -17,7 +18,9 @@ mod provider_sources;
 mod scaling;
 mod shapes;
 mod shared_corpora;
+mod text_boxes;
 mod text_fit;
+mod text_runs;
 mod visuals;
 
 fn id<T>(make: impl FnOnce(String) -> Result<T, alpha2_media::IdError>, value: &str) -> T {

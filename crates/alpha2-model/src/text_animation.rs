@@ -1,8 +1,8 @@
 //! Text content as runs, and text animators: per-character motion and color held by a text
 //! style.
 //!
-//! Runs never change layout; the joined text is shaped and broken into lines like the plain
-//! string. An animator gives each grapheme cluster a selection in `[0, 1]` and moves, scales,
+//! A run's style changes its layout as CSS inline boxes do; animators never change layout. An
+//! animator gives each grapheme cluster a selection in `[0, 1]` and moves, scales,
 //! turns, fades or recolors it in proportion, as After Effects' text animators do.
 
 use std::borrow::Cow;
@@ -11,7 +11,7 @@ use alpha2_time::MediaTime;
 use serde::{Deserialize, Serialize};
 
 use crate::animation::{valid_keyframes, valid_scalar_values};
-use crate::{Animated, Rgba, Vec2};
+use crate::{Animated, FontStyle, Paint, Rgba, TextStroke, Vec2};
 
 /// Most runs one text holds.
 pub const MAX_TEXT_RUNS: usize = 512;
@@ -36,6 +36,8 @@ pub const RANGE_PERCENT: std::ops::RangeInclusive<f32> = -100.0..=200.0;
 pub const MAX_ANIMATOR_OFFSET: f32 = 1_024.0;
 /// The range an animator's scale takes on each axis.
 pub const ANIMATOR_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
+/// Widest feather of a text reveal's edge, in font sizes.
+pub const MAX_REVEAL_FEATHER: f32 = 1.0;
 
 /// A text: one string, or runs whose texts joined are the text.
 ///
@@ -160,9 +162,198 @@ impl TextContent {
             && self.runs().len() <= MAX_TEXT_RUNS
             && self.runs().iter().all(TextRun::is_valid)
     }
+
+    /// Whether any run has a style.
+    #[must_use]
+    pub fn has_run_styles(&self) -> bool {
+        self.runs().iter().any(|run| run.style.is_some())
+    }
+
+    /// Whether a run's `font_scale` changes over time, so the text lays out again as it does.
+    #[must_use]
+    pub fn varies(&self) -> bool {
+        self.runs().iter().any(|run| {
+            run.style
+                .as_ref()
+                .and_then(|style| style.font_scale.as_ref())
+                .is_some_and(Animated::varies)
+        })
+    }
+
+    pub(crate) fn invalid_run_style(&self, base: FontSelection<'_>) -> Option<usize> {
+        let mut selections = Vec::new();
+        for (index, run) in self.runs().iter().enumerate() {
+            let style = run.style.as_ref();
+            if style.is_some_and(|style| !style.is_valid()) {
+                return Some(index);
+            }
+            let selection = TextRunStyle::selection(style, base);
+            if !selections.contains(&selection) {
+                if selections.len() == crate::MAX_TEXT_FONT_SELECTIONS {
+                    return Some(index);
+                }
+                selections.push(selection);
+            }
+        }
+        None
+    }
 }
 
-/// A piece of a text that animators' Class and Timing selectors can pick.
+/// A run's changes to its holder's text style, as an inline box's own CSS properties. Each
+/// field set replaces the holder's value for the run's characters; a field left out keeps it.
+/// A change of family, weight, style, size or letter spacing shapes the run apart and can move
+/// line breaks; fill, strokes, background and decorations only paint.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextRunStyle {
+    /// The family, as a text style's `font_family`; `null` draws from the fallback order alone.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::caption::double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub font_family: Option<Option<String>>,
+    /// The weight in `[1, 1000]`, as a text style's `font_weight`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_weight: Option<u16>,
+    /// The face style, as a text style's `font_style`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_style: Option<FontStyle>,
+    /// The run's size as a multiple of the text's font size, in `[0.1, 10]`, as CSS
+    /// `font-size: <n>em`. Lines are laid out again when it changes; keyframes are in the
+    /// holder's time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_scale: Option<Animated<f32>>,
+    /// Space after each character, as a fraction of the run's size, in `[-0.5, 1]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter_spacing: Option<f32>,
+    /// What paints the run's glyphs; gradient positions are in the text's layout box, as the
+    /// text's fill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Paint>,
+    /// The run's bands, as a text style's `strokes`, widths in fractions of the run's size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_TEXT_STROKES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_STROKES)))]
+    pub strokes: Option<Vec<TextStroke>>,
+    /// A box behind the run on each line, its advances wide and its em box tall, as CSS
+    /// `background-color` paints an inline box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<Rgba>,
+    /// See [`crate::TextStyle::underline`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    /// See [`crate::TextStyle::line_through`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_through: Option<bool>,
+}
+
+impl TextRunStyle {
+    /// `base` with every face, spacing, paint and decoration field this style sets replaced.
+    /// The size stays the base's: `font_scale` multiplies it where the run is laid out, and
+    /// `background_color` has no text-wide counterpart.
+    #[must_use]
+    pub fn apply(&self, base: &crate::TextStyle) -> crate::TextStyle {
+        let mut style = base.clone();
+        if let Some(family) = &self.font_family {
+            style.font_family.clone_from(family);
+        }
+        if let Some(weight) = self.font_weight {
+            style.font_weight = weight;
+        }
+        if let Some(font_style) = self.font_style {
+            style.font_style = font_style;
+        }
+        if let Some(spacing) = self.letter_spacing {
+            style.letter_spacing = spacing;
+        }
+        if let Some(fill) = &self.fill {
+            style.fill = fill.clone();
+        }
+        if let Some(strokes) = &self.strokes {
+            style.strokes.clone_from(strokes);
+        }
+        if let Some(underline) = self.underline {
+            style.underline = underline;
+        }
+        if let Some(line_through) = self.line_through {
+            style.line_through = line_through;
+        }
+        style
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        self.font_family.as_ref().is_none_or(|family| {
+            family.as_ref().is_none_or(|family| {
+                !family.is_empty() && family.len() <= crate::MAX_FONT_FAMILY_BYTES
+            })
+        }) && self
+            .font_weight
+            .is_none_or(|weight| crate::FONT_WEIGHT_RANGE.contains(&weight))
+            && self.font_scale.as_ref().is_none_or(|scale| {
+                scale.data().is_none()
+                    && valid_scalar_values(scale, |value| crate::FONT_SCALE_RANGE.contains(&value))
+            })
+            && self
+                .letter_spacing
+                .is_none_or(|spacing| crate::LETTER_SPACING_RANGE.contains(&spacing))
+            && self.fill.as_ref().is_none_or(Paint::is_valid)
+            && self
+                .strokes
+                .as_deref()
+                .is_none_or(crate::text::valid_strokes)
+            && self.background_color.is_none_or(Rgba::is_valid)
+    }
+
+    /// Whether the run takes only fields a layout text's run may: no keyframed font scale.
+    #[must_use]
+    pub const fn is_static(&self) -> bool {
+        !matches!(
+            self.font_scale,
+            Some(Animated::Keyframes { .. } | Animated::Data(_))
+        )
+    }
+
+    fn selection(
+        style: Option<&Self>,
+        base: FontSelection<'_>,
+    ) -> (Option<String>, u16, FontStyle) {
+        let family = match style.and_then(|style| style.font_family.as_ref()) {
+            Some(family) => family.as_deref(),
+            None => base.family,
+        };
+        (
+            family.map(str::to_ascii_lowercase),
+            style
+                .and_then(|style| style.font_weight)
+                .unwrap_or(base.weight),
+            style
+                .and_then(|style| style.font_style)
+                .unwrap_or(base.style),
+        )
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct FontSelection<'a> {
+    pub(crate) family: Option<&'a str>,
+    pub(crate) weight: u16,
+    pub(crate) style: FontStyle,
+}
+
+impl<'a> FontSelection<'a> {
+    pub(crate) fn of(style: &'a crate::TextStyle) -> Self {
+        Self {
+            family: style.font_family.as_deref(),
+            weight: style.font_weight,
+            style: style.font_style,
+        }
+    }
+}
+
+/// A piece of a text with its own style, that animators' Class and Timing selectors can pick.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -180,6 +371,9 @@ pub struct TextRun {
     /// generator's picture time zero).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<RunTime>,
+    /// Changes to the holder's style for this run's characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<TextRunStyle>,
 }
 
 impl TextRun {
@@ -377,6 +571,63 @@ pub struct TextAnimatorProperties {
     /// it. Lines are not re-broken.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracking: Option<Animated<f32>>,
+    /// Whether the character's advance follows this animator's horizontal scale, pushing the
+    /// characters after it along its line, which is re-aligned; lines are not re-broken, and the
+    /// text wraps with room for the largest scale this can reach. Needs `scale`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub advance_follows_scale: bool,
+    /// Wipes the character's unit (its group, as `animator_grouping` gives) in along a straight
+    /// edge, cutting its fill, strokes and color glyphs alike; a fully selected unit shows
+    /// `progress` of itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<TextReveal>,
+}
+
+/// A straight edge that shows a unit up to it, as a linear wipe: across the unit's box (its
+/// advances by its em boxes, outset by its strokes) in the direction `angle_degrees`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextReveal {
+    /// How much of a fully selected unit shows, in `[0, 1]`: 0 hides it, 1 shows it whole. A unit
+    /// selected by `w` shows `1 + w (progress - 1)`. Default 0.
+    #[serde(default = "zero")]
+    pub progress: Animated<f32>,
+    /// The direction the edge travels, clockwise degrees with y down: 0 reveals left to right,
+    /// 90 top to bottom. Default 0.
+    #[serde(default = "zero")]
+    pub angle_degrees: Animated<f32>,
+    /// The edge's softness in font sizes, in `[0, MAX_REVEAL_FEATHER]`; 0 is a one-pixel
+    /// antialiased step. Default 0.
+    #[serde(default = "zero")]
+    pub feather: Animated<f32>,
+}
+
+impl TextReveal {
+    fn is_valid(&self) -> bool {
+        valid_scalar_values(&self.progress, |value| (0.0..=1.0).contains(&value))
+            && valid_scalar_values(&self.angle_degrees, |_| true)
+            && valid_scalar_values(&self.feather, |value| {
+                (0.0..=MAX_REVEAL_FEATHER).contains(&value)
+            })
+    }
+}
+
+/// The units whose clusters scale and turn about one pivot, as After Effects' Anchor Point
+/// Grouping.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AnimatorGrouping {
+    /// Each grapheme cluster about its own pivot.
+    #[default]
+    Character,
+    /// Each UAX #29 word holding a letter or digit; a cluster in no word is its own group.
+    Word,
+    /// Each line.
+    Line,
+    /// The whole text.
+    All,
 }
 
 impl TextAnimatorProperties {
@@ -390,6 +641,7 @@ impl TextAnimatorProperties {
             && self.fill.is_none()
             && self.stroke.is_none()
             && self.tracking.is_none()
+            && self.reveal.is_none()
     }
 
     fn is_valid(&self) -> bool {
@@ -432,6 +684,8 @@ impl TextAnimatorProperties {
                     crate::LETTER_SPACING_RANGE.contains(&value)
                 })
             })
+            && (!self.advance_follows_scale || self.scale.is_some())
+            && self.reveal.as_ref().is_none_or(TextReveal::is_valid)
     }
 }
 
@@ -524,6 +778,15 @@ pub(crate) fn for_each_keyed_animator(
         }
         if let Some(value) = &properties.tracking {
             visit_keyed(&format!("{at}.tracking"), value, visit);
+        }
+        if let Some(reveal) = &properties.reveal {
+            visit_keyed(&format!("{at}.reveal.progress"), &reveal.progress, visit);
+            visit_keyed(
+                &format!("{at}.reveal.angle_degrees"),
+                &reveal.angle_degrees,
+                visit,
+            );
+            visit_keyed(&format!("{at}.reveal.feather"), &reveal.feather, visit);
         }
     }
 }

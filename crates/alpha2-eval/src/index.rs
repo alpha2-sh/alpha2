@@ -102,6 +102,8 @@ impl ActiveIndex {
                     masks: clip.masks.clone(),
                     matte: clip.matte.clone(),
                     is_matte: matte_sources.contains(&clip.id),
+                    adjustment: source
+                        .is_some_and(|source| source.kind == alpha2_model::MediaKind::Adjustment),
                     audio: clip.audio.clone(),
                     source_is_audible,
                     generator,

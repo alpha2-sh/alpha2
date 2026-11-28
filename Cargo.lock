@@ -58,7 +58,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alpha2"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-engine",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-alloc-budget"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-build-support",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-android-media"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-backend-conformance",
  "alpha2-container",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-apple-media"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-backend-conformance",
  "alpha2-container",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-assets"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-media",
  "alpha2-model",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-audio"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-audio-determinism"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-engine",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-audio-worklet"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-model",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-backend-conformance"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-host-core",
  "alpha2-media",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-build-support"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-test-support",
  "bindgen",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-compose"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-layout",
  "alpha2-media",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-compose-wasm"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-compose",
  "js-sys",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-container"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-media",
  "alpha2-scaling-support",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-engine"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-eval",
@@ -262,7 +262,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-eval"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-geometry",
  "alpha2-media",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-extension-raster-pins"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-extensions",
  "alpha2-model",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-extensions"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-model",
  "alpha2-scaling-support",
@@ -326,14 +326,14 @@ dependencies = [
 
 [[package]]
 name = "alpha2-extensions-pdf-web"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-extensions-web",
 ]
 
 [[package]]
 name = "alpha2-extensions-web"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-extensions",
  "alpha2-model",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-facade-without-wgpu"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2",
  "alpha2-gpu",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-ffmpeg-bridge"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-build-support",
  "alpha2-media",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-geometry"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-model",
  "kurbo",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-golden-support"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "png",
  "serde_json",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-gpu"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-gpu",
  "alpha2-test-support",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-host"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-assets",
  "alpha2-audio",
@@ -426,6 +426,8 @@ dependencies = [
  "flate2",
  "png",
  "pollster",
+ "rcgen",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -436,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-host-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-assets",
  "alpha2-audio",
@@ -474,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-layout"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-eval",
  "alpha2-geometry",
@@ -489,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-media"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-time",
  "bytes",
@@ -500,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-mobile"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-android-media",
  "alpha2-apple-media",
@@ -534,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-model"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-media",
  "alpha2-scaling-support",
@@ -547,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-native"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-backend-conformance",
@@ -576,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-native-gpu"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-build-support",
  "alpha2-ffmpeg-bridge",
@@ -597,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-os"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -605,11 +607,11 @@ dependencies = [
 
 [[package]]
 name = "alpha2-plugin-abi"
-version = "0.7.0"
+version = "0.8.0"
 
 [[package]]
 name = "alpha2-provider-contract"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-extensions",
  "alpha2-media",
@@ -622,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-python"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-compose",
  "alpha2-eval",
@@ -637,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-reader-conformance"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-backend-conformance",
  "alpha2-engine",
@@ -651,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-render"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-geometry",
  "alpha2-golden-support",
@@ -676,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-render-determinism"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-engine",
  "alpha2-geometry",
@@ -689,21 +691,21 @@ dependencies = [
 
 [[package]]
 name = "alpha2-scaling-support"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-os",
 ]
 
 [[package]]
 name = "alpha2-shaders"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "wesl",
 ]
 
 [[package]]
 name = "alpha2-test-support"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "libc",
  "serde_json",
@@ -712,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-text"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "alpha2-media",
@@ -730,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-time"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "schemars",
  "serde",
@@ -739,14 +741,14 @@ dependencies = [
 
 [[package]]
 name = "alpha2-uniffi-bindgen"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "uniffi",
 ]
 
 [[package]]
 name = "alpha2-wasm"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alpha2-assets",
  "alpha2-audio",
@@ -915,6 +917,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "asn1-rs"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f43a50ac4fdca5df8e885c21b835997f0a1cdee65494a6847694a98652d9d8"
+dependencies = [
+ "asn1-rs-derive",
+ "asn1-rs-impl",
+ "displaydoc",
+ "nom",
+ "num-traits",
+ "rusticata-macros",
+ "thiserror 2.0.20",
+ "time",
+]
+
+[[package]]
+name = "asn1-rs-derive"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "synstructure 0.13.2",
+]
+
+[[package]]
+name = "asn1-rs-impl"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1007,6 +1048,9 @@ name = "bit-vec"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bit_field"
@@ -1661,10 +1705,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
+name = "data-encoding"
+version = "2.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
+
+[[package]]
 name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
+
+[[package]]
+name = "der-parser"
+version = "10.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
+dependencies = [
+ "asn1-rs",
+ "displaydoc",
+ "nom",
+ "num-bigint",
+ "num-traits",
+ "rusticata-macros",
+]
+
+[[package]]
+name = "deranged"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
 name = "derive_more"
@@ -1718,6 +1788,17 @@ checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags",
  "objc2",
+]
+
+[[package]]
+name = "displaydoc"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1784,7 +1865,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2865,6 +2946,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-conv"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
+
+[[package]]
 name = "num-derive"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2873,6 +2970,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "num-integer"
+version = "0.1.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -3094,6 +3200,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oid-registry"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
+dependencies = [
+ "asn1-rs",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3142,6 +3257,16 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pem"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
+dependencies = [
+ "base64 0.23.1",
+ "serde_core",
+]
 
 [[package]]
 name = "peniko"
@@ -3301,6 +3426,12 @@ dependencies = [
  "embedded-io 0.6.1",
  "serde",
 ]
+
+[[package]]
+name = "powerfmt"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
 
 [[package]]
 name = "precomputed-hash"
@@ -3500,6 +3631,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.14.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8774e05a7d0de114588e6a28fe7e71694b82614ed569d86d8b389dfbc98b8ad8"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "x509-parser",
+ "yasna",
+]
+
+[[package]]
 name = "read-fonts"
 version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3691,6 +3836,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusticata-macros"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
+dependencies = [
+ "nom",
+]
+
+[[package]]
 name = "rustix"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3700,7 +3854,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3757,7 +3911,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4222,6 +4376,17 @@ dependencies = [
 
 [[package]]
 name = "synstructure"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "synstructure"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02"
@@ -4264,7 +4429,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4333,6 +4498,36 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "time"
+version = "0.3.55"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
+dependencies = [
+ "deranged",
+ "num-conv",
+ "powerfmt",
+ "serde_core",
+ "time-core",
+ "time-macros",
+]
+
+[[package]]
+name = "time-core"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
+
+[[package]]
+name = "time-macros"
+version = "0.2.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
+dependencies = [
+ "num-conv",
+ "time-core",
 ]
 
 [[package]]
@@ -5295,7 +5490,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5566,6 +5761,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "x509-parser"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
+dependencies = [
+ "asn1-rs",
+ "data-encoding",
+ "der-parser",
+ "lazy_static",
+ "nom",
+ "oid-registry",
+ "ring",
+ "rusticata-macros",
+ "thiserror 2.0.20",
+ "time",
+]
+
+[[package]]
 name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5576,6 +5789,16 @@ name = "xmlwriter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
+
+[[package]]
+name = "yasna"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282"
+dependencies = [
+ "bit-vec 0.9.1",
+ "time",
+]
 
 [[package]]
 name = "yoke"
@@ -5597,7 +5820,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
- "synstructure",
+ "synstructure 0.14.0",
 ]
 
 [[package]]
@@ -5638,7 +5861,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
- "synstructure",
+ "synstructure 0.14.0",
 ]
 
 [[package]]

@@ -38,7 +38,7 @@ fn complex_export_with(
     let mut host = crate::create_host_with(VideoDecodePolicy::Software, renderer).expect("host");
     host.export(
         &project.to_string(),
-        &assets,
+        &crate::tests::locations(&assets),
         &HashMap::new(),
         effects,
         0,

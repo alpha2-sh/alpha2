@@ -1,4 +1,5 @@
-//! The internal passes: the blur and glow passes, shape-mask combines and the track matte.
+//! The internal passes: the blur and glow passes, shape-mask combines, the track matte and the
+//! key mixes.
 
 use super::effects::{
     centre, effect_row, grow, luminance, margin, output, premultiplied, saturate, straight,
@@ -12,6 +13,7 @@ use crate::cpu::curves;
 use crate::cpu::half;
 use crate::cpu::image::{CpuImage, PixelBox, Pixels};
 use crate::masking::{
+    KEY_MIX_BACKDROP, KEY_MIX_EFFECT_ID, KEY_MIX_MASK, KEY_MIX_OPACITY, KEY_MIX_UNMASKED_EFFECT_ID,
     MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES, MAX_SHAPE_MASKS, TRACK_MATTE_EFFECT_ID,
 };
 
@@ -26,6 +28,7 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
         SHADOW_OFFSET_ID => &ShadowOffset,
         SHADOW_COMBINE_ID => &ShadowCombine,
         TRACK_MATTE_EFFECT_ID => &TrackMatte,
+        KEY_MIX_EFFECT_ID | KEY_MIX_UNMASKED_EFFECT_ID => &KeyMix,
         _ if MASK_COMBINE_EFFECT_IDS.contains(&id) => &MaskCombine,
         _ => return None,
     })
@@ -459,6 +462,63 @@ impl CpuKernel for TrackMatte {
             }
             let coverage = saturate(coverage);
             picture.map(|value| value * coverage)
+        });
+    }
+}
+
+/// Mirrors masking.rs `key_mix_definition`.
+struct KeyMix;
+
+impl KeyMix {
+    fn input<'a>(context: &KernelContext<'a>, name: &str) -> Option<&'a CpuImage> {
+        context
+            .inputs
+            .iter()
+            .find(|(input, _)| *input == name)
+            .map(|(_, image)| *image)
+    }
+
+    fn masked(context: &KernelContext<'_>) -> bool {
+        context
+            .definition
+            .inputs
+            .iter()
+            .any(|input| input.name == KEY_MIX_MASK)
+    }
+}
+
+/// Mirrors key-mix.wgsl `builtin_key_mix`.
+#[inline]
+fn key_mix(backdrop: [f32; 4], picture: [f32; 4], coverage: f32) -> [f32; 4] {
+    let k = saturate(coverage);
+    if k <= 0.0 {
+        return backdrop;
+    }
+    if k >= 1.0 {
+        return picture;
+    }
+    [0, 1, 2, 3].map(|channel| backdrop[channel] * (1.0 - k) + picture[channel] * k)
+}
+
+impl CpuKernel for KeyMix {
+    fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
+        let backdrop =
+            Self::input(context, KEY_MIX_BACKDROP).map_or(PixelBox::EMPTY, CpuImage::bounds);
+        backdrop.union(context.source_a.bounds())
+    }
+
+    fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]) {
+        let opacity = context.float(KEY_MIX_OPACITY);
+        let backdrop = Self::input(context, KEY_MIX_BACKDROP);
+        let mask = Self::masked(context).then(|| Self::input(context, KEY_MIX_MASK));
+        let size = context.size;
+        effect_row(context, y, x0, out, |x, _, src| {
+            let behind = backdrop.map_or([0.0; 4], |image| centre(image, size, x, y));
+            let coverage = match mask {
+                None => opacity,
+                Some(image) => opacity * image.map_or(0.0, |image| centre(image, size, x, y)[3]),
+            };
+            key_mix(behind, src, coverage)
         });
     }
 }

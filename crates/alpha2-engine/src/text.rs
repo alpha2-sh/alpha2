@@ -266,7 +266,7 @@ impl TextTextures {
                 entry.last_used = self.frame;
                 continue;
             }
-            let content = text.content.text();
+            let content = alpha2_layout::TextAt::new(text.content, text.time);
             let frame_number = self.frame;
             let fitted = alpha2_layout::fit_text(&content, text.style, picture, |request| {
                 self.shape(request, frame_number)
@@ -364,7 +364,8 @@ impl TextTextures {
         let corner =
             [raster.descriptor.layout_x, raster.descriptor.layout_y].map(|corner| corner as u32);
         // The margin holds only overflowing ink and takes no part in placement.
-        let margin = corner.map(|corner| corner.saturating_sub(request.decoration_margin()));
+        let decoration = request.decoration_margin();
+        let margin = [0, 1].map(|axis| corner[axis].saturating_sub(decoration[axis]));
         let size =
             RenderSize::new(texture_size.width, texture_size.height).map_err(TextError::Render)?;
         let texture = renderer
@@ -552,7 +553,7 @@ impl TextTextures {
     /// Returns [`TextError::Raster`] as [`Self::prepare`] would for the text.
     pub fn measure(
         &self,
-        text: &str,
+        text: &alpha2_layout::TextAt<'_>,
         style: &TextStyle,
         size: RenderSize,
     ) -> Result<TextBounds, TextError> {
