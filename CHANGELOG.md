@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.8.0] - 2026-11-28
 
 ### Added
 
@@ -1343,6 +1343,7 @@ All notable changes to this project are documented in this file.
 - `alpha2` Rust crate (facade over the engine crates) for programs that supply decoded frames and
   take rendered frames or YUV planes; Rust 1.88 or later.
 
+[0.8.0]: https://github.com/alpha2-sh/alpha2/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/alpha2-sh/alpha2/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/alpha2-sh/alpha2/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/alpha2-sh/alpha2/compare/v0.6.0...v0.6.1
